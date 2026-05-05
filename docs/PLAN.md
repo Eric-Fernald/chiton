@@ -4,13 +4,23 @@ A Graphify-class knowledge-graph engine for codebases, docs, and meetings, writt
 
 ## Goal
 
-Build a self-hosted, on-device knowledge graph engine that:
+Build a self-hosted, on-device knowledge graph engine that gives AI assistants **precise, typed, relationship-aware context** instead of raw file contents — so they produce better answers, not just cheaper ones.
 
-1. Ingests code, docs, papers, images, and meeting transcripts.
-2. Extracts structural (AST) and semantic (LLM) nodes/edges into a typed graph.
+Concretely:
+
+1. Ingests code, docs, papers, images, and meeting transcripts into a single typed graph.
+2. Extracts structural (AST) and semantic (LLM) nodes/edges with provenance and confidence tagging.
 3. Clusters with Leiden over graph topology, augmented by an embedding layer for genuine semantic recall (the gap in Graphify).
-4. Serves the graph to AI assistants over MCP so they spend FEWER tokens navigating architecture, docs, memories, and prior tool calls.
+4. Serves the graph to AI assistants over MCP so each query returns a precise neighborhood — not a haystack of file contents the model has to grep through mentally.
 5. Continuously syncs from live sources (filesystem, git, Microsoft Teams, browser history) without ever doing a full rebuild.
+6. Uniquely links meeting decisions and speaker turns back to the code symbols they reference — the one capability no competing tool offers.
+
+**What chiton optimizes for, in order:**
+1. **Answer quality.** The model gets exactly what's relevant — typed graph relationships, not raw files — which means less attention dilution and more accurate responses.
+2. **Scale.** Stays fast and correct at 1M+ nodes and across code + docs + meetings simultaneously. Alternatives fall over or can't span modalities.
+3. **Cost.** Input tokens are 5–15x lower than naive context dumping even with prompt caching active, and 2–4x lower than grep+read. With output tokens at $25/M dominating the bill for efficient approaches, cost is a real but secondary benefit.
+
+The token-reduction headline is real. It is not the point.
 
 ## Non-Goals (at least for v1)
 
