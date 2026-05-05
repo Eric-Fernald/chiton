@@ -670,18 +670,42 @@ Kuzu is columnar and mmap-based; we don't pay for the whole graph in RAM. Python
 
 **Scenario:** 50 assistant turns over a 2-hour debugging session on Corpus B.
 
-| Approach | Total input tokens | Approx cost (Claude Opus at $15/M input) |
-|---|---|---|
-| No tooling, naive context | 8-25 M | $120-375 |
-| Grep + `read_file` (status quo) | 350k-900k | $5-14 |
-| Pure RAG (top-k always) | 250k-600k | $4-9 |
-| `CLAUDE.md` only | 150k-400k | $2-6 but bad answers |
-| Graphify (Python MCP) | 80k-200k | $1.20-3.00 |
-| **chiton (Go MCP)** | **60k-180k** | **$0.90-2.70** |
+**Claude Opus 4.7 pricing (as of May 2026):**
 
-- chiton vs grep+`read_file`: ~5x cheaper per session.
-- chiton vs naive: ~50-150x cheaper per session.
-- chiton vs Graphify: ~1.2-1.5x cheaper per session (token difference is small; the real wins are latency, scale, and meeting integration).
+| Token type | Price |
+|---|---|
+| Base input | $5 / MTok |
+| 5-min cache write | $6.25 / MTok |
+| 1-hr cache write | $10 / MTok |
+| Cache hits & refreshes | $0.50 / MTok |
+| Output | $25 / MTok |
+
+**Cost comparison — input tokens only (the variable that retrieval controls):**
+
+| Approach | Total input tokens (50 turns) | No cache ($5/M) | With 1hr cache |
+|---|---|---|---|
+| No tooling, naive context | 8-25 M | $40-125 | $9-28 |
+| Grep + `read_file` (status quo) | 350k-900k | $1.75-4.50 | $1.30-3.34 |
+| Pure RAG (top-k always) | 250k-600k | $1.25-3.00 | $0.98-2.35 |
+| `CLAUDE.md` only | 150k-400k | $0.75-2.00 | $0.20-0.53 (bad answers) |
+| Graphify (Python MCP) | 80k-200k | $0.40-1.00 | $0.33-0.83 |
+| **chiton (Go MCP)** | **60k-180k** | **$0.30-0.90** | **$0.25-0.74** |
+
+**Add output cost to all approaches equally:** ~1000 tokens/turn × 50 turns = 50k tokens × $25/M = **+$1.25**.
+
+At the efficient end of the spectrum (chiton, Graphify, CLAUDE.md), output now dominates the total bill — chiton's input edge over Graphify nearly disappears when output is included. The real differentiators for chiton become latency, answer quality, and scaling, not per-session cost.
+
+**Cache hit rate assumptions (key variable in the "with cache" column):**
+- Naive: ~90% — same file dumps repeated every turn, heavily cacheable.
+- CLAUDE.md: ~85% — the document itself is stable; only the user turn changes.
+- Grep+read: ~30% — system prompt stable, but file reads vary by query.
+- RAG / Graphify / chiton: ~20% — graph neighborhoods and embedding results change each turn; only the system prompt portion is cached.
+
+**Key takeaways:**
+- Prompt caching helps naive context dumping the most (5x reduction). For chiton, it barely moves the needle because the per-turn context is already tiny and mostly variable.
+- Once caching and output are included, chiton vs Graphify is cost-neutral — chiton's value is latency (<50ms Go vs Python), scale (Kuzu vs NetworkX), and meeting-to-code linkage.
+- chiton vs naive with cache: **~5-15x cheaper** (down from 50-150x without cache — be honest about this in benchmarks).
+- chiton vs grep+`read_file` with cache: **~2-4x cheaper** on input, but output cost erodes even this. The real win is answer quality: grep returns file contents; chiton returns a precise neighborhood.
 
 ### Where chiton Does NOT Beat the Alternatives (be honest)
 
@@ -699,7 +723,7 @@ Kuzu is columnar and mmap-based; we don't pay for the whole graph in RAM. Python
 
 ### The Bottom-Line Number to Remember
 
-For a typical heavy-Opus coding session on a medium repo, chiton should cut input tokens by **5-15x vs grep+`read_file`** (the current Copilot/Claude Code default) and **50-150x vs naive context dumping**, while serving each query in <50ms. It will run roughly 1.5-2x leaner than Graphify on the same corpus, and unlike Graphify it won't fall over at 1M+ nodes or fail to connect meetings to code.
+For a typical heavy-Opus coding session on a medium repo, chiton should cut input tokens by **5-15x vs grep+`read_file`** (the current Copilot/Claude Code default) and **5-15x vs naive context dumping when prompt caching is active** (50-150x without caching — caching narrows this gap significantly for large stable contexts). Per-query latency target: <50ms. It will run roughly 1.5-2x leaner on memory than Graphify on the same corpus, and unlike Graphify it won't fall over at 1M+ nodes or fail to connect meetings to code. Once output tokens ($25/M) are included, chiton's per-session cost advantage over Graphify is small — the real differentiators are speed, scale, and meeting integration.
 
 These are estimates. Step 9's benchmark replaces them with measurements.
 
