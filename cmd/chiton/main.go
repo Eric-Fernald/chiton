@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/Eric-Fernald/chiton/internal/config"
 	"github.com/spf13/cobra"
+
+	goast "github.com/Eric-Fernald/chiton/internal/extract/ast"
+	"github.com/Eric-Fernald/chiton/internal/config"
+	badgerstore "github.com/Eric-Fernald/chiton/internal/graph/store/badger"
 )
 
 func main() {
@@ -38,9 +41,31 @@ func buildCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_ = cfg
-			fmt.Fprintf(cmd.OutOrStdout(), "build: scanning %s (graph → %s)\n", args[0], cfg.GraphPath)
-			fmt.Fprintln(cmd.OutOrStdout(), "build: not yet implemented — come back after Step 4 (graph store)")
+
+			out := cmd.OutOrStdout()
+			fmt.Fprintf(out, "build: scanning %s\n", args[0])
+			fmt.Fprintf(out, "build: graph → %s\n", cfg.GraphPath)
+
+			gs, err := badgerstore.Open(cfg.GraphPath)
+			if err != nil {
+				return fmt.Errorf("open store: %w", err)
+			}
+			defer gs.Close()
+
+			ex := &goast.GoExtractor{}
+			nodes, edges, err := ex.ExtractDir(cmd.Context(), args[0])
+			if err != nil {
+				return fmt.Errorf("extract: %w", err)
+			}
+
+			if err := gs.UpsertNodes(cmd.Context(), nodes); err != nil {
+				return fmt.Errorf("upsert nodes: %w", err)
+			}
+			if err := gs.UpsertEdges(cmd.Context(), edges); err != nil {
+				return fmt.Errorf("upsert edges: %w", err)
+			}
+
+			fmt.Fprintf(out, "build: done — %d nodes, %d edges\n", len(nodes), len(edges))
 			return nil
 		},
 	}
