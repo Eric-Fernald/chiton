@@ -30,9 +30,21 @@ type Store struct {
 	db *badgerdb.DB
 }
 
-// Open opens or creates a BadgerDB store at path.
+// Open opens or creates a BadgerDB store at path with read-write access.
 func Open(path string) (*Store, error) {
 	opts := badgerdb.DefaultOptions(path).WithLogger(nil)
+	db, err := badgerdb.Open(opts)
+	if err != nil {
+		return nil, fmt.Errorf("open badger at %s: %w", path, err)
+	}
+	return &Store{db: db}, nil
+}
+
+// OpenReadOnly opens an existing BadgerDB store in read-only mode.
+// Multiple read-only openers can coexist with a read-write opener (e.g. the
+// MCP server reading while chiton build writes).
+func OpenReadOnly(path string) (*Store, error) {
+	opts := badgerdb.DefaultOptions(path).WithLogger(nil).WithReadOnly(true)
 	db, err := badgerdb.Open(opts)
 	if err != nil {
 		return nil, fmt.Errorf("open badger at %s: %w", path, err)

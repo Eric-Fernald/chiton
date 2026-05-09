@@ -269,7 +269,7 @@ func serveCmd() *cobra.Command {
 				return err
 			}
 
-			gs, err := badgerstore.Open(cfg.GraphPath)
+			gs, err := badgerstore.OpenReadOnly(cfg.GraphPath)
 			if err != nil {
 				return fmt.Errorf("open store: %w", err)
 			}
