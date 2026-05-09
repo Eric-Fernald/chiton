@@ -6,5 +6,9 @@
       "mcp__chiton__get_node",
       "mcp__chiton__shortest_path"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "chiton"
+  ],
+  "enableAllProjectMcpServers": true
 }
