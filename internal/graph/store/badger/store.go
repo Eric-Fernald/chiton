@@ -40,11 +40,10 @@ func Open(path string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-// OpenReadOnly opens an existing BadgerDB store in read-only mode.
-// Multiple read-only openers can coexist with a read-write opener (e.g. the
-// MCP server reading while chiton build writes).
+// OpenReadOnly opens an existing BadgerDB store in read-only mode without
+// acquiring the directory lock, so chiton build can run concurrently.
 func OpenReadOnly(path string) (*Store, error) {
-	opts := badgerdb.DefaultOptions(path).WithLogger(nil).WithReadOnly(true)
+	opts := badgerdb.DefaultOptions(path).WithLogger(nil).WithReadOnly(true).WithBypassLockGuard(true)
 	db, err := badgerdb.Open(opts)
 	if err != nil {
 		return nil, fmt.Errorf("open badger at %s: %w", path, err)
