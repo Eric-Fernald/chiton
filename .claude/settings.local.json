@@ -3,7 +3,8 @@
     "allow": [
       "mcp__chiton__query_graph",
       "mcp__chiton__get_node_neighborhood",
-      "mcp__chiton__get_node"
+      "mcp__chiton__get_node",
+      "mcp__chiton__shortest_path"
     ]
   }
 }
