@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -29,7 +31,7 @@ clusters them with Leiden, and serves the result to AI assistants over MCP
 so they spend fewer tokens navigating architecture, docs, and prior tool calls.`,
 	}
 
-	root.AddCommand(buildCmd(), queryCmd(), serveCmd())
+	root.AddCommand(buildCmd(), queryCmd(), serveCmd(), installCmd())
 	return root
 }
 
@@ -89,6 +91,115 @@ func queryCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func installCmd() *cobra.Command {
+	var assistant string
+	var dir string
+
+	cmd := &cobra.Command{
+		Use:   "install",
+		Short: "Register chiton with an AI assistant (writes .mcp.json and rules file)",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			exe, err := os.Executable()
+			if err != nil {
+				return fmt.Errorf("resolve executable: %w", err)
+			}
+			exe, err = filepath.EvalSymlinks(exe)
+			if err != nil {
+				return fmt.Errorf("resolve symlinks: %w", err)
+			}
+
+			out := cmd.OutOrStdout()
+
+			mcpPath := filepath.Join(dir, ".mcp.json")
+			if err := writeMCPJSON(mcpPath, exe); err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "install: wrote %s\n", mcpPath)
+
+			switch assistant {
+			case "claude-code":
+				rulesPath := filepath.Join(dir, "CLAUDE.md")
+				if err := writeClaudeRules(rulesPath); err != nil {
+					return err
+				}
+				fmt.Fprintf(out, "install: wrote %s\n", rulesPath)
+			default:
+				return fmt.Errorf("unknown assistant %q — supported: claude-code", assistant)
+			}
+
+			fmt.Fprintln(out, "install: done — restart Claude Code to pick up the new MCP server.")
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&assistant, "assistant", "claude-code", "AI assistant to configure (claude-code)")
+	cmd.Flags().StringVar(&dir, "dir", ".", "Directory to write config files into")
+	return cmd
+}
+
+func writeMCPJSON(path, exe string) error {
+	type serverEntry struct {
+		Command string   `json:"command"`
+		Args    []string `json:"args"`
+	}
+	type mcpConfig struct {
+		MCPServers map[string]serverEntry `json:"mcpServers"`
+	}
+	cfg := mcpConfig{
+		MCPServers: map[string]serverEntry{
+			"chiton": {Command: exe, Args: []string{"serve", "--stdio"}},
+		},
+	}
+	b, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(b, '\n'), 0o644)
+}
+
+const claudeRules = `# Chiton — knowledge graph context
+
+This project runs **chiton**, an on-device knowledge graph engine.
+The graph is built from the codebase's AST and stored locally.
+
+## When to use chiton tools
+
+Before using grep or file-read to answer architecture or navigation questions,
+call the chiton MCP tools instead:
+
+| Tool | Use when |
+|---|---|
+| ` + "`get_node_neighborhood`" + ` | "What does X depend on?", "What calls Y?", "Show me X and its neighbors" |
+| ` + "`query_graph`" + ` | Discovering what symbols or files exist matching a name |
+| ` + "`shortest_path`" + ` | "How are A and B connected?" |
+
+Chiton returns typed graph relationships (CALLS, IMPORTS, CONTAINS, etc.)
+that answer structural questions with far fewer tokens than reading source files.
+
+**Still use grep/read** when you need actual source code content to understand
+an implementation, locate a bug, or make an edit — not just to answer
+"what exists" or "how things are connected."
+
+## Building the graph
+
+` + "```" + `sh
+chiton build .          # index this workspace
+chiton serve --stdio    # already running as MCP server
+` + "```" + `
+`
+
+func writeClaudeRules(path string) error {
+	existing, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	// Skip write if the rules are already present.
+	if len(existing) > 0 {
+		return os.WriteFile(path, append(existing, []byte("\n"+claudeRules)...), 0o644)
+	}
+	return os.WriteFile(path, []byte(claudeRules), 0o644)
 }
 
 func serveCmd() *cobra.Command {

@@ -33,3 +33,4 @@ go.work.sum
 
 # Chiton build output (BadgerDB graph store)
 chiton-out/
+CLAUDE.md
