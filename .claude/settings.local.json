@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__chiton__query_graph",
+      "mcp__chiton__get_node_neighborhood",
+      "mcp__chiton__get_node"
+    ]
+  }
+}
