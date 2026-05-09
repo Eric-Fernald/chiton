@@ -1,13 +1,18 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/Eric-Fernald/chiton/internal/cache"
 	"github.com/Eric-Fernald/chiton/internal/config"
 	goast "github.com/Eric-Fernald/chiton/internal/extract/ast"
 	badgerstore "github.com/Eric-Fernald/chiton/internal/graph/store/badger"
@@ -56,20 +61,69 @@ func buildCmd() *cobra.Command {
 			}
 			defer gs.Close()
 
-			ex := &goast.GoExtractor{}
-			nodes, edges, err := ex.ExtractDir(cmd.Context(), args[0])
+			cachePath := filepath.Join(filepath.Dir(cfg.GraphPath), "cache.json")
+			ch, err := cache.Load(cachePath)
 			if err != nil {
-				return fmt.Errorf("extract: %w", err)
+				return fmt.Errorf("open cache: %w", err)
 			}
 
-			if err := gs.UpsertNodes(cmd.Context(), nodes); err != nil {
-				return fmt.Errorf("upsert nodes: %w", err)
-			}
-			if err := gs.UpsertEdges(cmd.Context(), edges); err != nil {
-				return fmt.Errorf("upsert edges: %w", err)
+			ex := &goast.GoExtractor{}
+			start := time.Now()
+			var scanned, skipped, totalNodes, totalEdges int
+
+			walkErr := filepath.WalkDir(args[0], func(path string, d fs.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				if d.IsDir() || !strings.HasSuffix(path, ".go") {
+					return nil
+				}
+				scanned++
+
+				content, err := os.ReadFile(path)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "chiton: skip %s: %v\n", path, err)
+					return nil
+				}
+				sum := sha256.Sum256(content)
+				hexSum := fmt.Sprintf("%x", sum[:])
+
+				absPath, _ := filepath.Abs(path)
+				uri := "file://" + filepath.ToSlash(absPath)
+
+				if !ch.Changed(uri, hexSum) {
+					skipped++
+					return nil
+				}
+
+				nodes, edges, err := ex.ExtractFile(cmd.Context(), path)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "chiton: skip %s: %v\n", path, err)
+					return nil
+				}
+
+				if err := gs.UpsertNodes(cmd.Context(), nodes); err != nil {
+					return fmt.Errorf("upsert nodes for %s: %w", path, err)
+				}
+				if err := gs.UpsertEdges(cmd.Context(), edges); err != nil {
+					return fmt.Errorf("upsert edges for %s: %w", path, err)
+				}
+
+				ch.Mark(uri, hexSum)
+				totalNodes += len(nodes)
+				totalEdges += len(edges)
+				return nil
+			})
+			if walkErr != nil {
+				return walkErr
 			}
 
-			fmt.Fprintf(out, "build: done — %d nodes, %d edges\n", len(nodes), len(edges))
+			if err := ch.Save(); err != nil {
+				return fmt.Errorf("save cache: %w", err)
+			}
+
+			fmt.Fprintf(out, "build: done — %d files scanned, %d skipped (unchanged), %d nodes, %d edges [%s]\n",
+				scanned, skipped, totalNodes, totalEdges, time.Since(start).Round(time.Millisecond))
 			return nil
 		},
 	}
