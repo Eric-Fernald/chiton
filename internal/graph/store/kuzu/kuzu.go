@@ -26,6 +26,9 @@ func (s *Store) UpsertEdges(_ context.Context, _ []model.Edge) error        { re
 func (s *Store) GetNode(_ context.Context, _ string) (*model.Node, error)   { return nil, ErrUnavailable }
 func (s *Store) Snapshot(_ context.Context, _ io.Writer) error              { return ErrUnavailable }
 func (s *Store) DeleteBySourceURI(_ context.Context, _ string) (int, error) { return 0, ErrUnavailable }
+func (s *Store) SearchNodes(_ context.Context, _ string, _ int) ([]model.Node, error) {
+	return nil, ErrUnavailable
+}
 
 func (s *Store) Neighbors(_ context.Context, _ string, _ int, _ []model.EdgeKind) (store.Subgraph, error) {
 	return store.Subgraph{}, ErrUnavailable

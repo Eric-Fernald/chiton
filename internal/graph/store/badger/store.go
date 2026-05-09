@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	badgerdb "github.com/dgraph-io/badger/v4"
@@ -393,6 +394,33 @@ func (s *Store) DeleteBySourceURI(_ context.Context, uri string) (int, error) {
 		}
 	}
 	return len(toDelete), wb.Flush()
+}
+
+// SearchNodes returns all nodes whose label contains query (case-insensitive).
+func (s *Store) SearchNodes(_ context.Context, query string, limit int) ([]model.Node, error) {
+	q := strings.ToLower(query)
+	var results []model.Node
+	err := s.db.View(func(txn *badgerdb.Txn) error {
+		pfx := []byte(pfxNode)
+		it := txn.NewIterator(badgerdb.DefaultIteratorOptions)
+		defer it.Close()
+		for it.Seek(pfx); it.ValidForPrefix(pfx); it.Next() {
+			var n model.Node
+			if err := it.Item().Value(func(v []byte) error {
+				return json.Unmarshal(v, &n)
+			}); err != nil {
+				return err
+			}
+			if strings.Contains(strings.ToLower(n.Label), q) {
+				results = append(results, n)
+				if limit > 0 && len(results) >= limit {
+					return nil
+				}
+			}
+		}
+		return nil
+	})
+	return results, err
 }
 
 // Snapshot writes a self-contained JSON export of all nodes and edges.

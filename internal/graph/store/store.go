@@ -45,6 +45,10 @@ type GraphStore interface {
 	// Returns the number of nodes deleted.
 	DeleteBySourceURI(ctx context.Context, uri string) (int, error)
 
+	// SearchNodes returns all nodes whose label contains query (case-insensitive
+	// substring match). Pass limit=0 for no cap; callers typically pass 10.
+	SearchNodes(ctx context.Context, query string, limit int) ([]model.Node, error)
+
 	// Snapshot writes a self-contained JSON export of the entire graph to w.
 	// Intended for portability, git-diffable snapshots, and cross-repo merging.
 	Snapshot(ctx context.Context, w io.Writer) error

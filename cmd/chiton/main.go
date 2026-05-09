@@ -6,9 +6,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	goast "github.com/Eric-Fernald/chiton/internal/extract/ast"
 	"github.com/Eric-Fernald/chiton/internal/config"
+	goast "github.com/Eric-Fernald/chiton/internal/extract/ast"
 	badgerstore "github.com/Eric-Fernald/chiton/internal/graph/store/badger"
+	mcpsrv "github.com/Eric-Fernald/chiton/internal/mcp"
+	mcpsdk "github.com/mark3labs/mcp-go/server"
 )
 
 func main() {
@@ -101,13 +103,20 @@ func serveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_ = cfg
-			if stdio {
-				fmt.Fprintln(cmd.OutOrStdout(), "serve: stdio mode — not yet implemented")
-			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "serve: HTTP mode on %s — not yet implemented\n", addr)
+
+			gs, err := badgerstore.Open(cfg.GraphPath)
+			if err != nil {
+				return fmt.Errorf("open store: %w", err)
 			}
-			return nil
+			defer gs.Close()
+
+			s := mcpsrv.New(gs)
+
+			if stdio {
+				return mcpsdk.ServeStdio(s)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "serve: listening on %s\n", addr)
+			return mcpsdk.NewSSEServer(s).Start(addr)
 		},
 	}
 
