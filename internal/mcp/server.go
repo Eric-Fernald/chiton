@@ -105,7 +105,7 @@ func getNodeHandler(gs store.GraphStore) mcpsdk.ToolHandlerFunc {
 		if len(nodes) == 0 {
 			return mcplib.NewToolResultText(fmt.Sprintf("no node found matching %q", label)), nil
 		}
-		return jsonResult(nodes[0])
+		return jsonResult(toLeanNode(nodes[0]))
 	}
 }
 
@@ -137,16 +137,27 @@ func neighborhoodHandler(gs store.GraphStore) mcpsdk.ToolHandlerFunc {
 			return mcplib.NewToolResultErrorFromErr("neighbors failed", err), nil
 		}
 
+		allNodes := append([]model.Node{seed}, sub.Nodes...)
+		labels := nodeLabels(allNodes)
+		leanNodes := make([]leanNode, len(sub.Nodes))
+		for i, n := range sub.Nodes {
+			leanNodes[i] = toLeanNode(n)
+		}
+		leanEdges := make([]leanEdge, len(sub.Edges))
+		for i, e := range sub.Edges {
+			leanEdges[i] = toLeanEdge(e, labels)
+		}
+
 		type result struct {
-			Seed    model.Node   `json:"seed"`
-			Nodes   []model.Node `json:"nodes"`
-			Edges   []model.Edge `json:"edges"`
-			Summary string       `json:"summary"`
+			Seed    leanNode   `json:"seed"`
+			Nodes   []leanNode `json:"nodes"`
+			Edges   []leanEdge `json:"edges"`
+			Summary string     `json:"summary"`
 		}
 		return jsonResult(result{
-			Seed:  seed,
-			Nodes: sub.Nodes,
-			Edges: sub.Edges,
+			Seed:  toLeanNode(seed),
+			Nodes: leanNodes,
+			Edges: leanEdges,
 			Summary: fmt.Sprintf("%d nodes, %d edges within depth %d of %q",
 				len(sub.Nodes), len(sub.Edges), depth, seed.Label),
 		})
@@ -167,7 +178,11 @@ func queryHandler(gs store.GraphStore) mcpsdk.ToolHandlerFunc {
 		if len(nodes) == 0 {
 			return mcplib.NewToolResultText(fmt.Sprintf("no nodes found matching %q", query)), nil
 		}
-		return jsonResult(nodes)
+		lean := make([]leanNode, len(nodes))
+		for i, n := range nodes {
+			lean[i] = toLeanNode(n)
+		}
+		return jsonResult(lean)
 	}
 }
 
@@ -207,7 +222,68 @@ func shortestPathHandler(gs store.GraphStore) mcpsdk.ToolHandlerFunc {
 				fmt.Sprintf("no path found between %q and %q", fromNodes[0].Label, toNodes[0].Label),
 			), nil
 		}
-		return jsonResult(path)
+		labels := nodeLabels(path.Nodes)
+		leanNodes := make([]leanNode, len(path.Nodes))
+		for i, n := range path.Nodes {
+			leanNodes[i] = toLeanNode(n)
+		}
+		leanEdges := make([]leanEdge, len(path.Edges))
+		for i, e := range path.Edges {
+			leanEdges[i] = toLeanEdge(e, labels)
+		}
+		type leanPath struct {
+			Nodes []leanNode `json:"nodes"`
+			Edges []leanEdge `json:"edges"`
+		}
+		return jsonResult(leanPath{Nodes: leanNodes, Edges: leanEdges})
+	}
+}
+
+// --- lean output types (strip internal metadata the LLM doesn't need) ---
+
+type leanNode struct {
+	Kind       model.NodeKind    `json:"kind"`
+	Label      string            `json:"label"`
+	SourceURI  string            `json:"source_uri"`
+	Span       *model.SourceSpan `json:"span,omitempty"`
+	Attrs      map[string]any    `json:"attrs,omitempty"`
+	Provenance model.Provenance  `json:"provenance"`
+	Confidence float32           `json:"confidence"`
+}
+
+type leanEdge struct {
+	Kind  model.EdgeKind `json:"kind"`
+	From  string         `json:"from"`
+	To    string         `json:"to"`
+	Attrs map[string]any `json:"attrs,omitempty"`
+}
+
+func toLeanNode(n model.Node) leanNode {
+	return leanNode{
+		Kind:       n.Kind,
+		Label:      n.Label,
+		SourceURI:  n.SourceURI,
+		Span:       n.Span,
+		Attrs:      n.Attrs,
+		Provenance: n.Provenance,
+		Confidence: n.Confidence,
+	}
+}
+
+func nodeLabels(nodes []model.Node) map[string]string {
+	m := make(map[string]string, len(nodes))
+	for _, n := range nodes {
+		m[n.ID] = n.Label
+	}
+	return m
+}
+
+func toLeanEdge(e model.Edge, labels map[string]string) leanEdge {
+	return leanEdge{
+		Kind:  e.Kind,
+		From:  labels[e.Src],
+		To:    labels[e.Dst],
+		Attrs: e.Attrs,
 	}
 }
 
