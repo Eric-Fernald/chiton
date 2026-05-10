@@ -159,6 +159,80 @@ We expose a single `chiton install --assistant <name>` command that writes the a
 
 ---
 
+## Resolved Design Decisions
+
+These were flagged as open during planning. Decisions are now locked in; documented here so the rationale isn't lost.
+
+### 1. Multi-machine sync — DECIDED: NO SYNC
+
+Each machine keeps its own independent graph. A user with a desktop and a laptop runs `chiton build` on each one against the same repo and gets two graphs that drift independently. Rationale:
+
+- The graph is a derived artifact of the source. If the source is in git, both machines converge on the same source and produce near-identical graphs anyway.
+- CRDT-merging Kuzu rows is a research project, not a v1 feature.
+- The `chiton export` / `chiton import` archive flow is the escape hatch for users who genuinely need to move a graph (e.g. after an expensive LLM-extraction pass they don't want to repeat).
+
+**Implication:** no sync daemon, no conflict resolution UI, no "last-writer-wins" semantics to debug. Drops a whole class of bugs.
+
+### 2. Team mode (multi-user on one repo) — DECIDED: PER-USER LOCAL GRAPHS
+
+Each developer maintains their own local graph in their own `<repo>/.chiton/` directory (which is git-ignored). No shared-graph server, no role-based access, no conflict resolution. Rationale:
+
+- Matches the Graphify model and the "single-user, on-device first" non-goal from the top of the plan.
+- Avoids the entire compliance/audit surface that a shared graph containing source code + meeting transcripts would create.
+- The committed-to-repo files (`.chiton/hooks.yaml`, `.chiton/sources.yaml`) are the only shared state, which is enough for teams to agree on rule policies and source allowlists.
+
+If team mode is ever revisited it becomes a separate hosted product (see Licensing & Commercialization Stance), not bloat in the OSS daemon.
+
+### 3. IDE inline integration — DECIDED: YES, VS CODE EXTENSION IN PHASE 6
+
+A first-party VS Code extension that:
+
+- Highlights god nodes in the gutter (small icon + hover).
+- Shows finding severity decorations inline (squigglies that link back to the `explain_finding` MCP call).
+- Adds a "chiton: explain this symbol" command to the right-click menu that opens the neighborhood in a side panel (vis.js render).
+- Surfaces "this function is mentioned in 3 recent meetings" as a CodeLens above the function signature.
+
+**Architecture:** the extension is a thin client over the existing MCP server (HTTP transport). No duplicated logic. This is exactly why we kept the MCP tool surface stable and transport-agnostic.
+
+**Roadmap placement:** Phase 6 (after public release), since it gates on the MCP path being battle-tested across other assistants first. Distributed via the VS Code Marketplace under the same MIT license as the core; binary download of `chiton` itself is a one-click install from the extension if not already present.
+
+### 4. Graph versioning / branching — DECIDED: NO
+
+Users get exactly one graph per scope. No `chiton branch`, no `chiton checkout`, no parameter experimentation across branches. Rationale:
+
+- **Storage cost:** branches multiply the on-disk footprint; Corpus C is already 1.8 GB resident, branching it is hostile.
+- **UX cost:** every CLI command and every MCP tool would gain an optional `--branch` flag that 99% of users never set. The cost of carrying that parameter through the codebase forever is real.
+- The legitimate use case (experimenting with Leiden resolution parameters) is better solved by `chiton cluster --dry-run --resolution=N` printing community stats without persisting.
+
+If a user wants two different graphs for the same source (e.g. one with LLM extraction, one without), they use two different `--graph-path` directories. That's a local convention, not a feature.
+
+### 5. Encrypted-at-rest store — DECIDED: YES, FIRST-CLASS FEATURE
+
+The graph store, vector index, cache, and audit log are all encrypted at rest with a user-supplied passphrase. Specifics:
+
+- **Encryption:** AES-256-GCM in streaming mode (chacha20-poly1305 as a fallback for users on hardware without AES-NI).
+- **Key derivation:** argon2id from a passphrase, with the salt stored alongside `.chiton/schema_version` and the parameters bumped to match current OWASP guidance.
+- **Key handling:** passphrase entered once per daemon lifetime; held in mlock'd memory; never written to disk. Optional integration with the OS keychain (Windows Credential Manager, macOS Keychain, libsecret on Linux) so the user isn't re-prompted every session.
+- Kuzu doesn't ship native encryption, so we wrap its file I/O at the storage layer: a custom `internal/graph/store/crypto/` package that intercepts page reads/writes and en/decrypts before handing pages to Kuzu. Same pattern for sqlite-vec.
+- The `chiton export` archive is encrypted with the same passphrase (or a recipient-specific one for sharing).
+- `chiton init --encrypt=false` is supported for users who genuinely don't want it (e.g. CI runners against synthetic test data), but the default is encrypted.
+
+**Roadmap placement:** Phase 1.5 (alongside the rule engine). Doing it this early means we never have an unencrypted-store version in the wild that needs a migration path to the encrypted format.
+
+**Implication:** a startup performance hit (~5-15% on graph reads, dominated by AES-NI throughput on modern CPUs), accepted as the cost of treating user source code and meeting transcripts seriously.
+
+### 6. Bring-your-own-rule-engine (CEL/Starlark for user-defined rules) — DECIDED: NO
+
+Rules are written in Go, registered at `init()`, and shipped as part of the binary (built-in) or as compiled Go plugins (advanced users). Rationale:
+
+- Embedded scripting languages (CEL, Starlark, Lua) sound friendly but immediately raise sandboxing, fuzzing, supply-chain, and debuggability questions that consume more engineering time than the convenience saves.
+- The TrueCourse comparison is instructive: their LLM-rule engine is essentially "describe the rule in English, dispatch to an LLM," and that pattern already covers the case where a user wants to express a rule without writing code. We support the same path via the Phase 2.5 LLM-rule layer.
+- Power users who genuinely want to extend the deterministic rule set fork the repo, add their rule under `internal/analyze/rules/`, rebuild the binary. Go's compile time is fast enough that this is a 10-second loop.
+
+If we ever change our minds, we add a single new rule kind (`KindScripted`) backed by Starlark and route through it; the rest of the engine doesn't have to know.
+
+---
+
 ## Repo Layout (proposed)
 
 ```
@@ -272,76 +346,6 @@ chiton/
 
 ---
 
-## Roadmap
-
-### Phase 0 — Proof of Value
-
-*The smallest possible end-to-end slice.*
-
-Single Go binary that:
-
-1. Walks a directory of Go + Markdown files.
-2. Tree-sitter extracts symbols, calls, imports.
-3. Stores nodes/edges in Kuzu.
-4. Exposes ONE MCP tool: `get_node_neighborhood(label)`.
-
-**Target test:** point Claude Code at this workspace's `Projects/Go_Projects/` folder, ask "what does fetchall depend on?", verify graph traversal beats grep on token usage.
-
-**Out of scope for Phase 0:** No embeddings, no clustering, no Teams, no Whisper. Just prove the pipeline works and the MCP integration lands.
-
-### Phase 1 — Core Graph Features
-
-- Add 5+ language tree-sitter extractors (Python, JS/TS, Go, Rust, Java).
-- SHA256 content cache + incremental re-extraction.
-- Leiden clustering (full-graph pass first; incremental later).
-- `GRAPH_REPORT.md` generator (god nodes + community summaries).
-- MCP tools: `query_graph`, `shortest_path`, `god_nodes`, `graph_summary`.
-- CLI: `chiton init`, `chiton build`, `chiton query`, `chiton serve`.
-
-### Phase 2 — Semantic Layer
-
-- Embedding provider interface with Ollama default.
-- sqlite-vec ANN index, populated for concept/doc/symbol nodes.
-- Hybrid retrieval policy (vector seed → graph expand → rerank).
-- Doc/Markdown LLM extraction in subagent mode (emit task specs over MCP).
-- Image extraction via vision-capable LLM (subagent mode).
-- Provenance + confidence tagging fully wired through.
-
-### Phase 3 — Live Sync
-
-- fsnotify watcher with debounce.
-- Git post-commit / post-checkout hooks.
-- Incremental Leiden (only re-cluster touched 2-hop neighborhood).
-- asynq job queue for background re-extraction.
-
-### Phase 4 — Meetings & External Sources
-
-- Whisper.cpp wrapper for local audio/video transcription.
-- URL ingest: papers (PDF parse), tweets, YouTube audio.
-- Microsoft Teams integration:
-  - Azure AD app registration, `OnlineMeetings.Read` + `CallRecords.Read.All`.
-  - Webhook receiver for `callRecords` change notifications.
-  - Transcript fetch via `/me/onlineMeetings/{id}/transcripts`.
-  - Speaker-turn nodes + `DISCUSSED_IN` edges back into the code/doc graph.
-- Meeting → code linkage extractor (LLM) that finds "we decided X about Y" and creates `DECIDED_IN` edges to the corresponding code/symbol nodes.
-
-### Phase 5 — Polish & Distribution
-
-- HTML interactive graph export (vis.js or cytoscape.js, generated static).
-- Mermaid export for embedding in docs.
-- `chiton install` command per assistant (writes rules file + registers MCP).
-- Cross-repo graph merging.
-- Honest benchmark suite: token cost per query across 3-5 corpora of varying size and shape, published as a table not a hero number.
-- First public release. MIT license.
-
-### Phase 6 — Stretch (only if Phase 0-5 land)
-
-- Browser history ingestion (Chrome/Edge SQLite history file watcher).
-- Email ingestion (Outlook via Graph, Gmail via API).
-- Multi-user mode (shared graph store, role-based access). This is where you would consider whether to commercialize like Penpax does.
-
----
-
 ## Risks & Open Questions
 
 ### Risks
@@ -372,23 +376,114 @@ Single Go binary that:
 
 ---
 
-## First Concrete Step
+## Roadmap
 
-Create a new Go module under `Projects/Graph Memory Engine (Go)/chiton/` with:
+### Phase 0 — Proof of Value
 
-- `go.mod` (module `github.com/Eric-Fernald/chiton`, go 1.23+)
-- `cmd/chiton/main.go` with cobra root command
-- `internal/graph/model/{node.go,edge.go}` with the data model above
-- `internal/graph/store/store.go` with the `GraphStore` interface
-- `internal/graph/store/kuzu/kuzu.go` with a stub implementation
-- `internal/extract/ast/golang.go` that tree-sitter-parses one `.go` file and returns a `[]Node, []Edge` slice
-- A single test that runs the Go AST extractor against `Projects/Go_Projects/fetchall/fetchall.go` and prints the resulting graph
+*The smallest possible end-to-end slice.*
 
-That is Phase 0, week 1. If the AST extraction + store insert + simple neighborhood query works end-to-end on a known file, the rest of the plan is mostly mechanical execution.
+Single Go binary that:
+
+1. Walks a directory of Go + Markdown files.
+2. Tree-sitter extracts symbols, calls, imports.
+3. Stores nodes/edges in Kuzu.
+4. Exposes ONE MCP tool: `get_node_neighborhood(label)`.
+
+**Target test:** point Claude Code at this workspace's `Projects/Go_Projects/` folder, ask "what does fetchall depend on?", verify graph traversal beats grep on token usage.
+
+**Out of scope for Phase 0:** No embeddings, no clustering, no Teams, no Whisper. Just prove the pipeline works and the MCP integration lands.
+
+### Phase 1 — Core Graph Features
+
+- Add 5+ language tree-sitter extractors (Python, JS/TS, Go, Rust, Java).
+- SHA256 content cache + incremental re-extraction.
+- Leiden clustering (full-graph pass first; incremental later).
+- `GRAPH_REPORT.md` generator (god nodes + community summaries).
+- MCP tools: `query_graph`, `shortest_path`, `god_nodes`, `graph_summary`.
+- CLI: `chiton init`, `chiton build`, `chiton query`, `chiton serve`.
+
+### Phase 1.5 — Deterministic Rule Engine + Install Layer
+
+- Rule registry + `Match` interface.
+- 80-rule starter pack across 8 categories (see TrueCourse section for breakdown).
+- Findings as graph nodes, persisted in Kuzu.
+- `chiton analyze` + `findings list/explain/fix` CLI.
+- Pre-commit hook + `.chiton/hooks.yaml`.
+- MCP tools: `list_findings`, `explain_finding`, `apply_fix`.
+- Install layer scaffold (`internal/install/`); ship Claude Code + Copilot VS Code installers first.
+- `SKILL.md` template embedded via `go:embed`.
+- `chiton install` / `uninstall` / `doctor` commands.
+- Encryption at rest (AES-256-GCM, argon2id KDF).
+
+### Phase 2 — Semantic Layer
+
+- Embedding provider interface with Ollama default.
+- sqlite-vec ANN index, populated for concept/doc/symbol nodes.
+- Hybrid retrieval policy (vector seed → graph expand → rerank).
+- Doc/Markdown LLM extraction in subagent mode (emit task specs over MCP).
+- Image extraction via vision-capable LLM (subagent mode).
+- Provenance + confidence tagging fully wired through.
+
+### Phase 2.5 — LLM Rules + Diff Analysis
+
+- LLM rule dispatch through the same subagent path as semantic extraction.
+- 20-30 LLM rules in categories deterministic rules can't cover.
+- `--diff` mode with baseline tracking (last successful analysis stored under `.chiton/baselines/<git-sha>.json`).
+- MCP tool: `diff_findings`.
+
+### Phase 3 — Live Sync
+
+- fsnotify watcher with debounce.
+- Git post-commit / post-checkout hooks.
+- Incremental Leiden (only re-cluster touched 2-hop neighborhood).
+- asynq job queue for background re-extraction.
+
+### Phase 3.5 — Broad Assistant Support
+
+- Add installers for Cursor, Codex, Gemini CLI, OpenCode, Aider, Antigravity, Copilot CLI.
+- Per-installer integration tests that write the config, start the server, and verify at least one tool call succeeds.
+- `chiton install --assistant all` auto-detection.
+
+### Phase 4 — Meetings & External Sources
+
+- Whisper.cpp wrapper for local audio/video transcription.
+- URL ingest: papers (PDF parse), tweets, YouTube audio.
+- Microsoft Teams integration:
+  - Azure AD app registration, `OnlineMeetings.Read` + `CallRecords.Read.All`.
+  - Webhook receiver for `callRecords` change notifications.
+  - Transcript fetch via `/me/onlineMeetings/{id}/transcripts`.
+  - Speaker-turn nodes + `DISCUSSED_IN` edges back into the code/doc graph.
+- Meeting → code linkage extractor (LLM) that finds "we decided X about Y" and creates `DECIDED_IN` edges to the corresponding code/symbol nodes.
+
+### Phase 5 — Polish & Distribution
+
+- HTML interactive graph export (vis.js or cytoscape.js, generated static).
+- Mermaid export for embedding in docs.
+- `chiton install` command per assistant (writes rules file + registers MCP).
+- Cross-repo graph merging.
+- Honest benchmark suite: token cost per query across 3-5 corpora of varying size and shape, published as a table not a hero number.
+- HTTP/SSE transport for shared-daemon mode.
+- Unix socket transport for Linux/macOS power users.
+- Per-assistant install matrix published in README.
+- First public release. MIT license.
+
+### Phase 5.5 — Dashboard (Optional)
+
+- Read-only static web UI generated from the graph + findings.
+- Same vis.js/cytoscape export already planned for Phase 5.
+- Findings explorer: filter by severity, category, file, community.
+- NOT a server. Generated as static files on `chiton dashboard build`.
+- If users demand a live server, that becomes a separate sub-project, not bloat in the daemon.
+
+### Phase 6 — Stretch (only if Phase 0-5 land)
+
+- Browser history ingestion (Chrome/Edge SQLite history file watcher).
+- Email ingestion (Outlook via Graph, Gmail via API).
+- Multi-user mode (shared graph store, role-based access). This is where you would consider whether to commercialize like Penpax does.
 
 ---
 
-## Concrete Step-by-Step Build Order (Phase 0 expanded)
+## Phase 0 — Detailed Build Order
 
 The goal of Phase 0 is ONE measurable result: an MCP server that, when asked "what does fetchall depend on?", returns a structured neighborhood from the graph in <50ms and <500 tokens, vs Claude Code's grep-based answer at ~8000 tokens and ~3s. If that result lands, the rest of the project is mechanical.
 
@@ -920,32 +1015,6 @@ We will not ship 1,200 rules out of the gate. Aim for ~80 high-signal rules acro
 
 LLM rules come later (Phase 2.5), focusing on cases deterministic rules miss: design-rationale-mismatch, abstraction-leak, undocumented-side-effect, contract-violation-vs-comment, etc.
 
-### Roadmap Updates
-
-#### Phase 1.5 — Deterministic Rule Engine *(insert between Phase 1 and 2)*
-
-- Rule registry + `Match` interface.
-- 80-rule starter pack (above).
-- Findings as graph nodes, persisted in Kuzu.
-- `chiton analyze` + `findings list/explain/fix` CLI.
-- Pre-commit hook + `.chiton/hooks.yaml`.
-- MCP tools: `list_findings`, `explain_finding`, `apply_fix`.
-
-#### Phase 2.5 — LLM Rules + Diff Analysis *(insert between Phase 2 and 3)*
-
-- LLM rule dispatch through the same subagent path as semantic extraction.
-- 20-30 LLM rules in the categories deterministic rules can't cover.
-- `--diff` mode with baseline tracking (last successful analysis stored under `.chiton/baselines/<git-sha>.json`).
-- MCP tool: `diff_findings`.
-
-#### Phase 5.5 — Dashboard (Optional) *(insert before public release)*
-
-- Read-only static web UI generated from the graph + findings.
-- Same vis.js/cytoscape export already planned for Phase 5.
-- Findings explorer: filter by severity, category, file, community.
-- NOT a server. Generated as static files on `chiton dashboard build`.
-- If users demand a live server, that becomes a separate sub-project, not bloat in the daemon.
-
 ### Performance Delta from Adding the Rule Engine
 
 **Cost added to build pipeline:**
@@ -1168,32 +1237,6 @@ For first-time users we add `chiton doctor`:
 - Shows which ones already have chiton registered.
 - Shows which MCP config files exist and whether chiton is in them.
 - Tests the MCP server starts cleanly with `chiton serve --stdio` for a single ping/pong round-trip.
-
-### Roadmap Updates
-
-**Phase 0 already includes:**
-
-- Step 7 — Minimal MCP server with one tool.
-- Step 8 — Hook into Claude Code or Copilot via `.mcp.json` by hand.
-
-**Phase 1.5 (concurrent with the rule engine work):**
-
-- Add the install layer scaffold (`internal/install/`).
-- Ship installers for Claude Code + Copilot VS Code first (the two assistants the author actually uses daily).
-- `SKILL.md` template embedded via `go:embed`.
-- `chiton install` / `uninstall` / `doctor` commands.
-
-**Phase 3.5 — Broad Assistant Support (insert before Phase 4):**
-
-- Add installers for Cursor, Codex, Gemini CLI, OpenCode, Aider, Antigravity, Copilot CLI.
-- Per-installer integration tests that write the config, start the server, and verify the assistant can call at least one tool.
-- `chiton install --assistant all` auto-detection.
-
-**Phase 5 polish (already planned) absorbs:**
-
-- HTTP/SSE transport for shared-daemon mode.
-- Unix socket transport for Linux/macOS power users.
-- Public release with a per-assistant install matrix in the README.
 
 ### Integration Testing Strategy
 
@@ -1479,80 +1522,6 @@ The honest summary: **chiton is the only entry that combines on-device, embedded
 chiton, gradient, contour, lattice, marrow, bedrock, koan, prism, cinder, foundry (taken), atlas (taken), recall (taken)
 
 Final naming decision is a Phase 0 exit criterion. Until then, all package paths use `github.com/Eric-Fernald/chiton` as a placeholder.
-
----
-
-## Resolved Design Decisions (formerly open questions)
-
-These were flagged as open during planning. Decisions are now locked in; documented here so the rationale isn't lost.
-
-### 1. Multi-machine sync — DECIDED: NO SYNC
-
-Each machine keeps its own independent graph. A user with a desktop and a laptop runs `chiton build` on each one against the same repo and gets two graphs that drift independently. Rationale:
-
-- The graph is a derived artifact of the source. If the source is in git, both machines converge on the same source and produce near-identical graphs anyway.
-- CRDT-merging Kuzu rows is a research project, not a v1 feature.
-- The `chiton export` / `chiton import` archive flow is the escape hatch for users who genuinely need to move a graph (e.g. after an expensive LLM-extraction pass they don't want to repeat).
-
-**Implication:** no sync daemon, no conflict resolution UI, no "last-writer-wins" semantics to debug. Drops a whole class of bugs.
-
-### 2. Team mode (multi-user on one repo) — DECIDED: PER-USER LOCAL GRAPHS
-
-Each developer maintains their own local graph in their own `<repo>/.chiton/` directory (which is git-ignored). No shared-graph server, no role-based access, no conflict resolution. Rationale:
-
-- Matches the Graphify model and the "single-user, on-device first" non-goal from the top of the plan.
-- Avoids the entire compliance/audit surface that a shared graph containing source code + meeting transcripts would create.
-- The committed-to-repo files (`.chiton/hooks.yaml`, `.chiton/sources.yaml`) are the only shared state, which is enough for teams to agree on rule policies and source allowlists.
-
-If team mode is ever revisited it becomes a separate hosted product (see Licensing & Commercialization Stance), not bloat in the OSS daemon.
-
-### 3. IDE inline integration — DECIDED: YES, VS CODE EXTENSION IN PHASE 6
-
-A first-party VS Code extension that:
-
-- Highlights god nodes in the gutter (small icon + hover).
-- Shows finding severity decorations inline (squigglies that link back to the `explain_finding` MCP call).
-- Adds a "chiton: explain this symbol" command to the right-click menu that opens the neighborhood in a side panel (vis.js render).
-- Surfaces "this function is mentioned in 3 recent meetings" as a CodeLens above the function signature.
-
-**Architecture:** the extension is a thin client over the existing MCP server (HTTP transport). No duplicated logic. This is exactly why we kept the MCP tool surface stable and transport-agnostic.
-
-**Roadmap placement:** Phase 6 (after public release), since it gates on the MCP path being battle-tested across other assistants first. Distributed via the VS Code Marketplace under the same MIT license as the core; binary download of `chiton` itself is a one-click install from the extension if not already present.
-
-### 4. Graph versioning / branching — DECIDED: NO
-
-Users get exactly one graph per scope. No `chiton branch`, no `chiton checkout`, no parameter experimentation across branches. Rationale:
-
-- **Storage cost:** branches multiply the on-disk footprint; Corpus C is already 1.8 GB resident, branching it is hostile.
-- **UX cost:** every CLI command and every MCP tool would gain an optional `--branch` flag that 99% of users never set. The cost of carrying that parameter through the codebase forever is real.
-- The legitimate use case (experimenting with Leiden resolution parameters) is better solved by `chiton cluster --dry-run --resolution=N` printing community stats without persisting.
-
-If a user wants two different graphs for the same source (e.g. one with LLM extraction, one without), they use two different `--graph-path` directories. That's a local convention, not a feature.
-
-### 5. Encrypted-at-rest store — DECIDED: YES, FIRST-CLASS FEATURE
-
-The graph store, vector index, cache, and audit log are all encrypted at rest with a user-supplied passphrase. Specifics:
-
-- **Encryption:** AES-256-GCM in streaming mode (chacha20-poly1305 as a fallback for users on hardware without AES-NI).
-- **Key derivation:** argon2id from a passphrase, with the salt stored alongside `.chiton/schema_version` and the parameters bumped to match current OWASP guidance.
-- **Key handling:** passphrase entered once per daemon lifetime; held in mlock'd memory; never written to disk. Optional integration with the OS keychain (Windows Credential Manager, macOS Keychain, libsecret on Linux) so the user isn't re-prompted every session.
-- Kuzu doesn't ship native encryption, so we wrap its file I/O at the storage layer: a custom `internal/graph/store/crypto/` package that intercepts page reads/writes and en/decrypts before handing pages to Kuzu. Same pattern for sqlite-vec.
-- The `chiton export` archive is encrypted with the same passphrase (or a recipient-specific one for sharing).
-- `chiton init --encrypt=false` is supported for users who genuinely don't want it (e.g. CI runners against synthetic test data), but the default is encrypted.
-
-**Roadmap placement:** Phase 1.5 (alongside the rule engine). Doing it this early means we never have an unencrypted-store version in the wild that needs a migration path to the encrypted format.
-
-**Implication:** a startup performance hit (~5-15% on graph reads, dominated by AES-NI throughput on modern CPUs), accepted as the cost of treating user source code and meeting transcripts seriously.
-
-### 6. Bring-your-own-rule-engine (CEL/Starlark for user-defined rules) — DECIDED: NO
-
-Rules are written in Go, registered at `init()`, and shipped as part of the binary (built-in) or as compiled Go plugins (advanced users). Rationale:
-
-- Embedded scripting languages (CEL, Starlark, Lua) sound friendly but immediately raise sandboxing, fuzzing, supply-chain, and debuggability questions that consume more engineering time than the convenience saves.
-- The TrueCourse comparison is instructive: their LLM-rule engine is essentially "describe the rule in English, dispatch to an LLM," and that pattern already covers the case where a user wants to express a rule without writing code. We support the same path via the Phase 2.5 LLM-rule layer.
-- Power users who genuinely want to extend the deterministic rule set fork the repo, add their rule under `internal/analyze/rules/`, rebuild the binary. Go's compile time is fast enough that this is a 10-second loop.
-
-If we ever change our minds, we add a single new rule kind (`KindScripted`) backed by Starlark and route through it; the rest of the engine doesn't have to know.
 
 ---
 
