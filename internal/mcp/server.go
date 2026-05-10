@@ -310,17 +310,30 @@ func nodeLabels(nodes []model.Node) map[string]string {
 	return m
 }
 
-// pickByFile returns the first node whose source_uri contains file (case-insensitive).
-// Falls back to nodes[0] when file is empty or no match is found.
+// pickByFile selects the best match for label among nodes, using file as a
+// source_uri hint. Among candidates matching the hint, symbol nodes are preferred
+// over file nodes — callers specifying a file hint almost always want a symbol
+// from that file, not the file node itself. Falls back to nodes[0] if no hint
+// is given or no candidate matches.
 func pickByFile(nodes []model.Node, file string) model.Node {
 	if file == "" {
 		return nodes[0]
 	}
 	lower := strings.ToLower(file)
-	for _, n := range nodes {
+	var firstMatch *model.Node
+	for i := range nodes {
+		n := &nodes[i]
 		if strings.Contains(strings.ToLower(n.SourceURI), lower) {
-			return n
+			if firstMatch == nil {
+				firstMatch = n
+			}
+			if n.Kind == model.KindSymbol {
+				return *n
+			}
 		}
+	}
+	if firstMatch != nil {
+		return *firstMatch
 	}
 	return nodes[0]
 }
