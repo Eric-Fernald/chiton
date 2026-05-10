@@ -5,7 +5,10 @@
       "args": [
         "serve",
         "--stdio"
-      ]
+      ],
+      "env": {
+        "CHITON_GRAPH_PATH": "C:\\Programming Repos\\chiton\\chiton\\chiton-out\\graph.kuzu"
+      }
     }
   }
 }
