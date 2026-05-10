@@ -59,26 +59,29 @@ Q3 and Q4 were replaced after Round 1: Q3 tested call-site indexing (not impleme
 
 ## Remaining gaps
 
-### Gap 1 — Label disambiguation (Q4 failure)
+### Gap 1 — Label disambiguation (Q4 failure) ✓ Fixed
 
-`get_node_neighborhood("fetch")` resolves to the file `fetchall.go` (substring match) rather than the `fetch` function symbol. Any symbol whose name is a substring of a filename is ambiguous under the current `SearchNodes` logic — the file node is returned first.
+`get_node_neighborhood("fetch")` resolved to the file `fetchall.go` (substring match) rather than the `fetch` function symbol.
 
-This is the same root cause as the original Q4 failure (`main` exists in every file). It affects any query where a function name appears inside a longer filename.
+**Fix applied:** added optional `file` parameter to `get_node` and `get_node_neighborhood`. `SearchNodes` is called with limit=20 when `file` is set; `pickByFile` then selects the first result whose `source_uri` contains the hint (case-insensitive), falling back to the first match if none qualify.
 
-**Fix:** add an optional `file` parameter to `get_node_neighborhood` and `get_node` so callers can write `get_node_neighborhood("fetch", file="fetchall.go")` to target the symbol unambiguously in one call.
+Usage: `get_node_neighborhood("fetch", file="fetchall.go", edge_kinds=["CALLS"])`
 
-### Gap 2 — Cross-corpus scoping (Q3 partial result)
+### Gap 2 — Cross-corpus scoping (Q3 partial result) ✓ Fixed
 
-The graph contains files from multiple indexed directories (both chiton source and Go_Projects). There is no way to scope a query to one corpus. `get_node_neighborhood("fmt", edge_kinds=["IMPORTS"])` returned 13 files (9 Go_Projects + 4 chiton source files). Grep scoped to Go_Projects returns 9.
+The graph contained files from multiple indexed directories with no way to scope a query to one corpus. `get_node_neighborhood("fmt", edge_kinds=["IMPORTS"])` returned 13 files (9 Go_Projects + 4 chiton source files).
 
-**Fix:** add a `source_prefix` filter to neighborhood and search queries, or support per-directory sub-graphs.
+**Fix applied:** added optional `source_prefix` parameter to `get_node_neighborhood` and `query_graph`. Neighbor nodes whose `source_uri` does not contain the prefix (case-insensitive) are removed, along with any edges that reference them. The seed node is always retained.
 
-### Gap 3 — No call-site indexing
+Usage: `get_node_neighborhood("fmt", edge_kinds=["IMPORTS"], source_prefix="Go_Projects")`
 
-The extractor emits `IMPORTS` edges at the package level (`fetchall.go → net/http`) but not individual call expressions (`http.Get` at a specific line). Querying `query_graph("http.Get")` returns nothing even though multiple files call it.
+### Gap 3 — No call-site indexing ✓ Fixed
 
-**Short-term:** use grep for call-site queries — documented in CLAUDE.md.  
-**Long-term:** add a call-site extraction pass using `go/types` for resolved calls.
+The extractor emitted `IMPORTS` edges at the package level but not individual call expressions. Querying `query_graph("http.Get")` returned nothing even though multiple files call it.
+
+**Fix applied:** extended the CALLS walk in `internal/extract/ast/golang.go` to handle `*goast.SelectorExpr` nodes. For each `pkg.Method(...)` call where `pkg` matches an import alias, a synthetic external symbol node (e.g. `http.Get`) is created and a CALLS edge is emitted from the caller function to that node. Receiver method calls and chained calls (which require `go/types`) remain out of scope.
+
+**Note:** this fix requires re-running `chiton build` on all indexed directories and restarting the MCP server before the new CALLS edges are visible.
 
 ### Gap 4 — Corpus too small to show graph advantage
 
@@ -103,8 +106,8 @@ On a 10-file corpus, grep is fast and precise. This benchmark measures the floor
 
 ## Recommended next steps (before Phase 1)
 
-1. **Add `file` disambiguation parameter** to `get_node` and `get_node_neighborhood`. Unblocks correct Q4 answers in one call. Estimated: 1 hr.
+1. ~~**Add `file` disambiguation parameter.**~~ Done — `file` param added to `get_node` and `get_node_neighborhood`; `source_prefix` param added to `get_node_neighborhood` and `query_graph`.
 
-2. **Re-run on a larger corpus** (50–200 files). After fix 1, re-measure all 5 questions to validate the token advantage at realistic scale. The current corpus is too small to be representative.
+2. **Re-run on a larger corpus** (50–200 files). Re-build graph after Gap 3 extractor fix, then re-measure all 5 questions to validate the token advantage at realistic scale. The current corpus is too small to be representative.
 
 3. ~~**Document call-site gap in CLAUDE.md.**~~ Done — CLAUDE.md updated with call-site and label disambiguation limitations.

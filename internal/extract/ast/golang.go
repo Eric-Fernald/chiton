@@ -27,8 +27,9 @@ type GoExtractor struct{}
 //   - 1 symbol node per top-level func/type declaration
 //   - CONTAINS edges from file → each symbol
 //   - IMPORTS edges from file → each imported package (package node is external)
-//   - CALLS edges between functions within the same file only
-//     (cross-file CALLS resolution requires go/types; skipped here per plan §step5)
+//   - CALLS edges: direct intra-file calls and package-level selector calls
+//     (pkg.Method where pkg is an import alias). Cross-file direct calls and
+//     receiver method calls require go/types; skipped.
 func (g *GoExtractor) ExtractFile(_ context.Context, path string) ([]model.Node, []model.Edge, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
@@ -84,6 +85,17 @@ func (g *GoExtractor) ExtractFile(_ context.Context, path string) ([]model.Node,
 			Provenance: model.ProvExtracted,
 			Confidence: 1.0,
 		})
+	}
+
+	// Build alias → full package path map for resolving selector call expressions.
+	importAliases := map[string]string{}
+	for _, imp := range f.Imports {
+		pkgPath := strings.Trim(imp.Path.Value, `"`)
+		alias := pkgPath[strings.LastIndexByte(pkgPath, '/')+1:]
+		if imp.Name != nil && imp.Name.Name != "_" && imp.Name.Name != "." {
+			alias = imp.Name.Name
+		}
+		importAliases[alias] = pkgPath
 	}
 
 	// Top-level declarations → symbol nodes + CONTAINS edges.
@@ -145,9 +157,10 @@ func (g *GoExtractor) ExtractFile(_ context.Context, path string) ([]model.Node,
 		}
 	}
 
-	// CALLS edges: walk each func body, match direct (non-selector) calls
-	// to symbols defined in this file. Selector calls (pkg.Func, recv.Method)
-	// are skipped — resolving them requires type info not available here.
+	// CALLS edges: walk each func body for two cases:
+	//   1. Direct calls to symbols defined in this file (e.g. fetch(url)).
+	//   2. Selector calls where X is an import alias (e.g. http.Get(url)).
+	//      Receiver method calls and chained calls require go/types; skipped.
 	for _, decl := range f.Decls {
 		fd, ok := decl.(*goast.FuncDecl)
 		if !ok || fd.Body == nil {
@@ -162,22 +175,48 @@ func (g *GoExtractor) ExtractFile(_ context.Context, path string) ([]model.Node,
 			if !ok {
 				return true
 			}
-			ident, ok := call.Fun.(*goast.Ident)
-			if !ok {
-				return true
+			switch fun := call.Fun.(type) {
+			case *goast.Ident:
+				calleeID, ok := symbols[fun.Name]
+				if !ok || calleeID == callerID {
+					return true
+				}
+				edges = append(edges, model.Edge{
+					ID:         model.NewEdgeID(callerID, calleeID, model.EdgeCalls),
+					Src:        callerID,
+					Dst:        calleeID,
+					Kind:       model.EdgeCalls,
+					Provenance: model.ProvExtracted,
+					Confidence: 1.0,
+				})
+			case *goast.SelectorExpr:
+				xIdent, ok := fun.X.(*goast.Ident)
+				if !ok {
+					return true
+				}
+				pkgPath, ok := importAliases[xIdent.Name]
+				if !ok {
+					return true
+				}
+				calleeNode := model.Node{
+					ID:         model.NewNodeID("pkg://"+pkgPath, fun.Sel.Name),
+					Kind:       model.KindSymbol,
+					Label:      xIdent.Name + "." + fun.Sel.Name,
+					SourceURI:  "pkg://" + pkgPath,
+					Provenance: model.ProvExtracted,
+					Confidence: 1.0,
+					Attrs:      map[string]any{"external": true},
+				}
+				nodes = append(nodes, calleeNode)
+				edges = append(edges, model.Edge{
+					ID:         model.NewEdgeID(callerID, calleeNode.ID, model.EdgeCalls),
+					Src:        callerID,
+					Dst:        calleeNode.ID,
+					Kind:       model.EdgeCalls,
+					Provenance: model.ProvExtracted,
+					Confidence: 1.0,
+				})
 			}
-			calleeID, ok := symbols[ident.Name]
-			if !ok || calleeID == callerID {
-				return true
-			}
-			edges = append(edges, model.Edge{
-				ID:         model.NewEdgeID(callerID, calleeID, model.EdgeCalls),
-				Src:        callerID,
-				Dst:        calleeID,
-				Kind:       model.EdgeCalls,
-				Provenance: model.ProvExtracted,
-				Confidence: 1.0,
-			})
 			return true
 		})
 	}
