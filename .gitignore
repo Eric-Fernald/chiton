@@ -35,3 +35,4 @@ go.work.sum
 chiton-out/
 CLAUDE.md
 .claude
+.claude\settings.local.json
