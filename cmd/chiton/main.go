@@ -268,15 +268,21 @@ func clusterCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cluster",
 		Short: "Run Leiden community detection and betweenness metrics on the graph",
+		Long: `Run Leiden community detection and betweenness metrics on the graph.
+
+Results are written to a JSON sidecar file (chiton-out/cluster.json) so this
+command can run while chiton serve is active — no write lock on the store is
+needed. Restart chiton serve after clustering to load the new results.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := config.Load()
 			if err != nil {
 				return err
 			}
 			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "cluster: opening graph at %s\n", cfg.GraphPath)
+			fmt.Fprintf(out, "cluster: reading graph at %s\n", cfg.GraphPath)
 
-			gs, err := badgerstore.Open(cfg.GraphPath)
+			// Open read-only so this command can run while chiton serve is active.
+			gs, err := badgerstore.OpenReadOnly(cfg.GraphPath)
 			if err != nil {
 				return fmt.Errorf("open store: %w", err)
 			}
@@ -304,34 +310,39 @@ func clusterCmd() *cobra.Command {
 			commMap := cluster.Run(nodes, edges, resolution, rng)
 			metricsMap := metrics.Compute(nodes, edges)
 
-			// Count communities.
-			commSet := map[int]int{}
-			for _, c := range commMap {
-				commSet[c]++
-			}
-
-			// Apply results back to node structs.
-			for i := range nodes {
-				n := &nodes[i]
-				if c, ok := commMap[n.ID]; ok {
-					n.CommunityID = &c
-				}
-				if m, ok := metricsMap[n.ID]; ok {
-					if n.Attrs == nil {
-						n.Attrs = make(map[string]any)
-					}
-					n.Attrs["betweenness"] = m.Betweenness
-					n.Attrs["degree"] = m.Degree
+			// Build sidecar results.
+			commSet := map[int]struct{}{}
+			nodeResults := make(map[string]cluster.NodeResult, len(nodes))
+			for _, n := range nodes {
+				c := commMap[n.ID]
+				commSet[c] = struct{}{}
+				m := metricsMap[n.ID]
+				nodeResults[n.ID] = cluster.NodeResult{
+					Label:       n.Label,
+					SourceURI:   n.SourceURI,
+					CommunityID: c,
+					Betweenness: m.Betweenness,
+					Degree:      m.Degree,
 				}
 			}
 
-			if err := gs.UpsertNodes(ctx, nodes); err != nil {
-				return fmt.Errorf("persist metrics: %w", err)
+			results := &cluster.Results{
+				GeneratedAt:    time.Now(),
+				NodeCount:      len(nodes),
+				CommunityCount: len(commSet),
+				Nodes:          nodeResults,
+			}
+
+			sidecarPath := cluster.SidecarPath(cfg.GraphPath)
+			if err := cluster.WriteSidecar(sidecarPath, results); err != nil {
+				return err
 			}
 
 			elapsed := time.Since(start).Round(time.Millisecond)
 			fmt.Fprintf(out, "cluster: done in %s — %d nodes in %d communities\n",
 				elapsed, len(nodes), len(commSet))
+			fmt.Fprintf(out, "cluster: results written to %s\n", sidecarPath)
+			fmt.Fprintln(out, "cluster: restart chiton serve to load the new community data")
 
 			// Print top-N god nodes by betweenness.
 			type godNode struct {
@@ -340,16 +351,10 @@ func clusterCmd() *cobra.Command {
 				degree      int
 				community   int
 			}
-			var god []godNode
-			for i := range nodes {
-				n := &nodes[i]
-				b, _ := n.Attrs["betweenness"].(float64)
-				d, _ := n.Attrs["degree"].(int)
-				c := -1
-				if n.CommunityID != nil {
-					c = *n.CommunityID
-				}
-				god = append(god, godNode{n.Label, b, d, c})
+			god := make([]godNode, 0, len(nodes))
+			for _, n := range nodes {
+				r := nodeResults[n.ID]
+				god = append(god, godNode{n.Label, r.Betweenness, r.Degree, r.CommunityID})
 			}
 			sort.Slice(god, func(i, j int) bool {
 				return god[i].betweenness > god[j].betweenness
@@ -392,7 +397,12 @@ func serveCmd() *cobra.Command {
 			}
 			defer gs.Close()
 
-			s := mcpsrv.New(gs)
+			clusterResults, err := cluster.LoadSidecar(cluster.SidecarPath(cfg.GraphPath))
+			if err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "serve: warning: could not load cluster sidecar: %v\n", err)
+			}
+
+			s := mcpsrv.New(gs, clusterResults)
 
 			if stdio {
 				return mcpsdk.ServeStdio(s)

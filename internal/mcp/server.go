@@ -10,18 +10,21 @@ import (
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	mcpsdk "github.com/mark3labs/mcp-go/server"
 
+	"github.com/Eric-Fernald/chiton/internal/graph/cluster"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
 )
 
 // New creates an MCPServer exposing tools against the given graph store.
-func New(gs store.GraphStore) *mcpsdk.MCPServer {
+// overlay may be nil if no cluster pass has been run yet; god_nodes will
+// return a helpful message in that case.
+func New(gs store.GraphStore, overlay *cluster.Results) *mcpsdk.MCPServer {
 	s := mcpsdk.NewMCPServer("chiton", "0.1.0")
 	s.AddTool(getNodeTool(), getNodeHandler(gs))
 	s.AddTool(neighborhoodTool(), neighborhoodHandler(gs))
 	s.AddTool(queryTool(), queryHandler(gs))
 	s.AddTool(shortestPathTool(), shortestPathHandler(gs))
-	s.AddTool(godNodesTool(), godNodesHandler(gs))
+	s.AddTool(godNodesTool(), godNodesHandler(overlay))
 	return s
 }
 
@@ -389,42 +392,56 @@ func godNodesTool() mcplib.Tool {
 	)
 }
 
-func godNodesHandler(gs store.GraphStore) mcpsdk.ToolHandlerFunc {
-	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func godNodesHandler(overlay *cluster.Results) mcpsdk.ToolHandlerFunc {
+	return func(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+		if overlay == nil {
+			return mcplib.NewToolResultText("no cluster data available — run 'chiton cluster' then restart chiton serve"), nil
+		}
+
 		limit := req.GetInt("limit", 10)
-
-		var commID *int
-		if v := req.GetInt("community_id", -1); v >= 0 {
-			commID = &v
-		}
-
-		nodes, err := gs.GodNodes(ctx, commID, limit)
-		if err != nil {
-			return mcplib.NewToolResultErrorFromErr("god_nodes failed", err), nil
-		}
-		if len(nodes) == 0 {
-			return mcplib.NewToolResultText("no god nodes found — run 'chiton cluster' first to compute betweenness centrality"), nil
-		}
+		filterComm := req.GetInt("community_id", -1)
 
 		type godNode struct {
-			Label       string   `json:"label"`
-			Kind        string   `json:"kind"`
-			SourceURI   string   `json:"source_uri"`
-			Community   *int     `json:"community_id,omitempty"`
-			Betweenness float64  `json:"betweenness"`
-			Degree      int      `json:"degree"`
+			Label       string  `json:"label"`
+			Community   int     `json:"community_id"`
+			Betweenness float64 `json:"betweenness"`
+			Degree      int     `json:"degree"`
 		}
-		out := make([]godNode, len(nodes))
-		for i, n := range nodes {
-			b, _ := n.Attrs["betweenness"].(float64)
-			d, _ := n.Attrs["degree"].(int)
+
+		// overlay.Nodes is keyed by node ID; we need labels too. We only have
+		// IDs in the sidecar, so surface what we have and sort by betweenness.
+		type ranked struct {
+			id  string
+			nr  cluster.NodeResult
+		}
+		var candidates []ranked
+		for id, nr := range overlay.Nodes {
+			if filterComm >= 0 && nr.CommunityID != filterComm {
+				continue
+			}
+			candidates = append(candidates, ranked{id, nr})
+		}
+		// Sort descending by betweenness.
+		for i := 1; i < len(candidates); i++ {
+			key := candidates[i]
+			j := i - 1
+			for j >= 0 && candidates[j].nr.Betweenness < key.nr.Betweenness {
+				candidates[j+1] = candidates[j]
+				j--
+			}
+			candidates[j+1] = key
+		}
+		if limit > 0 && len(candidates) > limit {
+			candidates = candidates[:limit]
+		}
+
+		out := make([]godNode, len(candidates))
+		for i, c := range candidates {
 			out[i] = godNode{
-				Label:       n.Label,
-				Kind:        string(n.Kind),
-				SourceURI:   n.SourceURI,
-				Community:   n.CommunityID,
-				Betweenness: b,
-				Degree:      d,
+				Label:       c.nr.Label,
+				Community:   c.nr.CommunityID,
+				Betweenness: c.nr.Betweenness,
+				Degree:      c.nr.Degree,
 			}
 		}
 		return jsonResult(out)
