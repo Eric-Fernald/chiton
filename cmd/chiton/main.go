@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"math/rand"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,6 +17,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/cache"
 	"github.com/Eric-Fernald/chiton/internal/config"
 	goast "github.com/Eric-Fernald/chiton/internal/extract/ast"
+	"github.com/Eric-Fernald/chiton/internal/graph/cluster"
+	"github.com/Eric-Fernald/chiton/internal/graph/metrics"
 	badgerstore "github.com/Eric-Fernald/chiton/internal/graph/store/badger"
 	mcpsrv "github.com/Eric-Fernald/chiton/internal/mcp"
 	mcpsdk "github.com/mark3labs/mcp-go/server"
@@ -36,7 +40,7 @@ clusters them with Leiden, and serves the result to AI assistants over MCP
 so they spend fewer tokens navigating architecture, docs, and prior tool calls.`,
 	}
 
-	root.AddCommand(buildCmd(), queryCmd(), serveCmd(), installCmd())
+	root.AddCommand(buildCmd(), queryCmd(), serveCmd(), installCmd(), clusterCmd())
 	return root
 }
 
@@ -254,6 +258,119 @@ func writeClaudeRules(path string) error {
 		return os.WriteFile(path, append(existing, []byte("\n"+claudeRules)...), 0o644)
 	}
 	return os.WriteFile(path, []byte(claudeRules), 0o644)
+}
+
+func clusterCmd() *cobra.Command {
+	var resolution float64
+	var seed int64
+	var topN int
+
+	cmd := &cobra.Command{
+		Use:   "cluster",
+		Short: "Run Leiden community detection and betweenness metrics on the graph",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			fmt.Fprintf(out, "cluster: opening graph at %s\n", cfg.GraphPath)
+
+			gs, err := badgerstore.Open(cfg.GraphPath)
+			if err != nil {
+				return fmt.Errorf("open store: %w", err)
+			}
+			defer gs.Close()
+
+			ctx := cmd.Context()
+			nodes, err := gs.AllNodes(ctx)
+			if err != nil {
+				return fmt.Errorf("load nodes: %w", err)
+			}
+			edges, err := gs.AllEdges(ctx)
+			if err != nil {
+				return fmt.Errorf("load edges: %w", err)
+			}
+			fmt.Fprintf(out, "cluster: loaded %d nodes, %d edges\n", len(nodes), len(edges))
+
+			if len(nodes) == 0 {
+				fmt.Fprintln(out, "cluster: graph is empty, nothing to do")
+				return nil
+			}
+
+			start := time.Now()
+			rng := rand.New(rand.NewSource(seed))
+
+			commMap := cluster.Run(nodes, edges, resolution, rng)
+			metricsMap := metrics.Compute(nodes, edges)
+
+			// Count communities.
+			commSet := map[int]int{}
+			for _, c := range commMap {
+				commSet[c]++
+			}
+
+			// Apply results back to node structs.
+			for i := range nodes {
+				n := &nodes[i]
+				if c, ok := commMap[n.ID]; ok {
+					n.CommunityID = &c
+				}
+				if m, ok := metricsMap[n.ID]; ok {
+					if n.Attrs == nil {
+						n.Attrs = make(map[string]any)
+					}
+					n.Attrs["betweenness"] = m.Betweenness
+					n.Attrs["degree"] = m.Degree
+				}
+			}
+
+			if err := gs.UpsertNodes(ctx, nodes); err != nil {
+				return fmt.Errorf("persist metrics: %w", err)
+			}
+
+			elapsed := time.Since(start).Round(time.Millisecond)
+			fmt.Fprintf(out, "cluster: done in %s — %d nodes in %d communities\n",
+				elapsed, len(nodes), len(commSet))
+
+			// Print top-N god nodes by betweenness.
+			type godNode struct {
+				label       string
+				betweenness float64
+				degree      int
+				community   int
+			}
+			var god []godNode
+			for i := range nodes {
+				n := &nodes[i]
+				b, _ := n.Attrs["betweenness"].(float64)
+				d, _ := n.Attrs["degree"].(int)
+				c := -1
+				if n.CommunityID != nil {
+					c = *n.CommunityID
+				}
+				god = append(god, godNode{n.Label, b, d, c})
+			}
+			sort.Slice(god, func(i, j int) bool {
+				return god[i].betweenness > god[j].betweenness
+			})
+			if topN > len(god) {
+				topN = len(god)
+			}
+			fmt.Fprintf(out, "\nTop %d god nodes (highest betweenness):\n", topN)
+			for i := 0; i < topN; i++ {
+				g := god[i]
+				fmt.Fprintf(out, "  %-40s  betweenness=%.4f  degree=%d  community=%d\n",
+					g.label, g.betweenness, g.degree, g.community)
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().Float64Var(&resolution, "resolution", 1.0, "Leiden resolution parameter γ (higher = smaller communities)")
+	cmd.Flags().Int64Var(&seed, "seed", 42, "Random seed for reproducible clustering")
+	cmd.Flags().IntVar(&topN, "top", 10, "Number of god nodes to print")
+	return cmd
 }
 
 func serveCmd() *cobra.Command {

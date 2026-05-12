@@ -49,6 +49,19 @@ type GraphStore interface {
 	// substring match). Pass limit=0 for no cap; callers typically pass 10.
 	SearchNodes(ctx context.Context, query string, limit int) ([]model.Node, error)
 
+	// AllNodes returns every node in the graph. Used by bulk operations such as
+	// clustering and metrics computation.
+	AllNodes(ctx context.Context) ([]model.Node, error)
+
+	// AllEdges returns every edge in the graph. Used by bulk operations such as
+	// clustering and metrics computation.
+	AllEdges(ctx context.Context) ([]model.Edge, error)
+
+	// GodNodes returns the top-limit nodes ranked by betweenness centrality
+	// (stored in attrs["betweenness"] after a cluster pass). If communityID is
+	// non-nil, only nodes in that community are returned.
+	GodNodes(ctx context.Context, communityID *int, limit int) ([]model.Node, error)
+
 	// Snapshot writes a self-contained JSON export of the entire graph to w.
 	// Intended for portability, git-diffable snapshots, and cross-repo merging.
 	Snapshot(ctx context.Context, w io.Writer) error

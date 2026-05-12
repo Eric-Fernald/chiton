@@ -14,13 +14,14 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
 )
 
-// New creates an MCPServer exposing four tools against the given graph store.
+// New creates an MCPServer exposing tools against the given graph store.
 func New(gs store.GraphStore) *mcpsdk.MCPServer {
 	s := mcpsdk.NewMCPServer("chiton", "0.1.0")
 	s.AddTool(getNodeTool(), getNodeHandler(gs))
 	s.AddTool(neighborhoodTool(), neighborhoodHandler(gs))
 	s.AddTool(queryTool(), queryHandler(gs))
 	s.AddTool(shortestPathTool(), shortestPathHandler(gs))
+	s.AddTool(godNodesTool(), godNodesHandler(gs))
 	return s
 }
 
@@ -369,6 +370,64 @@ func toLeanEdge(e model.Edge, labels map[string]string) leanEdge {
 		From:  labels[e.Src],
 		To:    labels[e.Dst],
 		Attrs: e.Attrs,
+	}
+}
+
+func godNodesTool() mcplib.Tool {
+	return mcplib.NewTool("god_nodes",
+		mcplib.WithDescription("Return the highest-betweenness nodes in the graph (requires a prior 'chiton cluster' run). These are the architectural hubs that most shortest paths pass through."),
+		mcplib.WithInteger("limit",
+			mcplib.DefaultNumber(10),
+			mcplib.Description("Max nodes to return (default 10)"),
+			mcplib.Min(1),
+			mcplib.Max(100),
+		),
+		mcplib.WithInteger("community_id",
+			mcplib.Description("Optional: restrict results to nodes in this community (from chiton cluster output)"),
+		),
+		mcplib.WithReadOnlyHintAnnotation(true),
+	)
+}
+
+func godNodesHandler(gs store.GraphStore) mcpsdk.ToolHandlerFunc {
+	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+		limit := req.GetInt("limit", 10)
+
+		var commID *int
+		if v := req.GetInt("community_id", -1); v >= 0 {
+			commID = &v
+		}
+
+		nodes, err := gs.GodNodes(ctx, commID, limit)
+		if err != nil {
+			return mcplib.NewToolResultErrorFromErr("god_nodes failed", err), nil
+		}
+		if len(nodes) == 0 {
+			return mcplib.NewToolResultText("no god nodes found — run 'chiton cluster' first to compute betweenness centrality"), nil
+		}
+
+		type godNode struct {
+			Label       string   `json:"label"`
+			Kind        string   `json:"kind"`
+			SourceURI   string   `json:"source_uri"`
+			Community   *int     `json:"community_id,omitempty"`
+			Betweenness float64  `json:"betweenness"`
+			Degree      int      `json:"degree"`
+		}
+		out := make([]godNode, len(nodes))
+		for i, n := range nodes {
+			b, _ := n.Attrs["betweenness"].(float64)
+			d, _ := n.Attrs["degree"].(int)
+			out[i] = godNode{
+				Label:       n.Label,
+				Kind:        string(n.Kind),
+				SourceURI:   n.SourceURI,
+				Community:   n.CommunityID,
+				Betweenness: b,
+				Degree:      d,
+			}
+		}
+		return jsonResult(out)
 	}
 }
 

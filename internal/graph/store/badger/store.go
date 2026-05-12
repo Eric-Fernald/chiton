@@ -434,6 +434,110 @@ func (s *Store) SearchNodes(_ context.Context, query string, limit int) ([]model
 	return results, err
 }
 
+// AllNodes returns every node in the graph by scanning the node key space.
+func (s *Store) AllNodes(_ context.Context) ([]model.Node, error) {
+	var nodes []model.Node
+	err := s.db.View(func(txn *badgerdb.Txn) error {
+		pfx := []byte(pfxNode)
+		it := txn.NewIterator(badgerdb.DefaultIteratorOptions)
+		defer it.Close()
+		for it.Seek(pfx); it.ValidForPrefix(pfx); it.Next() {
+			var n model.Node
+			if err := it.Item().Value(func(v []byte) error {
+				return json.Unmarshal(v, &n)
+			}); err != nil {
+				return err
+			}
+			nodes = append(nodes, n)
+		}
+		return nil
+	})
+	return nodes, err
+}
+
+// AllEdges returns every edge in the graph by scanning the edge key space.
+func (s *Store) AllEdges(_ context.Context) ([]model.Edge, error) {
+	var edges []model.Edge
+	err := s.db.View(func(txn *badgerdb.Txn) error {
+		pfx := []byte(pfxEdge)
+		it := txn.NewIterator(badgerdb.DefaultIteratorOptions)
+		defer it.Close()
+		for it.Seek(pfx); it.ValidForPrefix(pfx); it.Next() {
+			var e model.Edge
+			if err := it.Item().Value(func(v []byte) error {
+				return json.Unmarshal(v, &e)
+			}); err != nil {
+				return err
+			}
+			edges = append(edges, e)
+		}
+		return nil
+	})
+	return edges, err
+}
+
+// GodNodes returns the top-limit nodes ranked by attrs["betweenness"] descending.
+// If communityID is non-nil, only nodes whose CommunityID matches are included.
+func (s *Store) GodNodes(_ context.Context, communityID *int, limit int) ([]model.Node, error) {
+	var candidates []model.Node
+	err := s.db.View(func(txn *badgerdb.Txn) error {
+		pfx := []byte(pfxNode)
+		it := txn.NewIterator(badgerdb.DefaultIteratorOptions)
+		defer it.Close()
+		for it.Seek(pfx); it.ValidForPrefix(pfx); it.Next() {
+			var n model.Node
+			if err := it.Item().Value(func(v []byte) error {
+				return json.Unmarshal(v, &n)
+			}); err != nil {
+				return err
+			}
+			if communityID != nil && (n.CommunityID == nil || *n.CommunityID != *communityID) {
+				continue
+			}
+			candidates = append(candidates, n)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Sort by betweenness descending (stored in attrs["betweenness"]).
+	betweenness := func(n model.Node) float64 {
+		if n.Attrs == nil {
+			return 0
+		}
+		switch v := n.Attrs["betweenness"].(type) {
+		case float64:
+			return v
+		case float32:
+			return float64(v)
+		}
+		return 0
+	}
+	sortByBetweenness(candidates, betweenness)
+
+	if limit > 0 && len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	return candidates, nil
+}
+
+// sortByBetweenness sorts nodes by betweenness descending using a simple
+// insertion sort (top-k lists are typically small; avoids importing sort).
+func sortByBetweenness(nodes []model.Node, score func(model.Node) float64) {
+	for i := 1; i < len(nodes); i++ {
+		key := nodes[i]
+		ks := score(key)
+		j := i - 1
+		for j >= 0 && score(nodes[j]) < ks {
+			nodes[j+1] = nodes[j]
+			j--
+		}
+		nodes[j+1] = key
+	}
+}
+
 // Snapshot writes a self-contained JSON export of all nodes and edges.
 func (s *Store) Snapshot(_ context.Context, w io.Writer) error {
 	type snap struct {
