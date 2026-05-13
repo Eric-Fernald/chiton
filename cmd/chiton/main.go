@@ -19,6 +19,7 @@ import (
 	goast "github.com/Eric-Fernald/chiton/internal/extract/ast"
 	"github.com/Eric-Fernald/chiton/internal/graph/cluster"
 	"github.com/Eric-Fernald/chiton/internal/graph/metrics"
+	"github.com/Eric-Fernald/chiton/internal/graph/model"
 	badgerstore "github.com/Eric-Fernald/chiton/internal/graph/store/badger"
 	mcpsrv "github.com/Eric-Fernald/chiton/internal/mcp"
 	mcpsdk "github.com/mark3labs/mcp-go/server"
@@ -134,7 +135,13 @@ func buildCmd() *cobra.Command {
 }
 
 func queryCmd() *cobra.Command {
-	return &cobra.Command{
+	var depth int
+	var edgeKinds []string
+	var file string
+	var sourcePrefix string
+	var asJSON bool
+
+	cmd := &cobra.Command{
 		Use:   "query <label>",
 		Short: "Look up a node and its neighborhood",
 		Args:  cobra.ExactArgs(1),
@@ -143,12 +150,159 @@ func queryCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_ = cfg
-			fmt.Fprintf(cmd.OutOrStdout(), "query: searching for %q\n", args[0])
-			fmt.Fprintln(cmd.OutOrStdout(), "query: not yet implemented — come back after Step 7 (MCP server)")
+
+			gs, err := badgerstore.OpenReadOnly(cfg.GraphPath)
+			if err != nil {
+				return fmt.Errorf("open store: %w", err)
+			}
+			defer gs.Close()
+
+			ctx := cmd.Context()
+			label := args[0]
+
+			limit := 1
+			if file != "" {
+				limit = 20
+			}
+			nodes, err := gs.SearchNodes(ctx, label, limit)
+			if err != nil {
+				return fmt.Errorf("search: %w", err)
+			}
+			if len(nodes) == 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "no node found matching %q\n", label)
+				return nil
+			}
+
+			seed := pickNodeByFile(nodes, file)
+
+			var kinds []model.EdgeKind
+			for _, k := range edgeKinds {
+				kinds = append(kinds, model.EdgeKind(strings.ToUpper(k)))
+			}
+
+			sub, err := gs.Neighbors(ctx, seed.ID, depth, kinds)
+			if err != nil {
+				return fmt.Errorf("neighbors: %w", err)
+			}
+
+			// Remove the seed from the neighbor list (BFS may return it).
+			noSelf := sub.Nodes[:0:0]
+			for _, n := range sub.Nodes {
+				if n.ID != seed.ID {
+					noSelf = append(noSelf, n)
+				}
+			}
+			filteredNodes, filteredEdges := filterNodesByPrefix(seed, noSelf, sub.Edges, sourcePrefix)
+
+			out := cmd.OutOrStdout()
+
+			if asJSON {
+				type result struct {
+					Seed  model.Node   `json:"seed"`
+					Nodes []model.Node `json:"nodes"`
+					Edges []model.Edge `json:"edges"`
+				}
+				b, err := json.MarshalIndent(result{Seed: seed, Nodes: filteredNodes, Edges: filteredEdges}, "", "  ")
+				if err != nil {
+					return err
+				}
+				fmt.Fprintln(out, string(b))
+				return nil
+			}
+
+			printNodeLine := func(n model.Node, indent string) {
+				span := ""
+				if n.Span != nil {
+					span = fmt.Sprintf(" [%d:%d]", n.Span.StartLine, n.Span.EndLine)
+				}
+				fmt.Fprintf(out, "%s%-10s  %-36s  %s%s\n", indent, n.Kind, n.Label, n.SourceURI, span)
+			}
+
+			fmt.Fprintln(out, "seed:")
+			printNodeLine(seed, "  ")
+
+			fmt.Fprintf(out, "\n%d neighbor(s):\n", len(filteredNodes))
+			for _, n := range filteredNodes {
+				printNodeLine(n, "  ")
+			}
+
+			labels := map[string]string{seed.ID: seed.Label}
+			for _, n := range filteredNodes {
+				labels[n.ID] = n.Label
+			}
+			fmt.Fprintf(out, "\n%d edge(s):\n", len(filteredEdges))
+			for _, e := range filteredEdges {
+				from := labels[e.Src]
+				if from == "" {
+					from = e.Src[:8]
+				}
+				to := labels[e.Dst]
+				if to == "" {
+					to = e.Dst[:8]
+				}
+				fmt.Fprintf(out, "  %-15s  %s → %s\n", e.Kind, from, to)
+			}
+
 			return nil
 		},
 	}
+
+	cmd.Flags().IntVar(&depth, "depth", 2, "Hop depth (1–5)")
+	cmd.Flags().StringSliceVar(&edgeKinds, "edge-kinds", nil, "Filter to these edge types, e.g. CALLS,IMPORTS")
+	cmd.Flags().StringVar(&file, "file", "", "Source file hint to disambiguate label matches (substring of source_uri)")
+	cmd.Flags().StringVar(&sourcePrefix, "source-prefix", "", "Only return neighbors whose source_uri contains this substring")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "Output raw JSON")
+	return cmd
+}
+
+// pickNodeByFile mirrors the MCP server's pickByFile logic: among nodes
+// matching the file hint, symbol nodes are preferred over file nodes.
+func pickNodeByFile(nodes []model.Node, file string) model.Node {
+	if file == "" {
+		return nodes[0]
+	}
+	lower := strings.ToLower(file)
+	var firstMatch *model.Node
+	for i := range nodes {
+		n := &nodes[i]
+		if strings.Contains(strings.ToLower(n.SourceURI), lower) {
+			if firstMatch == nil {
+				firstMatch = n
+			}
+			if n.Kind == model.KindSymbol {
+				return *n
+			}
+		}
+	}
+	if firstMatch != nil {
+		return *firstMatch
+	}
+	return nodes[0]
+}
+
+// filterNodesByPrefix removes neighbor nodes whose source_uri does not contain
+// prefix, and removes edges where either endpoint is absent after filtering.
+// The seed is always retained so its edges survive.
+func filterNodesByPrefix(seed model.Node, nodes []model.Node, edges []model.Edge, prefix string) ([]model.Node, []model.Edge) {
+	if prefix == "" {
+		return nodes, edges
+	}
+	lower := strings.ToLower(prefix)
+	kept := map[string]bool{seed.ID: true}
+	var filteredNodes []model.Node
+	for _, n := range nodes {
+		if strings.Contains(strings.ToLower(n.SourceURI), lower) {
+			filteredNodes = append(filteredNodes, n)
+			kept[n.ID] = true
+		}
+	}
+	var filteredEdges []model.Edge
+	for _, e := range edges {
+		if kept[e.Src] && kept[e.Dst] {
+			filteredEdges = append(filteredEdges, e)
+		}
+	}
+	return filteredNodes, filteredEdges
 }
 
 func installCmd() *cobra.Command {
