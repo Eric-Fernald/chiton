@@ -378,29 +378,29 @@ chiton/
 
 ## Roadmap
 
-### Phase 0 — Proof of Value
+### ✅ Phase 0 — Proof of Value
 
 *The smallest possible end-to-end slice.*
 
 Single Go binary that:
 
-1. Walks a directory of Go + Markdown files.
-2. Tree-sitter extracts symbols, calls, imports.
-3. Stores nodes/edges in Kuzu.
-4. Exposes ONE MCP tool: `get_node_neighborhood(label)`.
+1. ✅ Walks a directory of Go + Markdown files.
+2. ✅ Tree-sitter extracts symbols, calls, imports.
+3. ✅ Stores nodes/edges in Kuzu.
+4. ✅ Exposes ONE MCP tool: `get_node_neighborhood(label)`.
 
 **Target test:** point Claude Code at this workspace's `Projects/Go_Projects/` folder, ask "what does fetchall depend on?", verify graph traversal beats grep on token usage.
 
 **Out of scope for Phase 0:** No embeddings, no clustering, no Teams, no Whisper. Just prove the pipeline works and the MCP integration lands.
 
-### Phase 1 — Core Graph Features
+### ✅ Phase 1 — Core Graph Features
 
-- Add 5+ language tree-sitter extractors (Python, JS/TS, Go, Rust, Java).
-- SHA256 content cache + incremental re-extraction.
-- Leiden clustering (full-graph pass first; incremental later).
-- `GRAPH_REPORT.md` generator (god nodes + community summaries).
-- MCP tools: `query_graph`, `shortest_path`, `god_nodes`, `graph_summary`.
-- CLI: `chiton init`, `chiton build`, `chiton query`, `chiton serve`.
+- ✅ Add 5+ language extractors (Go stdlib parser; Python, JS/TS, Rust, Java via regex line-scanning).
+- ✅ SHA256 content cache + incremental re-extraction.
+- ✅ Leiden clustering (full-graph pass first; incremental later).
+- ✅ `GRAPH_REPORT.md` generator (god nodes + community summaries).
+- ✅ MCP tools: `query_graph`, `shortest_path`, `god_nodes`, `graph_summary`.
+- ✅ CLI: `chiton init`, `chiton build`, `chiton query`, `chiton serve`.
 
 ### Phase 1.5 — Deterministic Rule Engine + Install Layer
 
