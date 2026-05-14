@@ -5,8 +5,6 @@
       "mcp__chiton__get_node_neighborhood",
       "mcp__chiton__get_node",
       "mcp__chiton__shortest_path",
-      "Bash(npx designlang *)",
-      "Bash(npx --yes designlang grade https://stripe.com)",
       "Bash(echo \"Exit: $?\")"
     ]
   },
