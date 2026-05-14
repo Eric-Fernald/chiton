@@ -27,6 +27,8 @@ func New(gs store.GraphStore, overlay *cluster.Results) *mcpsdk.MCPServer {
 	s.AddTool(shortestPathTool(), shortestPathHandler(gs))
 	s.AddTool(godNodesTool(), godNodesHandler(overlay))
 	s.AddTool(graphSummaryTool(), graphSummaryHandler(gs, overlay))
+	s.AddTool(listFindingsTool(), listFindingsHandler(gs))
+	s.AddTool(explainFindingTool(), explainFindingHandler(gs))
 	return s
 }
 

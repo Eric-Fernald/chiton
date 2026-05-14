@@ -404,12 +404,12 @@ Single Go binary that:
 
 ### Phase 1.5 — Deterministic Rule Engine + Install Layer
 
-- Rule registry + `Match` interface.
-- 80-rule starter pack across 8 categories (see TrueCourse section for breakdown).
-- Findings as graph nodes, persisted in Kuzu.
-- `chiton analyze` + `findings list/explain/fix` CLI.
+- ✅ Rule registry + `Match` interface.
+- 80-rule starter pack across 8 categories (see TrueCourse section for breakdown). *(seeded with ~10 rules across security/bugs/quality/architecture)*
+- ✅ Findings as graph nodes, persisted in Kuzu.
+- ✅ `chiton analyze` + `findings list/explain` CLI. *(fix command deferred)*
 - Pre-commit hook + `.chiton/hooks.yaml`.
-- MCP tools: `list_findings`, `explain_finding`, `apply_fix`.
+- ✅ MCP tools: `list_findings`, `explain_finding`. *(apply_fix deferred)*
 - Install layer scaffold (`internal/install/`); ship Claude Code + Copilot VS Code installers first.
 - `SKILL.md` template embedded via `go:embed`.
 - `chiton install` / `uninstall` / `doctor` commands.

@@ -43,6 +43,14 @@ const (
 	EdgeMember EdgeKind = "MEMBER"
 )
 
+// Analyze edges — produced by the rule engine.
+const (
+	EdgeViolates     EdgeKind = "VIOLATES"      // finding → rule
+	EdgeAffects      EdgeKind = "AFFECTS"       // finding → file/symbol
+	EdgeCycleWith    EdgeKind = "CYCLE_WITH"    // file/symbol ↔ file/symbol
+	EdgeSupersededBy EdgeKind = "SUPERSEDED_BY" // finding → finding
+)
+
 type Edge struct {
 	ID         string         `json:"id"`
 	Src        string         `json:"src"`

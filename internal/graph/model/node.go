@@ -20,6 +20,8 @@ const (
 	KindPerson      NodeKind = "person"
 	KindURL         NodeKind = "url"
 	KindRationale   NodeKind = "rationale"
+	KindRule        NodeKind = "rule"
+	KindFinding     NodeKind = "finding"
 )
 
 type Provenance string
