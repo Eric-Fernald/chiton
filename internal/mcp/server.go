@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
@@ -25,6 +26,7 @@ func New(gs store.GraphStore, overlay *cluster.Results) *mcpsdk.MCPServer {
 	s.AddTool(queryTool(), queryHandler(gs))
 	s.AddTool(shortestPathTool(), shortestPathHandler(gs))
 	s.AddTool(godNodesTool(), godNodesHandler(overlay))
+	s.AddTool(graphSummaryTool(), graphSummaryHandler(gs, overlay))
 	return s
 }
 
@@ -445,6 +447,152 @@ func godNodesHandler(overlay *cluster.Results) mcpsdk.ToolHandlerFunc {
 			}
 		}
 		return jsonResult(out)
+	}
+}
+
+func graphSummaryTool() mcplib.Tool {
+	return mcplib.NewTool("graph_summary",
+		mcplib.WithDescription("Return a token-budgeted overview of the graph: node/edge counts by kind, community summaries, and top god nodes. Use this for a high-level architectural snapshot before drilling into specific neighborhoods."),
+		mcplib.WithString("scope",
+			mcplib.Description("Optional source URI prefix to restrict the summary to a subdirectory or package (e.g. \"internal/auth\"). Empty = entire graph."),
+		),
+		mcplib.WithInteger("max_tokens",
+			mcplib.DefaultNumber(4000),
+			mcplib.Description("Approximate token budget for the response (default 4000). Controls how many communities are included."),
+			mcplib.Min(500),
+			mcplib.Max(16000),
+		),
+		mcplib.WithReadOnlyHintAnnotation(true),
+	)
+}
+
+func graphSummaryHandler(gs store.GraphStore, overlay *cluster.Results) mcpsdk.ToolHandlerFunc {
+	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+		scope := req.GetString("scope", "")
+		maxTokens := req.GetInt("max_tokens", 4000)
+
+		allNodes, err := gs.AllNodes(ctx)
+		if err != nil {
+			return mcplib.NewToolResultErrorFromErr("failed to load nodes", err), nil
+		}
+		allEdges, err := gs.AllEdges(ctx)
+		if err != nil {
+			return mcplib.NewToolResultErrorFromErr("failed to load edges", err), nil
+		}
+
+		scopeLower := strings.ToLower(scope)
+		inScope := make(map[string]bool, len(allNodes))
+		byNodeKind := make(map[model.NodeKind]int)
+		for _, n := range allNodes {
+			if scope == "" || strings.Contains(strings.ToLower(n.SourceURI), scopeLower) {
+				inScope[n.ID] = true
+				byNodeKind[n.Kind]++
+			}
+		}
+
+		byEdgeKind := make(map[model.EdgeKind]int)
+		for _, e := range allEdges {
+			if scope == "" || (inScope[e.Src] && inScope[e.Dst]) {
+				byEdgeKind[e.Kind]++
+			}
+		}
+
+		nodeCount := len(inScope)
+		edgeCount := 0
+		for _, c := range byEdgeKind {
+			edgeCount += c
+		}
+
+		type commSummary struct {
+			ID        int      `json:"id"`
+			NodeCount int      `json:"node_count"`
+			TopNodes  []string `json:"top_nodes"`
+		}
+		type godNodeSummary struct {
+			Label       string  `json:"label"`
+			CommunityID int     `json:"community_id"`
+			Betweenness float64 `json:"betweenness"`
+			Degree      int     `json:"degree"`
+		}
+
+		var communities []commSummary
+		var godNodes []godNodeSummary
+
+		if overlay != nil {
+			commNodes := make(map[int][]string)
+			type ranked struct {
+				nr cluster.NodeResult
+			}
+			var candidates []ranked
+			for id, nr := range overlay.Nodes {
+				if scope != "" && !inScope[id] {
+					continue
+				}
+				commNodes[nr.CommunityID] = append(commNodes[nr.CommunityID], nr.Label)
+				candidates = append(candidates, ranked{nr})
+			}
+
+			for commID, labels := range commNodes {
+				top := labels
+				if len(top) > 5 {
+					top = top[:5]
+				}
+				communities = append(communities, commSummary{
+					ID:        commID,
+					NodeCount: len(labels),
+					TopNodes:  top,
+				})
+			}
+			sort.Slice(communities, func(i, j int) bool {
+				return communities[i].NodeCount > communities[j].NodeCount
+			})
+
+			sort.Slice(candidates, func(i, j int) bool {
+				return candidates[i].nr.Betweenness > candidates[j].nr.Betweenness
+			})
+			limit := 10
+			if len(candidates) < limit {
+				limit = len(candidates)
+			}
+			for _, c := range candidates[:limit] {
+				godNodes = append(godNodes, godNodeSummary{
+					Label:       c.nr.Label,
+					CommunityID: c.nr.CommunityID,
+					Betweenness: c.nr.Betweenness,
+					Degree:      c.nr.Degree,
+				})
+			}
+
+			// Trim communities to stay within token budget (~4 chars/token,
+			// ~100 chars per community entry, 300 chars fixed overhead).
+			charBudget := maxTokens*4 - 300 - len(godNodes)*80
+			maxComms := charBudget / 100
+			if maxComms < 0 {
+				maxComms = 0
+			}
+			if len(communities) > maxComms {
+				communities = communities[:maxComms]
+			}
+		}
+
+		type summary struct {
+			Scope       string                 `json:"scope,omitempty"`
+			NodeCount   int                    `json:"node_count"`
+			EdgeCount   int                    `json:"edge_count"`
+			ByNodeKind  map[model.NodeKind]int `json:"by_node_kind"`
+			ByEdgeKind  map[model.EdgeKind]int `json:"by_edge_kind"`
+			Communities []commSummary          `json:"communities,omitempty"`
+			GodNodes    []godNodeSummary       `json:"god_nodes,omitempty"`
+		}
+		return jsonResult(summary{
+			Scope:       scope,
+			NodeCount:   nodeCount,
+			EdgeCount:   edgeCount,
+			ByNodeKind:  byNodeKind,
+			ByEdgeKind:  byEdgeKind,
+			Communities: communities,
+			GodNodes:    godNodes,
+		})
 	}
 }
 

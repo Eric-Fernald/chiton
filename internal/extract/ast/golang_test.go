@@ -3,31 +3,58 @@ package ast
 import (
 	"context"
 	"testing"
+
+	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-func TestExtractFileCallSites(t *testing.T) {
+func TestGoExtractorCallSites(t *testing.T) {
+	src := `package main
+
+import (
+	"fmt"
+	"net/http"
+)
+
+func main() {
+	result := fetch("http://example.com")
+	fmt.Println(result)
+}
+
+func fetch(url string) string {
+	resp, err := http.Get(url)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	return fmt.Sprintf("status: %d", resp.StatusCode)
+}
+`
+	f := writeTempFile(t, "main.go", src)
 	ex := &GoExtractor{}
-	nodes, edges, err := ex.ExtractFile(context.Background(),
-		`C:\Programming Repos\Personal-Coding-Projects\Projects\Go_Projects\fetchall\fetchall.go`)
+	nodes, edges, err := ex.ExtractFile(context.Background(), f)
 	if err != nil {
 		t.Fatalf("ExtractFile: %v", err)
 	}
+	logNodesEdges(t, nodes, edges)
 
-	t.Logf("total nodes: %d, total edges: %d", len(nodes), len(edges))
+	assertLabel(t, nodes, "main")
+	assertLabel(t, nodes, "fetch")
+	assertLabel(t, nodes, "http.Get")
+	assertEdgeKind(t, edges, "CALLS")
+	assertEdgeKind(t, edges, "IMPORTS")
+
+	labels := make(map[string]string, len(nodes))
 	for _, n := range nodes {
-		t.Logf("  node: kind=%s label=%q uri=%s", n.Kind, n.Label, n.SourceURI)
+		labels[n.ID] = n.Label
 	}
+
+	var foundMainCallsFetch bool
 	for _, e := range edges {
-		t.Logf("  edge: kind=%s src=%s dst=%s", e.Kind, e.Src, e.Dst)
-	}
-
-	var foundHTTPGet bool
-	for _, n := range nodes {
-		if n.Label == "http.Get" {
-			foundHTTPGet = true
+		if e.Kind == model.EdgeCalls && labels[e.Src] == "main" && labels[e.Dst] == "fetch" {
+			foundMainCallsFetch = true
 		}
 	}
-	if !foundHTTPGet {
-		t.Error("expected node with label \"http.Get\" but none found")
+	if !foundMainCallsFetch {
+		t.Error("expected CALLS edge main → fetch but none found")
 	}
 }

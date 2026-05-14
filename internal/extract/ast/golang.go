@@ -274,13 +274,3 @@ func receiverType(expr goast.Expr) (string, bool) {
 	return "", false
 }
 
-func containsEdge(fileID, symID string) model.Edge {
-	return model.Edge{
-		ID:         model.NewEdgeID(fileID, symID, model.EdgeContains),
-		Src:        fileID,
-		Dst:        symID,
-		Kind:       model.EdgeContains,
-		Provenance: model.ProvExtracted,
-		Confidence: 1.0,
-	}
-}
