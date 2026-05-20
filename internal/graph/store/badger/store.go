@@ -30,25 +30,55 @@ type Store struct {
 	db *badgerdb.DB
 }
 
+// Options configures store opens. The zero value is a plaintext store with
+// default Badger settings — historic callers can keep using Open/OpenReadOnly.
+type Options struct {
+	// EncryptionKey, when non-nil, enables Badger's at-rest encryption.
+	// Length must be 16, 24, or 32 bytes. Chiton's keyfile derives 32 bytes
+	// (AES-256) by default.
+	EncryptionKey []byte
+}
+
 // Open opens or creates a BadgerDB store at path with read-write access.
-func Open(path string) (*Store, error) {
-	opts := badgerdb.DefaultOptions(path).WithLogger(nil)
-	db, err := badgerdb.Open(opts)
+func Open(path string) (*Store, error) { return OpenWith(path, Options{}) }
+
+// OpenReadOnly opens an existing BadgerDB store in read-only mode without
+// acquiring the directory lock, so chiton build can run concurrently.
+func OpenReadOnly(path string) (*Store, error) { return OpenReadOnlyWith(path, Options{}) }
+
+// OpenWith opens (or creates) the store with explicit options. When
+// opts.EncryptionKey is set, Badger encryption is enabled.
+func OpenWith(path string, opts Options) (*Store, error) {
+	bopts := badgerdb.DefaultOptions(path).WithLogger(nil)
+	bopts = applyEncryption(bopts, opts.EncryptionKey)
+	db, err := badgerdb.Open(bopts)
 	if err != nil {
 		return nil, fmt.Errorf("open badger at %s: %w", path, err)
 	}
 	return &Store{db: db}, nil
 }
 
-// OpenReadOnly opens an existing BadgerDB store in read-only mode without
-// acquiring the directory lock, so chiton build can run concurrently.
-func OpenReadOnly(path string) (*Store, error) {
-	opts := badgerdb.DefaultOptions(path).WithLogger(nil).WithReadOnly(true).WithBypassLockGuard(true)
-	db, err := badgerdb.Open(opts)
+// OpenReadOnlyWith is the read-only variant of OpenWith.
+func OpenReadOnlyWith(path string, opts Options) (*Store, error) {
+	bopts := badgerdb.DefaultOptions(path).WithLogger(nil).WithReadOnly(true).WithBypassLockGuard(true)
+	bopts = applyEncryption(bopts, opts.EncryptionKey)
+	db, err := badgerdb.Open(bopts)
 	if err != nil {
 		return nil, fmt.Errorf("open badger at %s: %w", path, err)
 	}
 	return &Store{db: db}, nil
+}
+
+// applyEncryption layers Badger encryption options on top of bopts when key
+// is non-nil. Badger requires a non-zero IndexCacheSize whenever encryption
+// is enabled; 64 MiB is a sane default for chiton's typical graph size.
+func applyEncryption(bopts badgerdb.Options, key []byte) badgerdb.Options {
+	if len(key) == 0 {
+		return bopts
+	}
+	return bopts.
+		WithEncryptionKey(key).
+		WithIndexCacheSize(64 << 20)
 }
 
 func (s *Store) Close() error { return s.db.Close() }

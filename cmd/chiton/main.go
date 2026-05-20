@@ -1,6 +1,7 @@
-package main
+﻿package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -19,11 +20,14 @@ import (
 	_ "github.com/Eric-Fernald/chiton/internal/analyze/rules"
 	"github.com/Eric-Fernald/chiton/internal/cache"
 	"github.com/Eric-Fernald/chiton/internal/config"
+	chitoncrypto "github.com/Eric-Fernald/chiton/internal/crypto"
 	extast "github.com/Eric-Fernald/chiton/internal/extract/ast"
 	"github.com/Eric-Fernald/chiton/internal/graph/cluster"
 	"github.com/Eric-Fernald/chiton/internal/graph/metrics"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 	badgerstore "github.com/Eric-Fernald/chiton/internal/graph/store/badger"
+	"github.com/Eric-Fernald/chiton/internal/hooks"
+	"github.com/Eric-Fernald/chiton/internal/install"
 	mcpsrv "github.com/Eric-Fernald/chiton/internal/mcp"
 	"github.com/Eric-Fernald/chiton/internal/report"
 	mcpsdk "github.com/mark3labs/mcp-go/server"
@@ -45,7 +49,7 @@ clusters them with Leiden, and serves the result to AI assistants over MCP
 so they spend fewer tokens navigating architecture, docs, and prior tool calls.`,
 	}
 
-	root.AddCommand(initCmd(), buildCmd(), queryCmd(), serveCmd(), installCmd(), clusterCmd(), reportCmd(), analyzeCmd(), findingsCmd())
+	root.AddCommand(initCmd(), buildCmd(), queryCmd(), serveCmd(), installCmd(), uninstallCmd(), doctorCmd(), clusterCmd(), reportCmd(), analyzeCmd(), findingsCmd(), hooksCmd())
 	return root
 }
 
@@ -58,7 +62,7 @@ func analyzeCmd() *cobra.Command {
 		Short: "Run deterministic rules over a directory and persist findings",
 		Long: `Walk the given path, run every registered file-scope rule on each supported
 file, then run graph-scope rules over the full extracted set. Findings are
-upserted as graph nodes (VIOLATES → rule, AFFECTS → file/symbol) so they can
+upserted as graph nodes (VIOLATES â†’ rule, AFFECTS â†’ file/symbol) so they can
 be queried by 'chiton findings list' or the MCP tools.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -66,7 +70,7 @@ be queried by 'chiton findings list' or the MCP tools.`,
 			if err != nil {
 				return err
 			}
-			gs, err := badgerstore.Open(cfg.GraphPath)
+			gs, err := openGraphStore(cfg.GraphPath, false)
 			if err != nil {
 				return fmt.Errorf("open store: %w", err)
 			}
@@ -138,7 +142,7 @@ func findingsListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			gs, err := badgerstore.OpenReadOnly(cfg.GraphPath)
+			gs, err := openGraphStore(cfg.GraphPath, true)
 			if err != nil {
 				return fmt.Errorf("open store: %w", err)
 			}
@@ -197,7 +201,7 @@ func findingsExplainCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			gs, err := badgerstore.OpenReadOnly(cfg.GraphPath)
+			gs, err := openGraphStore(cfg.GraphPath, true)
 			if err != nil {
 				return fmt.Errorf("open store: %w", err)
 			}
@@ -239,7 +243,7 @@ func findingsExplainCmd() *cobra.Command {
 			if len(exp.Related) > 0 {
 				fmt.Fprintf(out, "\n%d related finding(s) on the same target:\n", len(exp.Related))
 				for _, r := range exp.Related {
-					fmt.Fprintf(out, "  [%s] %s — %s\n", r.Severity, r.RuleID, r.Message)
+					fmt.Fprintf(out, "  [%s] %s â€” %s\n", r.Severity, r.RuleID, r.Message)
 				}
 			}
 			return nil
@@ -326,9 +330,37 @@ After init, run "chiton build ." to populate the graph.`,
 
 			if !encrypt {
 				fmt.Fprintln(out, "init: note: encryption disabled (--encrypt=false); graph will be stored in plaintext")
+				fmt.Fprintf(out, "init: done â€” %d file(s) created, %d skipped\n", created, skipped)
+				fmt.Fprintf(out, "init: next step: chiton build .\n")
+				return nil
 			}
 
-			fmt.Fprintf(out, "init: done — %d file(s) created, %d skipped\n", created, skipped)
+			keyfilePath := chitoncrypto.ResolveKeyfilePath(chitonDir)
+			if _, err := os.Stat(keyfilePath); err == nil {
+				fmt.Fprintf(out, "init: skip    %s (keyfile already present â€” reuse passphrase to open)\n", keyfilePath)
+			} else {
+				passphrase, err := chitoncrypto.GetPassphrase("Choose a chiton passphrase (used to encrypt the graph):", true)
+				if err != nil {
+					return fmt.Errorf("passphrase: %w", err)
+				}
+				kf, err := chitoncrypto.DefaultKeyFile()
+				if err != nil {
+					return err
+				}
+				if err := kf.Save(keyfilePath, false); err != nil {
+					return err
+				}
+				// Derive once to surface any KDF issues immediately and warm
+				// the password-derivation path (Argon2id at 64 MiB takes ~1s).
+				if _, err := kf.DeriveKey(passphrase); err != nil {
+					return fmt.Errorf("derive key: %w", err)
+				}
+				fmt.Fprintf(out, "init: created %s\n", keyfilePath)
+				fmt.Fprintln(out, "init: passphrase set. Subsequent commands read CHITON_PASSPHRASE from the environment or prompt interactively.")
+				created++
+			}
+
+			fmt.Fprintf(out, "init: done â€” %d file(s) created, %d skipped\n", created, skipped)
 			fmt.Fprintf(out, "init: next step: chiton build .\n")
 			return nil
 		},
@@ -337,6 +369,20 @@ After init, run "chiton build ." to populate the graph.`,
 	cmd.Flags().StringVar(&dir, "dir", ".", "Directory to initialise (default: current directory)")
 	cmd.Flags().BoolVar(&encrypt, "encrypt", true, "Enable encryption at rest (default: true; use --encrypt=false for CI/test environments)")
 	return cmd
+}
+
+// openGraphStore opens the badger store with encryption if a keyfile is
+// detected next to it. readOnly chooses between Open and OpenReadOnly.
+func openGraphStore(graphPath string, readOnly bool) (*badgerstore.Store, error) {
+	key, _, err := chitoncrypto.ResolveKeyForGraph(graphPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve encryption key: %w", err)
+	}
+	opts := badgerstore.Options{EncryptionKey: key}
+	if readOnly {
+		return badgerstore.OpenReadOnlyWith(graphPath, opts)
+	}
+	return badgerstore.OpenWith(graphPath, opts)
 }
 
 func buildCmd() *cobra.Command {
@@ -352,9 +398,9 @@ func buildCmd() *cobra.Command {
 
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "build: scanning %s\n", args[0])
-			fmt.Fprintf(out, "build: graph → %s\n", cfg.GraphPath)
+			fmt.Fprintf(out, "build: graph â†’ %s\n", cfg.GraphPath)
 
-			gs, err := badgerstore.Open(cfg.GraphPath)
+			gs, err := openGraphStore(cfg.GraphPath, false)
 			if err != nil {
 				return fmt.Errorf("open store: %w", err)
 			}
@@ -421,7 +467,7 @@ func buildCmd() *cobra.Command {
 				return fmt.Errorf("save cache: %w", err)
 			}
 
-			fmt.Fprintf(out, "build: done — %d files scanned, %d skipped (unchanged), %d nodes, %d edges [%s]\n",
+			fmt.Fprintf(out, "build: done â€” %d files scanned, %d skipped (unchanged), %d nodes, %d edges [%s]\n",
 				scanned, skipped, totalNodes, totalEdges, time.Since(start).Round(time.Millisecond))
 			return nil
 		},
@@ -445,7 +491,7 @@ func queryCmd() *cobra.Command {
 				return err
 			}
 
-			gs, err := badgerstore.OpenReadOnly(cfg.GraphPath)
+			gs, err := openGraphStore(cfg.GraphPath, true)
 			if err != nil {
 				return fmt.Errorf("open store: %w", err)
 			}
@@ -539,14 +585,14 @@ func queryCmd() *cobra.Command {
 				if to == "" {
 					to = e.Dst[:8]
 				}
-				fmt.Fprintf(out, "  %-15s  %s → %s\n", e.Kind, from, to)
+				fmt.Fprintf(out, "  %-15s  %s â†’ %s\n", e.Kind, from, to)
 			}
 
 			return nil
 		},
 	}
 
-	cmd.Flags().IntVar(&depth, "depth", 2, "Hop depth (1–5)")
+	cmd.Flags().IntVar(&depth, "depth", 2, "Hop depth (1â€“5)")
 	cmd.Flags().StringSliceVar(&edgeKinds, "edge-kinds", nil, "Filter to these edge types, e.g. CALLS,IMPORTS")
 	cmd.Flags().StringVar(&file, "file", "", "Source file hint to disambiguate label matches (substring of source_uri)")
 	cmd.Flags().StringVar(&sourcePrefix, "source-prefix", "", "Only return neighbors whose source_uri contains this substring")
@@ -605,112 +651,162 @@ func filterNodesByPrefix(seed model.Node, nodes []model.Node, edges []model.Edge
 }
 
 func installCmd() *cobra.Command {
-	var assistant string
-	var dir string
+	var assistant, dir, graphPath string
+	var userScope, withHooks bool
+
+	supported := strings.Join(installerNames(), ", ")
 
 	cmd := &cobra.Command{
 		Use:   "install",
-		Short: "Register chiton with an AI assistant (writes .mcp.json and rules file)",
+		Short: "Register chiton with one or more AI assistants",
+		Long: `Write the MCP server config, skill files, and always-on rules block for
+each supported assistant. Re-running install is idempotent: the chiton block
+inside rules files is replaced in place rather than appended.
+
+Use --assistant <name> for a specific assistant, --assistant all for every
+supported assistant, or --assistant auto (default) to install only for
+assistants whose footprint is detected in the workspace.
+
+Supported assistants: ` + supported + `.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			exe, err := os.Executable()
+			installers, err := install.Resolve(assistant, dir)
 			if err != nil {
-				return fmt.Errorf("resolve executable: %w", err)
-			}
-			exe, err = filepath.EvalSymlinks(exe)
-			if err != nil {
-				return fmt.Errorf("resolve symlinks: %w", err)
-			}
-
-			out := cmd.OutOrStdout()
-
-			mcpPath := filepath.Join(dir, ".mcp.json")
-			if err := writeMCPJSON(mcpPath, exe); err != nil {
 				return err
 			}
-			fmt.Fprintf(out, "install: wrote %s\n", mcpPath)
-
-			switch assistant {
-			case "claude-code":
-				rulesPath := filepath.Join(dir, "CLAUDE.md")
-				if err := writeClaudeRules(rulesPath); err != nil {
-					return err
-				}
-				fmt.Fprintf(out, "install: wrote %s\n", rulesPath)
-			default:
-				return fmt.Errorf("unknown assistant %q — supported: claude-code", assistant)
+			opts := install.Options{
+				Dir:       dir,
+				UserScope: userScope,
+				WithHooks: withHooks,
+				GraphPath: graphPath,
 			}
-
-			fmt.Fprintln(out, "install: done — restart Claude Code to pick up the new MCP server.")
+			out := cmd.OutOrStdout()
+			for _, in := range installers {
+				rep, err := in.Install(opts)
+				if err != nil {
+					return fmt.Errorf("%s: %w", in.Name(), err)
+				}
+				printInstallReport(out, rep, "install")
+			}
 			return nil
 		},
 	}
 
-	cmd.Flags().StringVar(&assistant, "assistant", "claude-code", "AI assistant to configure (claude-code)")
-	cmd.Flags().StringVar(&dir, "dir", ".", "Directory to write config files into")
+	cmd.Flags().StringVar(&assistant, "assistant", "auto", "Assistant to install for: auto, all, a name (e.g. claude-code), or a comma-separated list")
+	cmd.Flags().StringVar(&dir, "dir", ".", "Workspace directory to install into")
+	cmd.Flags().BoolVar(&userScope, "user-scope", false, "Install into the user-global config location (where supported)")
+	cmd.Flags().BoolVar(&withHooks, "with-hooks", false, "Install opt-in PreToolUse hooks (assistant-specific)")
+	cmd.Flags().StringVar(&graphPath, "graph", "", "Graph path to record in the MCP config (default: chiton's built-in default)")
 	return cmd
 }
 
-func writeMCPJSON(path, exe string) error {
-	type serverEntry struct {
-		Command string   `json:"command"`
-		Args    []string `json:"args"`
-	}
-	type mcpConfig struct {
-		MCPServers map[string]serverEntry `json:"mcpServers"`
-	}
-	cfg := mcpConfig{
-		MCPServers: map[string]serverEntry{
-			"chiton": {Command: exe, Args: []string{"serve", "--stdio"}},
+func uninstallCmd() *cobra.Command {
+	var assistant, dir string
+
+	supported := strings.Join(installerNames(), ", ")
+
+	cmd := &cobra.Command{
+		Use:   "uninstall",
+		Short: "Remove chiton's entries from one or more AI assistants",
+		Long: `Remove the chiton MCP entry and rules block from each selected assistant's
+config files. Only chiton-owned content is touched; the user's other tool
+registrations and notes are preserved.
+
+Supported assistants: ` + supported + `.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			installers, err := install.Resolve(assistant, dir)
+			if err != nil {
+				return err
+			}
+			opts := install.Options{Dir: dir}
+			out := cmd.OutOrStdout()
+			for _, in := range installers {
+				rep, err := in.Uninstall(opts)
+				if err != nil {
+					return fmt.Errorf("%s: %w", in.Name(), err)
+				}
+				printInstallReport(out, rep, "uninstall")
+			}
+			return nil
 		},
 	}
-	b, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, append(b, '\n'), 0o644)
+
+	cmd.Flags().StringVar(&assistant, "assistant", "auto", "Assistant to uninstall from: auto, all, a name, or a comma-separated list")
+	cmd.Flags().StringVar(&dir, "dir", ".", "Workspace directory to uninstall from")
+	return cmd
 }
 
-const claudeRules = `# Chiton — knowledge graph context
+func doctorCmd() *cobra.Command {
+	var dir string
+	var asJSON bool
 
-This project runs **chiton**, an on-device knowledge graph engine.
-The graph is built from the codebase's AST and stored locally.
-
-## When to use chiton tools
-
-Before using grep or file-read to answer architecture or navigation questions,
-call the chiton MCP tools instead:
-
-| Tool | Use when |
-|---|---|
-| ` + "`get_node_neighborhood`" + ` | "What does X depend on?", "What calls Y?", "Show me X and its neighbors" |
-| ` + "`query_graph`" + ` | Discovering what symbols or files exist matching a name |
-| ` + "`shortest_path`" + ` | "How are A and B connected?" |
-
-Chiton returns typed graph relationships (CALLS, IMPORTS, CONTAINS, etc.)
-that answer structural questions with far fewer tokens than reading source files.
-
-**Still use grep/read** when you need actual source code content to understand
-an implementation, locate a bug, or make an edit — not just to answer
-"what exists" or "how things are connected."
-
-## Building the graph
-
-` + "```" + `sh
-chiton build .          # index this workspace
-chiton serve --stdio    # already running as MCP server
-` + "```" + `
-`
-
-func writeClaudeRules(path string) error {
-	existing, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return err
+	cmd := &cobra.Command{
+		Use:   "doctor",
+		Short: "Report the install state across all supported AI assistants",
+		Long: `For each supported assistant, report whether chiton's MCP entry and rules
+block are present in this workspace. Writes nothing.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			out := cmd.OutOrStdout()
+			opts := install.Options{Dir: dir}
+			reports := make([]install.DoctorReport, 0, len(install.Available()))
+			for _, in := range install.Available() {
+				rep, err := in.Doctor(opts)
+				if err != nil {
+					return fmt.Errorf("%s: %w", in.Name(), err)
+				}
+				reports = append(reports, rep)
+			}
+			if asJSON {
+				b, err := json.MarshalIndent(reports, "", "  ")
+				if err != nil {
+					return err
+				}
+				fmt.Fprintln(out, string(b))
+				return nil
+			}
+			for _, rep := range reports {
+				status := "not detected"
+				if rep.Registered {
+					status = "registered"
+				} else if rep.Detected {
+					status = "detected (not registered)"
+				}
+				fmt.Fprintf(out, "%s â€” %s\n", rep.Installer, status)
+				for _, ok := range rep.OK {
+					fmt.Fprintf(out, "  ok:    %s\n", ok)
+				}
+				for _, issue := range rep.Issues {
+					fmt.Fprintf(out, "  issue: %s\n", issue)
+				}
+			}
+			return nil
+		},
 	}
-	// Skip write if the rules are already present.
-	if len(existing) > 0 {
-		return os.WriteFile(path, append(existing, []byte("\n"+claudeRules)...), 0o644)
+
+	cmd.Flags().StringVar(&dir, "dir", ".", "Workspace directory to inspect")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "Output JSON")
+	return cmd
+}
+
+func installerNames() []string {
+	avail := install.Available()
+	names := make([]string, 0, len(avail))
+	for _, i := range avail {
+		names = append(names, i.Name())
 	}
-	return os.WriteFile(path, []byte(claudeRules), 0o644)
+	return names
+}
+
+func printInstallReport(out io.Writer, rep install.Report, verb string) {
+	fmt.Fprintf(out, "%s: %s\n", verb, rep.Installer)
+	for _, p := range rep.Wrote {
+		fmt.Fprintf(out, "  wrote   %s\n", p)
+	}
+	for _, p := range rep.Skipped {
+		fmt.Fprintf(out, "  skip    %s\n", p)
+	}
+	for _, n := range rep.Notes {
+		fmt.Fprintf(out, "  note    %s\n", n)
+	}
 }
 
 func clusterCmd() *cobra.Command {
@@ -724,7 +820,7 @@ func clusterCmd() *cobra.Command {
 		Long: `Run Leiden community detection and betweenness metrics on the graph.
 
 Results are written to a JSON sidecar file (chiton-out/cluster.json) so this
-command can run while chiton serve is active — no write lock on the store is
+command can run while chiton serve is active â€” no write lock on the store is
 needed. Restart chiton serve after clustering to load the new results.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := config.Load()
@@ -735,7 +831,7 @@ needed. Restart chiton serve after clustering to load the new results.`,
 			fmt.Fprintf(out, "cluster: reading graph at %s\n", cfg.GraphPath)
 
 			// Open read-only so this command can run while chiton serve is active.
-			gs, err := badgerstore.OpenReadOnly(cfg.GraphPath)
+			gs, err := openGraphStore(cfg.GraphPath, true)
 			if err != nil {
 				return fmt.Errorf("open store: %w", err)
 			}
@@ -792,7 +888,7 @@ needed. Restart chiton serve after clustering to load the new results.`,
 			}
 
 			elapsed := time.Since(start).Round(time.Millisecond)
-			fmt.Fprintf(out, "cluster: done in %s — %d nodes in %d communities\n",
+			fmt.Fprintf(out, "cluster: done in %s â€” %d nodes in %d communities\n",
 				elapsed, len(nodes), len(commSet))
 			fmt.Fprintf(out, "cluster: results written to %s\n", sidecarPath)
 			fmt.Fprintln(out, "cluster: restart chiton serve to load the new community data")
@@ -825,7 +921,7 @@ needed. Restart chiton serve after clustering to load the new results.`,
 		},
 	}
 
-	cmd.Flags().Float64Var(&resolution, "resolution", 1.0, "Leiden resolution parameter γ (higher = smaller communities)")
+	cmd.Flags().Float64Var(&resolution, "resolution", 1.0, "Leiden resolution parameter Î³ (higher = smaller communities)")
 	cmd.Flags().Int64Var(&seed, "seed", 42, "Random seed for reproducible clustering")
 	cmd.Flags().IntVar(&topN, "top", 10, "Number of god nodes to print")
 	return cmd
@@ -844,7 +940,7 @@ func serveCmd() *cobra.Command {
 				return err
 			}
 
-			gs, err := badgerstore.OpenReadOnly(cfg.GraphPath)
+			gs, err := openGraphStore(cfg.GraphPath, true)
 			if err != nil {
 				return fmt.Errorf("open store: %w", err)
 			}
@@ -892,10 +988,10 @@ Requires a prior 'chiton cluster' run.`,
 				return fmt.Errorf("load cluster sidecar: %w", err)
 			}
 			if clusterResults == nil {
-				return fmt.Errorf("no cluster data found — run 'chiton cluster' first")
+				return fmt.Errorf("no cluster data found â€” run 'chiton cluster' first")
 			}
 
-			gs, err := badgerstore.OpenReadOnly(cfg.GraphPath)
+			gs, err := openGraphStore(cfg.GraphPath, true)
 			if err != nil {
 				return fmt.Errorf("open store: %w", err)
 			}
@@ -924,7 +1020,7 @@ Requires a prior 'chiton cluster' run.`,
 			}
 
 			if !toStdout {
-				fmt.Fprintf(cmd.OutOrStdout(), "report: done — %d nodes, %d communities\n",
+				fmt.Fprintf(cmd.OutOrStdout(), "report: done â€” %d nodes, %d communities\n",
 					clusterResults.NodeCount, clusterResults.CommunityCount)
 			}
 			return nil
@@ -934,4 +1030,259 @@ Requires a prior 'chiton cluster' run.`,
 	cmd.Flags().StringVar(&outFile, "out", "GRAPH_REPORT.md", "Output file path")
 	cmd.Flags().BoolVar(&toStdout, "stdout", false, "Write to stdout instead of a file")
 	return cmd
+}
+
+func hooksCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "hooks",
+		Short: "Install and run chiton's git pre-commit / pre-push hooks",
+		Long: `Manage chiton-owned git hooks in this repository.
+
+The committed-to-repo policy lives in .chiton/hooks.yaml. The hook scripts
+themselves live under .git/hooks/ and invoke 'chiton hooks run --stage <stage>'.
+
+Subcommands:
+  install      write .git/hooks/{pre-commit,pre-push}
+  uninstall    remove chiton-owned hook scripts
+  status       report which hooks are installed
+  run          execute one stage (used by the hook scripts themselves)`,
+	}
+	cmd.AddCommand(hooksInstallCmd(), hooksUninstallCmd(), hooksStatusCmd(), hooksRunCmd())
+	return cmd
+}
+
+func hooksInstallCmd() *cobra.Command {
+	var dir string
+	var stagesFlag []string
+
+	cmd := &cobra.Command{
+		Use:   "install",
+		Short: "Write chiton-owned git hooks into .git/hooks/",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			exe, err := install.ResolveExe("")
+			if err != nil {
+				return err
+			}
+			hooksDir, err := resolveGitHooksDir(dir)
+			if err != nil {
+				return err
+			}
+			stages, err := parseStages(stagesFlag)
+			if err != nil {
+				return err
+			}
+			rep, err := hooks.Install(hooksDir, exe, stages)
+			if err != nil {
+				return err
+			}
+			printHooksReport(cmd.OutOrStdout(), rep, "install")
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&dir, "dir", ".", "Repository root containing .git/")
+	cmd.Flags().StringSliceVar(&stagesFlag, "stage", []string{"pre-commit", "pre-push"}, "Hook stages to install")
+	return cmd
+}
+
+func hooksUninstallCmd() *cobra.Command {
+	var dir string
+	var stagesFlag []string
+
+	cmd := &cobra.Command{
+		Use:   "uninstall",
+		Short: "Remove chiton-owned hook scripts (foreign hooks are left intact)",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			hooksDir, err := resolveGitHooksDir(dir)
+			if err != nil {
+				return err
+			}
+			stages, err := parseStages(stagesFlag)
+			if err != nil {
+				return err
+			}
+			rep, err := hooks.Uninstall(hooksDir, stages)
+			if err != nil {
+				return err
+			}
+			printHooksReport(cmd.OutOrStdout(), rep, "uninstall")
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&dir, "dir", ".", "Repository root containing .git/")
+	cmd.Flags().StringSliceVar(&stagesFlag, "stage", []string{"pre-commit", "pre-push"}, "Hook stages to remove")
+	return cmd
+}
+
+func hooksStatusCmd() *cobra.Command {
+	var dir string
+	var asJSON bool
+
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: "Report which chiton hooks are installed",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			hooksDir, err := resolveGitHooksDir(dir)
+			if err != nil {
+				return err
+			}
+			entries, err := hooks.Status(hooksDir, hooks.Stages())
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			if asJSON {
+				b, err := json.MarshalIndent(entries, "", "  ")
+				if err != nil {
+					return err
+				}
+				fmt.Fprintln(out, string(b))
+				return nil
+			}
+			for _, e := range entries {
+				state := "absent"
+				switch {
+				case e.Exists && e.ChitonOwned:
+					state = "chiton-owned"
+				case e.Exists:
+					state = "present (not chiton-owned)"
+				}
+				fmt.Fprintf(out, "%-12s %s  %s\n", string(e.Stage), state, e.Path)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&dir, "dir", ".", "Repository root")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "Output JSON")
+	return cmd
+}
+
+func hooksRunCmd() *cobra.Command {
+	var dir string
+	var stageRaw string
+
+	cmd := &cobra.Command{
+		Use:   "run",
+		Short: "Run one hook stage (invoked by the installed git hook script)",
+		Long: `Read .chiton/hooks.yaml, run the analyzer over the workspace, and exit
+non-zero if any finding crosses the stage's block-on threshold.
+
+This is what the installed .git/hooks/pre-commit and pre-push scripts call.
+You usually don't invoke it directly.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			stage := hooks.Stage(stageRaw)
+			validStage := false
+			for _, s := range hooks.Stages() {
+				if s == stage {
+					validStage = true
+					break
+				}
+			}
+			if !validStage {
+				return fmt.Errorf("unknown stage %q â€” supported: pre-commit, pre-push", stageRaw)
+			}
+
+			hooksYaml := filepath.Join(dir, ".chiton", "hooks.yaml")
+			cfg, err := hooks.Load(hooksYaml)
+			if err != nil {
+				return err
+			}
+			stageCfg := cfg.For(stage)
+
+			runCfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			gs, err := openGraphStore(runCfg.GraphPath, false)
+			if err != nil {
+				return fmt.Errorf("open store: %w", err)
+			}
+			defer gs.Close()
+
+			ctx := cmd.Context()
+			if stageCfg.TimeoutSeconds > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, time.Duration(stageCfg.TimeoutSeconds)*time.Second)
+				defer cancel()
+			}
+
+			res, err := hooks.Run(ctx, gs, hooks.RunOptions{
+				Stage:  stage,
+				Config: stageCfg,
+				Root:   dir,
+			})
+			if err != nil {
+				return err
+			}
+			hooks.FormatResult(cmd.OutOrStdout(), res)
+			if res.Blocks() {
+				return fmt.Errorf("chiton %s: blocked by %d finding(s) at or above %q",
+					res.Stage, res.BlockingCount, res.BlockingMin)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&dir, "dir", ".", "Repository root")
+	cmd.Flags().StringVar(&stageRaw, "stage", "pre-commit", "Hook stage to execute")
+	return cmd
+}
+
+func parseStages(raw []string) ([]hooks.Stage, error) {
+	if len(raw) == 0 {
+		return hooks.Stages(), nil
+	}
+	out := make([]hooks.Stage, 0, len(raw))
+	for _, s := range raw {
+		stage := hooks.Stage(strings.TrimSpace(s))
+		valid := false
+		for _, supported := range hooks.Stages() {
+			if supported == stage {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			return nil, fmt.Errorf("unknown stage %q", s)
+		}
+		out = append(out, stage)
+	}
+	return out, nil
+}
+
+func resolveGitHooksDir(repoRoot string) (string, error) {
+	hooksDir := filepath.Join(repoRoot, ".git", "hooks")
+	gitDir := filepath.Join(repoRoot, ".git")
+	info, err := os.Stat(gitDir)
+	if err != nil {
+		return "", fmt.Errorf("no .git in %s â€” not a git repository?", repoRoot)
+	}
+	if !info.IsDir() {
+		// .git can be a file in worktree layouts: "gitdir: <path>"
+		b, err := os.ReadFile(gitDir)
+		if err != nil {
+			return "", fmt.Errorf("read .git file: %w", err)
+		}
+		const prefix = "gitdir:"
+		line := strings.TrimSpace(string(b))
+		if !strings.HasPrefix(line, prefix) {
+			return "", fmt.Errorf("unrecognised .git file format")
+		}
+		actual := strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		if !filepath.IsAbs(actual) {
+			actual = filepath.Join(repoRoot, actual)
+		}
+		hooksDir = filepath.Join(actual, "hooks")
+	}
+	return hooksDir, nil
+}
+
+func printHooksReport(w io.Writer, rep hooks.InstallReport, verb string) {
+	for _, p := range rep.Wrote {
+		fmt.Fprintf(w, "%s: wrote %s\n", verb, p)
+	}
+	for _, p := range rep.Skipped {
+		fmt.Fprintf(w, "%s: skip  %s\n", verb, p)
+	}
+	for _, n := range rep.Notes {
+		fmt.Fprintf(w, "%s: note  %s\n", verb, n)
+	}
 }

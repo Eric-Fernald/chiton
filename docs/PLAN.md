@@ -405,15 +405,15 @@ Single Go binary that:
 ### Phase 1.5 — Deterministic Rule Engine + Install Layer
 
 - ✅ Rule registry + `Match` interface.
-- 80-rule starter pack across 8 categories (see TrueCourse section for breakdown). *(seeded with ~10 rules across security/bugs/quality/architecture)*
+- 80-rule starter pack across 8 categories (see TrueCourse section for breakdown). *(seeded with ~20 rules across all 8 categories; security, bugs, quality, architecture, performance, reliability, database, style)*
 - ✅ Findings as graph nodes, persisted in Kuzu.
 - ✅ `chiton analyze` + `findings list/explain` CLI. *(fix command deferred)*
-- Pre-commit hook + `.chiton/hooks.yaml`.
+- ✅ Pre-commit + pre-push hooks via `chiton hooks install` + `.chiton/hooks.yaml` policy file (block-on threshold, timeout, diff-baseline).
 - ✅ MCP tools: `list_findings`, `explain_finding`. *(apply_fix deferred)*
-- Install layer scaffold (`internal/install/`); ship Claude Code + Copilot VS Code installers first.
-- `SKILL.md` template embedded via `go:embed`.
-- `chiton install` / `uninstall` / `doctor` commands.
-- Encryption at rest (AES-256-GCM, argon2id KDF).
+- ✅ Install layer scaffold (`internal/install/`); Claude Code + Copilot VS Code installers shipped, others stubbed for Phase 3.5.
+- ✅ `SKILL.md` template embedded via `go:embed`.
+- ✅ `chiton install` / `uninstall` / `doctor` commands.
+- ✅ Encryption at rest (AES-256-GCM via BadgerDB, argon2id KDF + keyfile next to the graph; opt-out via `chiton init --encrypt=false`).
 
 ### Phase 2 — Semantic Layer
 
