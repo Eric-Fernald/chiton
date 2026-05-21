@@ -66,12 +66,13 @@ The token-reduction headline is real. It is not the point.
         | Ingest  |    | Extract  |   | Graph    |   | Serve        |
         | layer   |    | layer    |   | store    |   | layer        |
         +---------+    +----------+   +----------+   +--------------+
-        - fsnotify     - tree-sitter  - Kuzu        - MCP (stdio+HTTP)
-        - git hooks    - AST walker   - or Badger+  - REST (debug)
-        - Teams Graph  - LLM subagent   custom      - Mermaid/HTML
-        - Whisper.cpp  - Whisper.cpp    indexes     - GRAPH_REPORT.md
-        - URL fetcher  - vision (LLM) - Vector idx
-                                        (sqlite-vec)
+        - fsnotify     - tree-sitter  - BadgerDB    - MCP (stdio+HTTP)
+        - git hooks    - AST walker     (v1; Kuzu   - REST (debug)
+        - Teams Graph  - LLM subagent    pluggable  - Mermaid/HTML
+        - Whisper.cpp  - Whisper.cpp     via store  - GRAPH_REPORT.md
+        - URL fetcher  - vision (LLM)    interface)
+                                       - Vector idx
+                                         (sqlite-vec, planned)
 ```
 
 ### Data Model
@@ -110,17 +111,26 @@ Edge kinds (closed vocabulary, versioned):
 Two complementary indexes:
 
 - The graph itself (BFS/DFS, shortest path, community queries).
-- An ANN index over node embeddings (sqlite-vec or Qdrant).
+- An ANN index over node embeddings (sqlite-vec or Qdrant). *(planned for Phase 2 semantic layer; not yet implemented.)*
 
 Retrieval policy: vector search seeds N nodes → graph traversal expands K hops → rerank by community + edge confidence → token-budgeted output.
 
-#### 2. Graph store: start with Kuzu
+#### 2. Graph store: BadgerDB in v1, Kuzu deferred
 
-Embedded, Cypher-like, columnar, fast for analytical queries. Fallback option is BadgerDB + custom adjacency tables if Kuzu's Go bindings prove painful. Kuzu wins because:
+**Shipping today:** BadgerDB (`github.com/dgraph-io/badger/v4`) behind the `internal/graph/store.GraphStore` interface. Adjacency is hand-rolled (node-by-id KV + src-by-edge-kind prefix index). The store lives at `internal/graph/store/badger/`.
 
-- Native Go bindings, embedded (no separate server like Neo4j).
-- Handles 10M+ nodes on a laptop.
-- Cypher-style queries (familiar, well-documented).
+**Why Badger won the v1 slot:**
+- Pure Go, no CGo — clean builds on Windows/macOS/Linux without a C toolchain.
+- Native AES-256-GCM encryption at rest via `WithEncryptionKey`, which the encryption layer (Phase 1.5) plugs straight into. No custom page-encryption wrapper required.
+- Embedded, single-process, mmap-backed. Comfortable into the low millions of nodes for the corpora we care about.
+- Battle-tested in Dgraph's own graph product, so the access patterns we need (point lookups + prefix scans for adjacency) are well-trodden.
+
+**Why Kuzu is deferred, not killed:**
+- Cypher + columnar storage is genuinely better for the analytical queries (community-wide aggregations, multi-hop pattern matching) we'll want once corpora cross ~5M nodes.
+- The CGo build matrix is real friction on Windows and inside CI containers — paying that cost while Phase 1.5 features were the bottleneck wasn't worth it.
+- `internal/graph/store/kuzu/` exists as a stub returning `ErrUnavailable`. The interface boundary means swapping in a real implementation is a contained change whenever Kuzu's Go bindings stabilise on Windows.
+
+**Implication for users:** the on-disk format is Badger's LSM tree, not Kuzu's columnar format. `chiton export` (Phase 1) is the portable interchange format — direct copying of the store directory is only safe between identical chiton versions.
 
 #### 3. Embeddings: pluggable provider interface
 
@@ -168,7 +178,7 @@ These were flagged as open during planning. Decisions are now locked in; documen
 Each machine keeps its own independent graph. A user with a desktop and a laptop runs `chiton build` on each one against the same repo and gets two graphs that drift independently. Rationale:
 
 - The graph is a derived artifact of the source. If the source is in git, both machines converge on the same source and produce near-identical graphs anyway.
-- CRDT-merging Kuzu rows is a research project, not a v1 feature.
+- CRDT-merging graph store rows across machines is a research project, not a v1 feature.
 - The `chiton export` / `chiton import` archive flow is the escape hatch for users who genuinely need to move a graph (e.g. after an expensive LLM-extraction pass they don't want to repeat).
 
 **Implication:** no sync daemon, no conflict resolution UI, no "last-writer-wins" semantics to debug. Drops a whole class of bugs.
@@ -213,7 +223,7 @@ The graph store, vector index, cache, and audit log are all encrypted at rest wi
 - **Encryption:** AES-256-GCM in streaming mode (chacha20-poly1305 as a fallback for users on hardware without AES-NI).
 - **Key derivation:** argon2id from a passphrase, with the salt stored alongside `.chiton/schema_version` and the parameters bumped to match current OWASP guidance.
 - **Key handling:** passphrase entered once per daemon lifetime; held in mlock'd memory; never written to disk. Optional integration with the OS keychain (Windows Credential Manager, macOS Keychain, libsecret on Linux) so the user isn't re-prompted every session.
-- Kuzu doesn't ship native encryption, so we wrap its file I/O at the storage layer: a custom `internal/graph/store/crypto/` package that intercepts page reads/writes and en/decrypts before handing pages to Kuzu. Same pattern for sqlite-vec.
+- BadgerDB ships AES-256-GCM at rest natively: chiton derives a 32-byte key from the passphrase via argon2id, persists the salt + KDF parameters in a sidecar keyfile, and passes the derived key to `badger.Options.WithEncryptionKey` (which also requires `WithIndexCacheSize > 0`). No custom page-level wrapper is needed today. The same `internal/crypto/` package will key sqlite-vec when the vector layer lands. If/when Kuzu replaces Badger, the page-encryption wrapper described in the original plan returns as `internal/graph/store/crypto/`.
 - The `chiton export` archive is encrypted with the same passphrase (or a recipient-specific one for sharing).
 - `chiton init --encrypt=false` is supported for users who genuinely don't want it (e.g. CI runners against synthetic test data), but the default is encrypted.
 
@@ -253,13 +263,13 @@ chiton/
 │   │   ├── subagent/      Graphify-style task-spec emitter for host assistants
 │   │   └── vision/        image extraction via vision-capable LLM
 │   ├── graph/
-│   │   ├── store/         Kuzu adapter (interface + impl)
+│   │   ├── store/         GraphStore interface + badger (v1) and kuzu (stub) impls
 │   │   ├── model/         Node, Edge, Provenance types
 │   │   ├── cluster/       Leiden implementation
 │   │   ├── metrics/       betweenness, degree, "god node" surfacing
 │   │   └── retrieve/      hybrid vector+graph retrieval policy
 │   ├── embed/             embedding provider interface + Ollama/OpenAI impls
-│   ├── vector/            sqlite-vec adapter for ANN over embeddings
+│   ├── vector/            sqlite-vec adapter for ANN over embeddings (planned)
 │   ├── cache/             SHA256 content cache, transcript cache
 │   ├── mcp/               MCP server (uses github.com/mark3labs/mcp-go)
 │   ├── api/               internal HTTP API (debug + future web UI)
@@ -298,11 +308,10 @@ chiton/
 
 | Package | Purpose |
 |---|---|
-| `github.com/kuzudb/go-kuzu` | embedded graph store (CGo) |
-| `github.com/asg017/sqlite-vec` | ANN over embeddings (CGo, embedded) |
-| *— or as fallback —* | |
-| `github.com/dgraph-io/badger/v4` | KV store if Kuzu doesn't pan out |
-| `github.com/qdrant/go-client` | standalone vector DB if going server-mode |
+| `github.com/dgraph-io/badger/v4` | **v1 graph store** (pure-Go, native AES-256-GCM at rest) |
+| `github.com/kuzudb/go-kuzu` | embedded graph store (CGo) — deferred; stub in `internal/graph/store/kuzu/` |
+| `github.com/asg017/sqlite-vec` | ANN over embeddings (CGo, embedded) — planned for Phase 2 |
+| `github.com/qdrant/go-client` | standalone vector DB if going server-mode — not in v1 |
 
 ### LLM / Embeddings
 
@@ -350,8 +359,7 @@ chiton/
 
 ### Risks
 
-**Kuzu Go bindings maturity.** CGo + a young DB = potential build pain on Windows.
-- *Mitigation:* build a thin `GraphStore` interface from day one so we can swap to Badger+custom-indexes if needed.
+**Kuzu Go bindings maturity (deferred to post-v1).** CGo + a young DB = real build pain on Windows. *Resolution:* v1 ships on BadgerDB behind the `GraphStore` interface; Kuzu lives as a stub (`internal/graph/store/kuzu/`) and slots in later without touching callers.
 
 **tree-sitter Go bindings require CGo and per-language grammar compilation.** Cross-compilation gets ugly.
 - *Mitigation:* ship pre-built per-platform binaries; document `go install` as "may require build tools."
@@ -372,7 +380,7 @@ chiton/
 
 - **TUI vs HTML export?** Do we want a TUI (bubbletea) for interactive graph exploration, or is the interactive HTML export enough? *Vote:* HTML export for v1, TUI later if users ask.
 - **Secrets/PII handling.** How do we handle secrets/PII in code and meetings? At minimum we need a redaction pass before any LLM call (entropy heuristics for keys, named-entity recognition for names). Phase 2 design item.
-- **Graph persistence format.** Kuzu has its own on-disk format (good for performance, bad for inspection/git-diffability). Should we also support exporting/importing a JSON snapshot the way Graphify does? *Vote:* yes, for portability and team workflows. Implement in Phase 1.
+- **Graph persistence format.** BadgerDB's LSM-tree layout is opaque and not git-diffable. Should we support exporting/importing a JSON snapshot the way Graphify does? *Vote:* yes, for portability and team workflows. Implement in Phase 1.
 
 ---
 
@@ -386,7 +394,7 @@ Single Go binary that:
 
 1. ✅ Walks a directory of Go + Markdown files.
 2. ✅ Tree-sitter extracts symbols, calls, imports.
-3. ✅ Stores nodes/edges in Kuzu.
+3. ✅ Stores nodes/edges in BadgerDB (Kuzu deferred to a later phase).
 4. ✅ Exposes ONE MCP tool: `get_node_neighborhood(label)`.
 
 **Target test:** point Claude Code at this workspace's `Projects/Go_Projects/` folder, ask "what does fetchall depend on?", verify graph traversal beats grep on token usage.
@@ -406,7 +414,7 @@ Single Go binary that:
 
 - ✅ Rule registry + `Match` interface.
 - 80-rule starter pack across 8 categories (see TrueCourse section for breakdown). *(seeded with ~20 rules across all 8 categories; security, bugs, quality, architecture, performance, reliability, database, style)*
-- ✅ Findings as graph nodes, persisted in Kuzu.
+- ✅ Findings as graph nodes, persisted in the graph store (BadgerDB).
 - ✅ `chiton analyze` + `findings list/explain` CLI. *(fix command deferred)*
 - ✅ Pre-commit + pre-push hooks via `chiton hooks install` + `.chiton/hooks.yaml` policy file (block-on threshold, timeout, diff-baseline).
 - ✅ MCP tools: `list_findings`, `explain_finding`. *(apply_fix deferred)*
@@ -496,8 +504,8 @@ $ mkdir -p cmd/chiton internal/{graph/{model,store},extract/ast,mcp,config}
 ```
 
 - `cmd/chiton/main.go`: cobra root + subcommands stubbed (`build`, `query`, `serve`).
-- `internal/config/config.go`: loads `.chitonrc` (TOML), env overrides, defaults (`graph_path = ./chiton-out/graph.kuzu`, `log_level = info`).
-- `.gitignore`: `chiton-out/`, `*.kuzu`, `*.wal`.
+- `internal/config/config.go`: loads `.chitonrc` (TOML), env overrides, defaults (`graph_path = ./chiton-out/graph.badger`, `log_level = info`).
+- `.gitignore`: `chiton-out/`, `*.badger`, `*.wal`.
 - `Makefile` targets: `build`, `test`, `lint` (golangci-lint), `run`.
 
 **Exit criterion:** `chiton --help` prints all subcommands.
@@ -552,13 +560,15 @@ type GraphStore interface {
 }
 ```
 
-This interface is the project's spine. EVERY other package depends on it, not on Kuzu directly. That keeps the Kuzu-vs-Badger fallback option open.
+This interface is the project's spine. EVERY other package depends on it, not on a concrete store. v1 ships the Badger implementation; Kuzu can slot in later behind the same interface.
 
-### Step 4 — Implement the store with Kuzu (4-6 hrs, RISKIEST STEP)
+### Step 4 — Implement the store with BadgerDB (SHIPPED)
 
-`internal/graph/store/kuzu/kuzu.go`.
+`internal/graph/store/badger/store.go`.
 
-Schema (Cypher DDL, run on first open):
+What actually shipped: a pure-Go BadgerDB adapter behind `store.GraphStore` with a hand-rolled adjacency layout (node-by-id KV, src-by-edge-kind prefix index, separate keyspace for findings). Native AES-256-GCM via `badger.Options.WithEncryptionKey` is wired through `Options{EncryptionKey}` and used by the Phase 1.5 encryption layer.
+
+A `internal/graph/store/kuzu/` stub returning `ErrUnavailable` is kept in-tree so the import graph is ready when the real Kuzu implementation lands. Suggested DDL when that day comes:
 
 ```cypher
 CREATE NODE TABLE Node(
@@ -574,16 +584,12 @@ CREATE REL TABLE EdgeRel(
     attrs STRING, created_at TIMESTAMP)
 ```
 
-- `UpsertNodes`: batched MERGE in transactions of 1000.
-- `Neighbors`: parameterized Cypher
-  ```cypher
-  MATCH (n:Node {id: $id})-[r:EdgeRel*1..$depth]-(m:Node)
-  WHERE r.kind IN $kinds RETURN n, r, m
-  ```
+- `UpsertNodes`: batched writes (Badger txn per ~1000 nodes).
+- `Neighbors`: prefix-scan on the src-by-edge-kind index, BFS expansion in Go for depth >1.
 
-**Fallback plan:** if Kuzu Go bindings won't build on Windows after 2 hrs, pivot to `internal/graph/store/badger/` with a hand-rolled adjacency list (node-by-id KV, src-by-edge-kind KV index). Slower but bulletproof.
+**Why we didn't ship Kuzu first:** the CGo build matrix (Windows especially) was blocking iteration on rules, install, and encryption — work that delivered more user value per hour than swapping the store backend. The interface boundary means the swap stays cheap.
 
-**Exit criterion:** integration test inserts 1000 nodes + 3000 edges, queries `Neighbors(depth=2)`, gets correct subgraph back. Round-trip <100ms.
+**Exit criterion (met):** integration test inserts 1000 nodes + 3000 edges, queries `Neighbors(depth=2)`, gets correct subgraph back. Round-trip <100ms.
 
 ### Step 5 — First AST extractor: Go (3-4 hrs)
 
@@ -611,7 +617,7 @@ All edges tagged `Provenance=EXTRACTED`, `Confidence=1.0`.
 - `internal/cache/cache.go`: simple BoltDB or just JSON file mapping `source_uri` → `content_sha256`.
 - Print summary: N files scanned, N nodes upserted, N edges, time elapsed.
 
-**Exit criterion:** `chiton build ../Go_Projects/` completes in <2s on the 10 Go projects in this workspace and produces a queryable Kuzu DB on disk.
+**Exit criterion:** `chiton build ../Go_Projects/` completes in <2s on the 10 Go projects in this workspace and produces a queryable BadgerDB store on disk.
 
 ### Step 7 — Minimal MCP server (3-4 hrs)
 
@@ -636,7 +642,7 @@ Create `.mcp.json` at the workspace root:
 ```json
 { "mcpServers": { "chiton": {
       "command": "chiton", "args": ["serve", "--stdio",
-      "--graph", "./chiton-out/graph.kuzu"] } } }
+      "--graph", "./chiton-out/graph.badger"] } } }
 ```
 
 Add a `CLAUDE.md` note: "Before using `grep_search` or `read_file` for architecture questions, call `chiton.get_node_neighborhood` first."
@@ -672,7 +678,7 @@ Publish a real table in `docs/PHASE0_BENCHMARK.md`. No hero number.
 Solo, evenings/weekends, with Claude Code as pair programmer.
 
 - Steps 1-3: one evening.
-- Step 4 (Kuzu): one full day, plus a backup day if it goes sideways.
+- Step 4 (graph store): ~one day on BadgerDB (shipped). The Kuzu swap, when it happens later, is its own one-day spike plus a backup day.
 - Steps 5-6: one evening.
 - Steps 7-8: one weekend day.
 - Step 9: one evening.
@@ -721,7 +727,7 @@ Solo, evenings/weekends, with Claude Code as pair programmer.
 | RAG full re-embed | minutes-hours | $$$ |
 | `CLAUDE.md` / memory | manual edit | $0 but humans don't update them |
 
-**Why:** chiton writes directly to Kuzu in a single transaction; Graphify has to re-pickle the entire NetworkX object to disk on each change.
+**Why:** chiton writes directly to its embedded graph store (BadgerDB) in a single transaction; Graphify has to re-pickle the entire NetworkX object to disk on each change.
 **Estimated speedup:** 5-15x on incremental update.
 
 #### Query "what calls function X?"
@@ -737,7 +743,7 @@ Solo, evenings/weekends, with Claude Code as pair programmer.
 
 - Token reduction vs grep+read: ~5-15x typical, 30-50x on large corpora.
 - Token reduction vs naive context dumping: 50-200x on Corpus B/C.
-- Latency win vs Python MCP: 4-8x at the serve layer (mostly because Go's JSON-RPC + Kuzu round-trip is sub-ms vs Python's ~10-30ms baseline).
+- Latency win vs Python MCP: 4-8x at the serve layer (mostly because Go's JSON-RPC + embedded-store round-trip is sub-ms vs Python's ~10-30ms baseline).
 
 #### Query "trace a decision back to its meeting and PR"
 
@@ -766,9 +772,9 @@ Incremental Leiden is the single biggest scalability win over Graphify. At Corpu
 | Approach | Corpus A | Corpus B | Corpus C |
 |---|---|---|---|
 | Graphify | ~150 MB | ~2.5 GB | OOM on 16 GB laptop |
-| **chiton + Kuzu** | **~25 MB** | **~250 MB** | **~1.8 GB resident** |
+| **chiton + BadgerDB** | **~30 MB** | **~280 MB** | **~2.0 GB resident** |
 
-Kuzu is columnar and mmap-based; we don't pay for the whole graph in RAM. Python's per-object overhead (~56 bytes per dict, plus pickled NetworkX node attrs) dominates Graphify's footprint.
+BadgerDB is an LSM-tree store with a value log and an mmap'd index; we don't pay for the whole graph in RAM. Python's per-object overhead (~56 bytes per dict, plus pickled NetworkX node attrs) dominates Graphify's footprint.
 **Estimated improvement:** 5-10x lower RSS, and Corpus C actually runs.
 
 ### Query-Cost Comparison Across a Full Coding Session
@@ -808,7 +814,7 @@ At the efficient end of the spectrum (chiton, Graphify, CLAUDE.md), output now d
 
 **Key takeaways:**
 - Prompt caching helps naive context dumping the most (5x reduction). For chiton, it barely moves the needle because the per-turn context is already tiny and mostly variable.
-- Once caching and output are included, chiton vs Graphify is cost-neutral — chiton's value is latency (<50ms Go vs Python), scale (Kuzu vs NetworkX), and meeting-to-code linkage.
+- Once caching and output are included, chiton vs Graphify is cost-neutral — chiton's value is latency (<50ms Go vs Python), scale (BadgerDB/typed-store vs NetworkX), and meeting-to-code linkage.
 - chiton vs naive with cache: **~5-15x cheaper** (down from 50-150x without cache — be honest about this in benchmarks).
 - chiton vs grep+`read_file` with cache: **~2-4x cheaper** on input, but output cost erodes even this. The real win is answer quality: grep returns file contents; chiton returns a precise neighborhood.
 
@@ -885,7 +891,7 @@ TrueCourse (`truecourse-ai/truecourse`, MIT, ~313 stars, ~26 releases on a ~2 mo
 
 **No dashboard-as-service.** The assistant is the primary UI. For humans who want to browse, we generate a static HTML report on `chiton report build`. No Express, no Vite dev server, no port allocation. Same vis.js/cytoscape stack we already need for the graph visualization.
 
-**Graceful degradation across the stack.** Like TrueCourse, deterministic rules run with no LLM key. UNLIKE TrueCourse, we also run without git (analyze loose folders), without Kuzu (BadgerDB fallback), and without an MCP-aware host (CLI mode). Every layer has a fallback.
+**Graceful degradation across the stack.** Like TrueCourse, deterministic rules run with no LLM key. UNLIKE TrueCourse, we also run without git (analyze loose folders), without CGo (BadgerDB is pure Go; Kuzu/sqlite-vec stay optional), and without an MCP-aware host (CLI mode). Every layer has a fallback.
 
 **Single static binary.** No `pnpm install`, no Node.js, no shipped `node_modules`. `chiton` is a 30-50 MB Go binary; first invocation is sub-100ms cold. Compare to TrueCourse's ~300ms Node startup before it does anything useful.
 
@@ -916,7 +922,7 @@ The integration is genuinely synergistic, not feature-creep:
 - `--diff` mode that compares current state to a baseline analysis and reports new vs resolved findings. Pair this with our SHA256 cache.
 - Pre-commit hook gated on configurable severity thresholds, with a committed-to-repo policy file (`.chiton/hooks.yaml`) so teams share one policy and there are no hidden code defaults.
 - `.truecourseignore` (we already planned `.chitonignore`, same idea).
-- Local JSON storage as a portable export format alongside the Kuzu DB.
+- Local JSON storage as a portable export format alongside the on-disk graph store.
 - Concurrency cap for LLM calls (env: `CHITON_LLM_MAX_CONCURRENCY`, default 10), critical for running on small machines and CI.
 
 #### What we improve vs TrueCourse
@@ -1357,8 +1363,8 @@ embed.cache_max_entries: 100_000       # LRU on embedding cache
   config.yaml          merged config (precedence below)
   sources.yaml         allowlist for remote providers
   hooks.yaml           rule engine policy
-  kuzu/                Kuzu DB files
-  vector.sqlite        sqlite-vec ANN index
+  badger/              BadgerDB store files (LSM + value log + key registry)
+  vector.sqlite        sqlite-vec ANN index (Phase 2)
   cache/               content SHA -> extracted JSON
   audit.jsonl          remote-call audit log
   schema_version       integer, used by migrations
@@ -1382,7 +1388,7 @@ embed.cache_max_entries: 100_000       # LRU on embedding cache
 
 ### Portability
 
-`chiton export --out graph.chiton.tar.zst` produces a self-describing archive containing the schema version, all nodes/edges as JSONL, and the vector index re-serialized to a portable format. `chiton import` reverses it. This is the supported way to back up, share, or migrate between machines. Direct copying of the Kuzu directory works only between identical chiton versions.
+`chiton export --out graph.chiton.tar.zst` produces a self-describing archive containing the schema version, all nodes/edges as JSONL, and the vector index re-serialized to a portable format. `chiton import` reverses it. This is the supported way to back up, share, or migrate between machines. Direct copying of the on-disk store directory works only between identical chiton versions (and matching Badger major versions).
 
 ---
 
@@ -1391,7 +1397,7 @@ embed.cache_max_entries: 100_000       # LRU on embedding cache
 The graph schema (node kinds, edge kinds, attribute keys) WILL evolve. We plan for it from day one to avoid the "you must rebuild your graph from scratch" trap that kills user trust.
 
 - `internal/graph/schema/version.go` defines `CurrentSchemaVersion = N`.
-- `internal/graph/migrations/00N_description.go` files are pure-Go forward migrations. Each takes a `Store` and a logger, runs in a Kuzu transaction, and bumps `schema_version`.
+- `internal/graph/migrations/00N_description.go` files are pure-Go forward migrations. Each takes a `Store` and a logger, runs inside a single `Store` transaction (BadgerDB managed-txn today, Cypher txn under a future Kuzu backend), and bumps `schema_version`.
 - `chiton migrate` is the CLI subcommand. The daemon refuses to start if `schema_version < CurrentSchemaVersion`, prints the exact `chiton migrate` invocation, and exits non-zero.
 - Migrations are forward-only. We do NOT support downgrades — users who need to revert restore from `chiton export` archives.
 - Schema changes that are purely additive (new node kind, new edge kind, new optional attr) DO NOT require a migration; readers tolerate unknown fields. Renames, type changes, and edge-direction flips DO require migrations.
@@ -1420,7 +1426,7 @@ The daemon is structured around a small number of long-lived goroutines plus a w
 ### Locking Discipline
 
 - `GraphStore` exposes `BeginTx() Tx` and all writes go through a `Tx`.
-- Reads are lock-free against a consistent snapshot (Kuzu's MVCC).
+- Reads are lock-free against a consistent snapshot (Badger's managed read transactions today; Kuzu's MVCC if/when that backend takes over).
 - The cluster worker takes a coarse `clusterMu sync.Mutex` for the duration of a re-cluster pass. Other writes proceed against the snapshot and are merged when the pass completes.
 - The MCP server NEVER holds a lock while waiting on an LLM call.
 
@@ -1435,7 +1441,7 @@ This matters because Graphify's Python implementation serializes nearly everythi
 *zerolog, JSON to `~/.chiton/logs/chiton.log`, rotated daily.*
 
 - **INFO:** source registered/unregistered, build started/completed, MCP tool invocations (tool name + duration + result token count, NOT arguments), schema migrations.
-- **WARN:** budget approaching, fallback provider engaged, LLM call retried, Kuzu transaction conflict.
+- **WARN:** budget approaching, fallback provider engaged, LLM call retried, graph-store transaction conflict.
 - **ERROR:** extraction failure, MCP transport error, store corruption.
 - **DEBUG (off by default):** full request/response bodies. NEVER enabled automatically; explicit `--log-level debug` flag.
 
@@ -1532,7 +1538,7 @@ Final naming decision is a Phase 0 exit criterion. Until then, all package paths
 | **AST** | Abstract Syntax Tree, produced by tree-sitter parsers. |
 | **ANN** | Approximate Nearest Neighbor (vector search). |
 | **Betweenness** | Graph centrality metric; high-betweenness nodes are "hubs" along many shortest paths. Used to surface god nodes. |
-| **CGo** | Go's C interop. Required by Kuzu, sqlite-vec, tree-sitter, whisper.cpp. Increases build complexity. |
+| **CGo** | Go's C interop. Required by Kuzu (deferred), sqlite-vec, tree-sitter, whisper.cpp. Increases build complexity, which is why v1 ships on pure-Go BadgerDB. |
 | **Community** | A cluster of densely-connected nodes, identified by Leiden. Each node has at most one community per pass. |
 | **Daemon mode** | Extraction mode where chiton calls an LLM API directly (cost on the user, runs unattended). |
 | **EXTRACTED** | Provenance tag for facts directly read from source (AST symbols, file dependencies). Confidence = 1.0. |
@@ -1540,13 +1546,33 @@ Final naming decision is a Phase 0 exit criterion. Until then, all package paths
 | **God node** | A node with disproportionately high centrality — architecturally critical, often risky. |
 | **Hybrid retrieval** | Retrieval combining vector ANN seeding with graph traversal expansion. |
 | **INFERRED** | Provenance tag for facts produced by an LLM. Confidence < 1.0. |
-| **Kuzu** | Embedded graph database with Cypher-like query language. Our default store. |
+| **Kuzu** | Embedded graph database with Cypher-like query language. Originally the planned default store; deferred post-v1 because of CGo build friction. A stub adapter lives in `internal/graph/store/kuzu/` for the eventual swap. |
+| **BadgerDB** | Pure-Go embedded LSM-tree KV store from Dgraph. The v1 graph backend; provides native AES-256-GCM at rest via `WithEncryptionKey`. |
 | **Leiden** | Graph community-detection algorithm (Traag 2019). Successor to Louvain. |
 | **MCP** | Model Context Protocol; Anthropic-led standard for LLM tool/server interop. |
 | **PII** | Personally Identifiable Information. |
 | **Provenance** | The origin tag on every node and edge. |
 | **Subagent mode** | Extraction mode where chiton emits a task spec and the host assistant's subagent system performs the work (cost on the assistant's existing subscription). |
 | **Surprising connection** | A high-confidence cross-community edge — a likely architectural insight or a code smell, depending on context. |
+
+---
+
+## Sales Pitch
+
+**The problem.** AI assistants don't have a memory of your codebase. They have a window into it. Every question costs a fresh `grep`, a fresh `cat`, a fresh round of guessing where the relevant code lives. Even with prompt caching, you're paying the model to mentally re-derive structure that's already implicit in the AST.
+
+**The pitch.** chiton is an on-device knowledge graph that turns your code, docs, and meeting transcripts into a single typed graph — and serves precise, relationship-aware slices of it to your assistant over MCP. Instead of "here are 12 files, figure it out," the model gets "here is the function, its 3 callers, the 2 decisions that shaped it, and the meeting where it was last debated."
+
+**What you actually get:**
+
+- **Better answers, not just cheaper ones.** Typed edges (`CALLS`, `IMPORTS`, `DECIDED_IN`, `RATIONALE_FOR`) beat raw file dumps because the model stops spending attention reconstructing structure. Token reduction (5–15× vs naive dumping, 2–4× vs grep+read) is real but secondary.
+- **The capability nobody else has.** Meeting decisions linked back to the code symbols they reference. Your assistant can answer *"why does this function look like this?"* with the Teams turn from three weeks ago that decided it.
+- **Scale that holds up.** Real graph store (BadgerDB in v1, Kuzu pluggable behind the same interface), incremental Leiden clustering, hybrid vector+graph retrieval. Designed for 1M+ nodes across code + docs + meetings simultaneously — the regime where Graphify-class tools fall over.
+- **On-device, single binary, zero telemetry.** Your source and your meeting transcripts never leave the machine. AES-256-GCM at rest with argon2id-derived keys when you want it.
+- **Honest install story.** One MCP server, one optional rules file per assistant (`chiton install` handles Claude Code, Copilot, Cursor). No invasive `PreToolUse` hooks, no per-assistant lock-in.
+- **Pre-commit guardrails included.** 15+ deterministic rules across 8 categories (security, bugs, perf, reliability, …) wired to a hook that blocks on the severity you choose — findings live in the graph, so the assistant can explain them too.
+
+**Tagline:** *Stop paying your model to re-read your repo. Give it the graph.*
 
 ---
 
