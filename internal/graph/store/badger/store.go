@@ -4,9 +4,11 @@ package badger
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"time"
 
@@ -23,12 +25,19 @@ const (
 	pfxEdge = "e:" // e:{edgeID}            → json(Edge)
 	pfxSrc  = "s:" // s:{src}:{kind}:{dst}  → edgeID   (forward adjacency)
 	pfxDst  = "d:" // d:{dst}:{kind}:{src}  → edgeID   (reverse adjacency)
+	pfxEmb  = "v:" // v:{nodeID}            → packed little-endian []float32
 )
 
 // Store is a BadgerDB-backed GraphStore.
 type Store struct {
 	db *badgerdb.DB
 }
+
+// Compile-time checks that Store satisfies the store interfaces.
+var (
+	_ store.GraphStore     = (*Store)(nil)
+	_ store.EmbeddingStore = (*Store)(nil)
+)
 
 // Options configures store opens. The zero value is a plaintext store with
 // default Badger settings — historic callers can keep using Open/OpenReadOnly.
@@ -87,6 +96,7 @@ func (s *Store) Close() error { return s.db.Close() }
 
 func nodeKey(id string) []byte { return []byte(pfxNode + id) }
 func edgeKey(id string) []byte { return []byte(pfxEdge + id) }
+func embKey(id string) []byte  { return []byte(pfxEmb + id) }
 
 func srcKey(e *model.Edge) []byte {
 	return []byte(pfxSrc + e.Src + ":" + string(e.Kind) + ":" + e.Dst)
@@ -418,6 +428,10 @@ func (s *Store) DeleteBySourceURI(_ context.Context, uri string) (int, error) {
 			wb.Cancel()
 			return 0, err
 		}
+		if err := wb.Delete(embKey(n.ID)); err != nil {
+			wb.Cancel()
+			return 0, err
+		}
 		if err := s.db.View(func(txn *badgerdb.Txn) error {
 			adjEdges, err := adjacentEdges(txn, n.ID)
 			if err != nil {
@@ -506,6 +520,69 @@ func (s *Store) AllEdges(_ context.Context) ([]model.Edge, error) {
 	return edges, err
 }
 
+// UpsertEmbeddings inserts or replaces node embeddings in the v: keyspace.
+// Vectors are stored packed (little-endian float32) out of the node JSON so
+// graph traversals stay lean. Implements store.EmbeddingStore.
+func (s *Store) UpsertEmbeddings(_ context.Context, embs []store.Embedding) error {
+	wb := s.db.NewWriteBatch()
+	for _, e := range embs {
+		if e.NodeID == "" {
+			continue
+		}
+		if err := wb.Set(embKey(e.NodeID), encodeVec(e.Vec)); err != nil {
+			wb.Cancel()
+			return err
+		}
+	}
+	return wb.Flush()
+}
+
+// AllEmbeddings returns every stored embedding by scanning the v: keyspace.
+// Implements store.EmbeddingStore.
+func (s *Store) AllEmbeddings(_ context.Context) ([]store.Embedding, error) {
+	var embs []store.Embedding
+	err := s.db.View(func(txn *badgerdb.Txn) error {
+		pfx := []byte(pfxEmb)
+		it := txn.NewIterator(badgerdb.DefaultIteratorOptions)
+		defer it.Close()
+		for it.Seek(pfx); it.ValidForPrefix(pfx); it.Next() {
+			item := it.Item()
+			id := string(item.Key()[len(pfxEmb):])
+			var vec []float32
+			if err := item.Value(func(v []byte) error {
+				vec = decodeVec(v)
+				return nil
+			}); err != nil {
+				return err
+			}
+			embs = append(embs, store.Embedding{NodeID: id, Vec: vec})
+		}
+		return nil
+	})
+	return embs, err
+}
+
+// encodeVec packs a float32 slice as little-endian bytes (4 bytes per value).
+func encodeVec(vec []float32) []byte {
+	b := make([]byte, 4*len(vec))
+	for i, f := range vec {
+		binary.LittleEndian.PutUint32(b[i*4:], math.Float32bits(f))
+	}
+	return b
+}
+
+// decodeVec reverses encodeVec. A length not divisible by 4 yields nil.
+func decodeVec(b []byte) []float32 {
+	if len(b)%4 != 0 {
+		return nil
+	}
+	vec := make([]float32, len(b)/4)
+	for i := range vec {
+		vec[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[i*4:]))
+	}
+	return vec
+}
+
 // GodNodes returns the top-limit nodes ranked by attrs["betweenness"] descending.
 // If communityID is non-nil, only nodes whose CommunityID matches are included.
 func (s *Store) GodNodes(_ context.Context, communityID *int, limit int) ([]model.Node, error) {
@@ -580,6 +657,21 @@ func (s *Store) Snapshot(_ context.Context, w io.Writer) error {
 		it := txn.NewIterator(badgerdb.DefaultIteratorOptions)
 		defer it.Close()
 
+		// Load embeddings first so they can be attached to their nodes,
+		// keeping the export self-contained and portable.
+		embByID := map[string][]float32{}
+		ep := []byte(pfxEmb)
+		for it.Seek(ep); it.ValidForPrefix(ep); it.Next() {
+			item := it.Item()
+			id := string(item.Key()[len(pfxEmb):])
+			if err := item.Value(func(v []byte) error {
+				embByID[id] = decodeVec(v)
+				return nil
+			}); err != nil {
+				return err
+			}
+		}
+
 		pfx := []byte(pfxNode)
 		for it.Seek(pfx); it.ValidForPrefix(pfx); it.Next() {
 			var n model.Node
@@ -587,6 +679,9 @@ func (s *Store) Snapshot(_ context.Context, w io.Writer) error {
 				return json.Unmarshal(v, &n)
 			}); err != nil {
 				return err
+			}
+			if vec, ok := embByID[n.ID]; ok {
+				n.Embedding = vec
 			}
 			out.Nodes = append(out.Nodes, n)
 		}

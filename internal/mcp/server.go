@@ -11,15 +11,27 @@ import (
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	mcpsdk "github.com/mark3labs/mcp-go/server"
 
+	"github.com/Eric-Fernald/chiton/internal/extract/subagent"
 	"github.com/Eric-Fernald/chiton/internal/graph/cluster"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
+	"github.com/Eric-Fernald/chiton/internal/graph/retrieve"
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
 )
 
+// Deps carries the optional semantic-layer services the server wires into its
+// Phase 2 tools. Both are nilable: a graph without embeddings has no Retriever
+// (semantic_search degrades gracefully), and either may be absent in tests.
+type Deps struct {
+	Retriever *retrieve.Engine
+	Extractor *subagent.Service
+}
+
 // New creates an MCPServer exposing tools against the given graph store.
 // overlay may be nil if no cluster pass has been run yet; god_nodes will
-// return a helpful message in that case.
-func New(gs store.GraphStore, overlay *cluster.Results) *mcpsdk.MCPServer {
+// return a helpful message in that case. deps carries the semantic-layer
+// services (see Deps); the corresponding tools report a helpful message when
+// their dependency is nil.
+func New(gs store.GraphStore, overlay *cluster.Results, deps Deps) *mcpsdk.MCPServer {
 	s := mcpsdk.NewMCPServer("chiton", "0.1.0")
 	s.AddTool(getNodeTool(), getNodeHandler(gs))
 	s.AddTool(neighborhoodTool(), neighborhoodHandler(gs))
@@ -29,6 +41,9 @@ func New(gs store.GraphStore, overlay *cluster.Results) *mcpsdk.MCPServer {
 	s.AddTool(graphSummaryTool(), graphSummaryHandler(gs, overlay))
 	s.AddTool(listFindingsTool(), listFindingsHandler(gs))
 	s.AddTool(explainFindingTool(), explainFindingHandler(gs))
+	s.AddTool(semanticSearchTool(), semanticSearchHandler(deps.Retriever))
+	s.AddTool(pendingExtractionsTool(), pendingExtractionsHandler(deps.Extractor))
+	s.AddTool(submitExtractionTool(), submitExtractionHandler(deps.Extractor))
 	return s
 }
 

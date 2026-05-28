@@ -30,6 +30,15 @@ func ForFile(path string) Extractor {
 		return &RustExtractor{}
 	case strings.HasSuffix(lower, ".java"):
 		return &JavaExtractor{}
+	case strings.HasSuffix(lower, ".md"),
+		strings.HasSuffix(lower, ".markdown"):
+		return &MarkdownExtractor{}
+	case strings.HasSuffix(lower, ".png"),
+		strings.HasSuffix(lower, ".jpg"),
+		strings.HasSuffix(lower, ".jpeg"),
+		strings.HasSuffix(lower, ".gif"),
+		strings.HasSuffix(lower, ".webp"):
+		return &ImageExtractor{}
 	}
 	return nil
 }

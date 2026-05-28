@@ -21,15 +21,20 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/cache"
 	"github.com/Eric-Fernald/chiton/internal/config"
 	chitoncrypto "github.com/Eric-Fernald/chiton/internal/crypto"
+	"github.com/Eric-Fernald/chiton/internal/embed"
 	extast "github.com/Eric-Fernald/chiton/internal/extract/ast"
+	"github.com/Eric-Fernald/chiton/internal/extract/subagent"
 	"github.com/Eric-Fernald/chiton/internal/graph/cluster"
 	"github.com/Eric-Fernald/chiton/internal/graph/metrics"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
+	"github.com/Eric-Fernald/chiton/internal/graph/retrieve"
+	"github.com/Eric-Fernald/chiton/internal/graph/store"
 	badgerstore "github.com/Eric-Fernald/chiton/internal/graph/store/badger"
 	"github.com/Eric-Fernald/chiton/internal/hooks"
 	"github.com/Eric-Fernald/chiton/internal/install"
 	mcpsrv "github.com/Eric-Fernald/chiton/internal/mcp"
 	"github.com/Eric-Fernald/chiton/internal/report"
+	"github.com/Eric-Fernald/chiton/internal/vector"
 	mcpsdk "github.com/mark3labs/mcp-go/server"
 )
 
@@ -49,8 +54,27 @@ clusters them with Leiden, and serves the result to AI assistants over MCP
 so they spend fewer tokens navigating architecture, docs, and prior tool calls.`,
 	}
 
-	root.AddCommand(initCmd(), buildCmd(), queryCmd(), serveCmd(), installCmd(), uninstallCmd(), doctorCmd(), clusterCmd(), reportCmd(), analyzeCmd(), findingsCmd(), hooksCmd())
+	root.AddCommand(initCmd(), buildCmd(), queryCmd(), serveCmd(), installCmd(), uninstallCmd(), doctorCmd(), clusterCmd(), reportCmd(), analyzeCmd(), findingsCmd(), hooksCmd(), embedCmd(), searchCmd(), extractCmd())
 	return root
+}
+
+// newEmbedder constructs the configured embedding provider, with optional
+// provider/model overrides from CLI flags (empty = use config).
+func newEmbedder(cfg *config.Config, providerOverride, modelOverride string) (embed.Embedder, error) {
+	provider := cfg.Embed.Provider
+	if providerOverride != "" {
+		provider = providerOverride
+	}
+	model := cfg.Embed.Model
+	if modelOverride != "" {
+		model = modelOverride
+	}
+	return embed.New(embed.Config{
+		Provider: provider,
+		Model:    model,
+		Endpoint: cfg.Embed.Endpoint,
+		Dim:      cfg.Embed.Dim,
+	})
 }
 
 func analyzeCmd() *cobra.Command {
@@ -930,17 +954,25 @@ needed. Restart chiton serve after clustering to load the new results.`,
 func serveCmd() *cobra.Command {
 	var stdio bool
 	var addr string
+	var writable bool
 
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the MCP server",
+		Long: `Start the MCP server over stdio (for assistants) or HTTP (for debugging).
+
+By default the store opens read-only so 'chiton build', 'embed', and 'cluster'
+can run concurrently; the read tools (semantic_search, pending_extractions)
+work in this mode. Pass --writable to allow the submit_extraction write tool
+over MCP (this takes the store's write lock, so concurrent build/embed cannot
+run). The 'chiton extract submit' CLI is the alternative write path.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := config.Load()
 			if err != nil {
 				return err
 			}
 
-			gs, err := openGraphStore(cfg.GraphPath, true)
+			gs, err := openGraphStore(cfg.GraphPath, !writable)
 			if err != nil {
 				return fmt.Errorf("open store: %w", err)
 			}
@@ -951,7 +983,8 @@ func serveCmd() *cobra.Command {
 				fmt.Fprintf(cmd.ErrOrStderr(), "serve: warning: could not load cluster sidecar: %v\n", err)
 			}
 
-			s := mcpsrv.New(gs, clusterResults)
+			deps := buildSemanticDeps(cmd, cfg, gs, clusterResults)
+			s := mcpsrv.New(gs, clusterResults, deps)
 
 			if stdio {
 				return mcpsdk.ServeStdio(s)
@@ -963,7 +996,45 @@ func serveCmd() *cobra.Command {
 
 	cmd.Flags().BoolVar(&stdio, "stdio", false, "serve over stdio (for MCP assistants)")
 	cmd.Flags().StringVar(&addr, "http", ":7474", "HTTP listen address (for debug)")
+	cmd.Flags().BoolVar(&writable, "writable", false, "open the store read-write so submit_extraction works over MCP (disables concurrent build/embed)")
 	return cmd
+}
+
+// buildSemanticDeps assembles the Phase 2 MCP services. The retriever is wired
+// only when embeddings exist (semantic_search degrades gracefully otherwise);
+// the extractor is always available. Embedder construction failures are logged,
+// not fatal — the structural tools must still serve.
+func buildSemanticDeps(cmd *cobra.Command, cfg *config.Config, gs store.GraphStore, clusterResults *cluster.Results) mcpsrv.Deps {
+	errOut := cmd.ErrOrStderr()
+	emb, err := newEmbedder(cfg, "", "")
+	if err != nil {
+		fmt.Fprintf(errOut, "serve: warning: embeddings disabled: %v\n", err)
+		return mcpsrv.Deps{}
+	}
+
+	var deps mcpsrv.Deps
+	deps.Extractor = subagent.New(gs, emb, cfg.Semantic.ConfidenceThreshold)
+
+	es, ok := gs.(store.EmbeddingStore)
+	if !ok {
+		return deps
+	}
+	embs, err := es.AllEmbeddings(cmd.Context())
+	if err != nil {
+		fmt.Fprintf(errOut, "serve: warning: could not load embeddings: %v\n", err)
+		return deps
+	}
+	if len(embs) == 0 {
+		fmt.Fprintln(errOut, "serve: note: no embeddings indexed — semantic_search disabled (run 'chiton embed')")
+		return deps
+	}
+	idx := vector.NewFlat()
+	for _, e := range embs {
+		idx.Add([]vector.Item{{ID: e.NodeID, Vec: e.Vec}})
+	}
+	deps.Retriever = retrieve.New(gs, idx, emb, clusterResults)
+	fmt.Fprintf(errOut, "serve: semantic_search enabled (%d embeddings)\n", len(embs))
+	return deps
 }
 
 func reportCmd() *cobra.Command {

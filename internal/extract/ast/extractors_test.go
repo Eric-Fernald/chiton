@@ -142,7 +142,8 @@ func TestForFile(t *testing.T) {
 		{"app.ts", ""},
 		{"lib.rs", ""},
 		{"Main.java", ""},
-		{"README.md", "nil"},
+		{"README.md", ""},
+		{"diagram.png", ""},
 		{"data.csv", "nil"},
 	}
 	for _, tc := range cases {

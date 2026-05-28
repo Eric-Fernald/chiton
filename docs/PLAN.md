@@ -72,7 +72,8 @@ The token-reduction headline is real. It is not the point.
         - Whisper.cpp  - Whisper.cpp     via store  - GRAPH_REPORT.md
         - URL fetcher  - vision (LLM)    interface)
                                        - Vector idx
-                                         (sqlite-vec, planned)
+                                         (pure-Go flat,
+                                          pluggable)
 ```
 
 ### Data Model
@@ -111,7 +112,9 @@ Edge kinds (closed vocabulary, versioned):
 Two complementary indexes:
 
 - The graph itself (BFS/DFS, shortest path, community queries).
-- An ANN index over node embeddings (sqlite-vec or Qdrant). *(planned for Phase 2 semantic layer; not yet implemented.)*
+- An ANN index over node embeddings. *(Shipped in Phase 2 as a pure-Go flat
+  cosine index behind the `vector.Index` interface; sqlite-vec/Qdrant remain
+  pluggable backends for later scale.)*
 
 Retrieval policy: vector search seeds N nodes → graph traversal expands K hops → rerank by community + edge confidence → token-budgeted output.
 
@@ -423,14 +426,40 @@ Single Go binary that:
 - ✅ `chiton install` / `uninstall` / `doctor` commands.
 - ✅ Encryption at rest (AES-256-GCM via BadgerDB, argon2id KDF + keyfile next to the graph; opt-out via `chiton init --encrypt=false`).
 
-### Phase 2 — Semantic Layer
+### ✅ Phase 2 — Semantic Layer
 
-- Embedding provider interface with Ollama default.
-- sqlite-vec ANN index, populated for concept/doc/symbol nodes.
-- Hybrid retrieval policy (vector seed → graph expand → rerank).
-- Doc/Markdown LLM extraction in subagent mode (emit task specs over MCP).
-- Image extraction via vision-capable LLM (subagent mode).
-- Provenance + confidence tagging fully wired through.
+- ✅ Embedding provider interface with Ollama default (`internal/embed`; thin
+  `net/http` Ollama client + deterministic `hash` provider for offline/CI). No
+  SDK dependency.
+- ✅ ANN index populated for concept/doc/symbol nodes. **Built pure-Go, not
+  sqlite-vec.** sqlite-vec is CGo, which contradicts the pure-Go principle that
+  put Badger ahead of Kuzu, so the index lives behind a `vector.Index` interface
+  (`internal/vector`) with an exact flat-cosine implementation; sqlite-vec/HNSW
+  is a deferred pluggable backend, exactly like the Kuzu store stub. Embeddings
+  persist in a Badger `v:` keyspace (encrypted at rest for free, cleaned up by
+  `DeleteBySourceURI`) behind the optional `store.EmbeddingStore` capability
+  interface; the in-memory index is rebuilt at serve startup.
+- ✅ Hybrid retrieval policy (`internal/graph/retrieve`): embed query → vector
+  seed → graph expand → rerank (vector score + graph proximity + edge confidence
+  + community bonus, AMBIGUOUS down-weighted/excluded) → token-budget trim.
+- ✅ Doc/Markdown structural extraction (`doc_section` nodes per heading, with
+  CONTAINS nesting) + LLM concept extraction in subagent mode: `pending_extractions`
+  emits schema-pinned task specs, `submit_extraction` ingests concepts + semantic
+  edges. One `internal/extract/subagent.Service` backs both the MCP tools and the
+  `chiton extract` CLI.
+- ✅ Image extraction via vision LLM in subagent mode (image nodes at build;
+  vision task specs emitted alongside doc tasks; same submit path).
+- ✅ Provenance + confidence fully wired: structural = EXTRACTED/1.0; LLM concepts
+  and edges = INFERRED, or AMBIGUOUS below `semantic.confidence_threshold` (0.5).
+
+New CLI: `chiton embed` (+`--provider`/`--all`/`--link-similar`), `chiton search`,
+`chiton extract pending|submit`. New MCP tools: `semantic_search`,
+`pending_extractions`, `submit_extraction`. `chiton serve --writable` opens the
+store read-write so `submit_extraction` works over MCP (default stays read-only so
+build/embed/cluster can run concurrently; the CLI is the other write path).
+
+**Deferred:** daemon-mode (direct LLM calls), HNSW/sqlite-vec backend, incremental
+re-embed on file change (Phase 3).
 
 ### Phase 2.5 — LLM Rules + Diff Analysis
 

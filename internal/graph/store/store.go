@@ -19,6 +19,27 @@ type Path struct {
 	Edges []model.Edge `json:"edges"`
 }
 
+// Embedding pairs a node ID with its embedding vector.
+type Embedding struct {
+	NodeID string    `json:"node_id"`
+	Vec    []float32 `json:"vec"`
+}
+
+// EmbeddingStore is an optional capability a GraphStore may implement to
+// persist node embeddings. It is kept separate from GraphStore so backends
+// without vector support (e.g. the Kuzu stub) and test fakes are unaffected;
+// callers type-assert and degrade gracefully when it is absent.
+//
+// Embeddings are stored in their own keyspace, out of the node JSON, so graph
+// traversals (Neighbors, AllNodes, SearchNodes) stay lean.
+type EmbeddingStore interface {
+	// UpsertEmbeddings inserts or replaces embeddings by node ID.
+	UpsertEmbeddings(ctx context.Context, embs []Embedding) error
+	// AllEmbeddings returns every stored embedding. Used to rebuild the
+	// in-memory ANN index at load.
+	AllEmbeddings(ctx context.Context) ([]Embedding, error)
+}
+
 // GraphStore is the central abstraction over the underlying graph database.
 // All packages depend on this interface, never on a concrete implementation,
 // so the backing store (Kuzu, Badger, etc.) can be swapped without touching callers.
