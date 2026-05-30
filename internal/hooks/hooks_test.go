@@ -86,6 +86,47 @@ func TestInstall_WritesScriptsAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestInstall_SyncStages(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Install(dir, "/fake/chiton", SyncStages()); err != nil {
+		t.Fatalf("Install sync stages: %v", err)
+	}
+
+	pc, err := os.ReadFile(filepath.Join(dir, "post-commit"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(pc), "sync git --stage post-commit") {
+		t.Errorf("post-commit should call sync git: %s", pc)
+	}
+	if strings.Contains(string(pc), "hooks run") {
+		t.Errorf("post-commit must not be a gating hook: %s", pc)
+	}
+
+	co, err := os.ReadFile(filepath.Join(dir, "post-checkout"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(co), "sync git --stage post-checkout") {
+		t.Errorf("post-checkout should call sync git: %s", co)
+	}
+	if !strings.Contains(string(co), `"$@"`) {
+		t.Errorf("post-checkout should forward git's positional args: %s", co)
+	}
+}
+
+func TestSyncStageHelpers(t *testing.T) {
+	if !IsSyncStage(StagePostCommit) || !IsSyncStage(StagePostCheckout) {
+		t.Error("post-commit/post-checkout should be sync stages")
+	}
+	if IsSyncStage(StagePreCommit) || IsSyncStage(StagePrePush) {
+		t.Error("gating stages should not be sync stages")
+	}
+	if len(AllStages()) != 4 {
+		t.Errorf("AllStages should have 4 entries, got %d", len(AllStages()))
+	}
+}
+
 func TestInstall_LeavesForeignHooksAlone(t *testing.T) {
 	dir := t.TempDir()
 	pre := filepath.Join(dir, "pre-commit")

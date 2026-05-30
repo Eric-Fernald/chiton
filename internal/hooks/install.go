@@ -115,13 +115,25 @@ func Status(hooksDir string, stages []Stage) ([]StatusEntry, error) {
 }
 
 // scriptFor returns the shell content for a hook of stage that invokes the
-// given chiton executable in `hooks run` mode. Plain POSIX sh so Git for
-// Windows can execute it through its bundled bash.
+// given chiton executable. Gating stages (pre-commit/pre-push) run the
+// finding-gate (`hooks run`); sync stages (post-commit/post-checkout) re-index
+// the changed files (`sync git`). Plain POSIX sh so Git for Windows can execute
+// it through its bundled bash.
 func scriptFor(stage Stage, exe string) string {
+	var invocation string
+	switch stage {
+	case StagePostCommit:
+		invocation = fmt.Sprintf("exec %s sync git --stage post-commit", shellQuote(exe))
+	case StagePostCheckout:
+		// git passes <old> <new> <branch-flag> as positional args; forward them.
+		invocation = fmt.Sprintf("exec %s sync git --stage post-checkout \"$@\"", shellQuote(exe))
+	default:
+		invocation = fmt.Sprintf("exec %s hooks run --stage %s", shellQuote(exe), string(stage))
+	}
 	return strings.Join([]string{
 		"#!/bin/sh",
 		HookMarker,
-		fmt.Sprintf("exec %s hooks run --stage %s", shellQuote(exe), string(stage)),
+		invocation,
 		"",
 	}, "\n")
 }

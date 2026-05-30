@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -54,7 +55,7 @@ clusters them with Leiden, and serves the result to AI assistants over MCP
 so they spend fewer tokens navigating architecture, docs, and prior tool calls.`,
 	}
 
-	root.AddCommand(initCmd(), buildCmd(), queryCmd(), serveCmd(), installCmd(), uninstallCmd(), doctorCmd(), clusterCmd(), reportCmd(), analyzeCmd(), findingsCmd(), hooksCmd(), embedCmd(), searchCmd(), extractCmd())
+	root.AddCommand(initCmd(), buildCmd(), queryCmd(), serveCmd(), installCmd(), uninstallCmd(), doctorCmd(), clusterCmd(), reportCmd(), analyzeCmd(), findingsCmd(), hooksCmd(), embedCmd(), searchCmd(), extractCmd(), syncCmd())
 	return root
 }
 
@@ -1137,7 +1138,7 @@ func hooksStatusCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			entries, err := hooks.Status(hooksDir, hooks.Stages())
+			entries, err := hooks.Status(hooksDir, hooks.AllStages())
 			if err != nil {
 				return err
 			}
@@ -1182,14 +1183,7 @@ This is what the installed .git/hooks/pre-commit and pre-push scripts call.
 You usually don't invoke it directly.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			stage := hooks.Stage(stageRaw)
-			validStage := false
-			for _, s := range hooks.Stages() {
-				if s == stage {
-					validStage = true
-					break
-				}
-			}
-			if !validStage {
+			if !slices.Contains(hooks.Stages(), stage) {
 				return fmt.Errorf("unknown stage %q â€” supported: pre-commit, pre-push", stageRaw)
 			}
 
@@ -1245,15 +1239,8 @@ func parseStages(raw []string) ([]hooks.Stage, error) {
 	out := make([]hooks.Stage, 0, len(raw))
 	for _, s := range raw {
 		stage := hooks.Stage(strings.TrimSpace(s))
-		valid := false
-		for _, supported := range hooks.Stages() {
-			if supported == stage {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			return nil, fmt.Errorf("unknown stage %q", s)
+		if !slices.Contains(hooks.AllStages(), stage) {
+			return nil, fmt.Errorf("unknown stage %q (supported: pre-commit, pre-push, post-commit, post-checkout)", s)
 		}
 		out = append(out, stage)
 	}

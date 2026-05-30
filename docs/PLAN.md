@@ -503,12 +503,91 @@ and the store never accumulates stale findings.
 **Deferred:** daemon-mode (direct LLM calls for unattended diff runs) and
 incremental LLM re-analysis on file change (Phase 3).
 
-### Phase 3 — Live Sync
+### ✅ Phase 3 — Live Sync
 
-- fsnotify watcher with debounce.
-- Git post-commit / post-checkout hooks.
-- Incremental Leiden (only re-cluster touched 2-hop neighborhood).
-- asynq job queue for background re-extraction.
+The incremental Updater (`internal/ingest`) is the spine: per changed file it
+re-extracts AST nodes/edges, deletes the file's stale nodes
+(`DeleteBySourceURI` — correct because chiton emits no cross-file structural
+edges *into* a file's symbols, so re-extraction re-emits every adjacent edge),
+upserts the fresh ones, and optionally re-embeds and re-runs deterministic file
+rules. Three front-ends drive it; all funnel through the same code path.
+
+- ✅ **fsnotify watcher with debounce** (`internal/ingest/fswatch` +
+  `internal/jobs`). `chiton sync watch [path]` recursively watches the tree
+  (adding watches for directories created later, re-scanning their existing
+  files), filters out the chiton output dir / `.git` / `node_modules` so writes
+  never feed back, and routes events through a pure-Go debouncing, coalescing,
+  bounded worker queue (`jobs.Queue`). A key already in flight is never run
+  concurrently with itself; a re-enqueue during a run schedules exactly one
+  more pass. Ctrl-C cancels the context → the watcher drains in-flight work,
+  runs a final re-cluster, flushes the cache, and the store closes cleanly.
+- ✅ **Git post-commit / post-checkout hooks** (`internal/ingest/git` +
+  `chiton hooks install --stage post-commit,post-checkout`). The hooks call
+  `chiton sync git`, which shells out to `git diff --name-status` (post-commit →
+  files in HEAD; post-checkout → diff between the two checked-out trees, a no-op
+  on file checkouts; `--since <ref>` → diff a range) and applies the changes as
+  one synchronous batch. `chiton hooks run` still owns the gating stages
+  (pre-commit/pre-push); the sync stages are a separate, non-blocking class.
+- ✅ **Incremental Leiden** (`cluster.RunIncremental`). Only the touched 2-hop
+  neighborhood is re-clustered fresh; every node outside it keeps its prior
+  community, new community IDs are namespaced then compacted to a contiguous
+  range, and deleted nodes drop out automatically. Degree is recomputed
+  (cheap); **betweenness is a global metric and is carried forward** from the
+  last full pass — a full `chiton cluster` refreshes god-node ranking, while
+  sync keeps communities current between passes. Updates the `cluster.json`
+  sidecar in place (serialised by a single-worker queue); a no-op until
+  `chiton cluster` has seeded the sidecar once.
+- ✅ **Background re-extraction queue** — built as the pure-Go in-process
+  `internal/jobs.Queue` rather than asynq. **asynq requires a Redis server**,
+  a network dependency that contradicts the single-binary / on-device /
+  zero-runtime-dependency principle (the same reasoning that put pure-Go
+  BadgerDB ahead of CGo Kuzu and a pure-Go flat vector index ahead of
+  sqlite-vec). The queue's small surface (Enqueue / Stop) keeps an
+  asynq/Redis-backed *distributed* runner a contained future swap, exactly like
+  the Kuzu store stub.
+- ✅ **Incremental re-embed on file change** (deferred from Phase 2) —
+  `chiton sync ... --embed` re-embeds a changed file's embeddable nodes inline.
+  Off by default (avoids per-save Ollama latency); a later `chiton embed` picks
+  up any nodes left without a vector.
+- ✅ **Incremental deterministic re-analysis on file change** (deferred from
+  Phase 2.5) — `Analyzer.AnalyzeFile` re-runs the file-scope rules on a changed
+  file and prunes resolved findings (`--analyze`, on by default). GraphScope
+  rules (architecture: circular-import, god-module, dead-symbol) need the whole
+  corpus and are refreshed by a full `chiton analyze`.
+
+New CLI: `chiton sync watch|git|once` (one-shot `once` reconciles a tree,
+re-indexing changed files and pruning ones that vanished), and the
+`post-commit`/`post-checkout` stages on `chiton hooks install`.
+
+**Operational note:** the watcher is the first long-running read-write holder of
+the store. Stop it with Ctrl-C so it closes BadgerDB cleanly; a hard kill
+(SIGKILL / `taskkill /F`) can leave Badger's WAL needing recovery on the next
+open — a pre-existing property of any chiton writer, just more reachable now.
+
+**Deferred:** daemon-mode LLM re-analysis on file change (subagent LLM rules and
+concept extraction still run via the existing `pending`/`submit` flow, not
+automatically on save); asynq/Redis-backed distributed job queue; incremental
+betweenness (full `chiton cluster` refreshes it).
+
+**Known limitations (from the Phase 3 adversarial review):**
+- *Semantic overlay on a changed file:* SIMILAR_TO edges (from `embed
+  --link-similar`) and concept DESCRIBES/RATIONALE_FOR edges into a changed
+  file's symbols are dropped on re-extraction and refreshed only by re-running
+  `embed --link-similar` / `extract`. The structural layer stays exact.
+- *Orphaned external nodes:* when the last file importing a package is deleted,
+  the shared `pkg://` node lingers with zero edges (a harmless isolated
+  singleton in clustering) until a full rebuild. No orphan GC yet.
+- *Path-case on case-insensitive volumes:* node URIs are not case-normalized, so
+  supplying the same file via differently-cased ABSOLUTE paths (non-default
+  usage) can duplicate nodes. Default flows use cwd-relative paths and are
+  consistent; keep path casing consistent across `build`/`sync` invocations.
+- *Cache vs. post-steps:* the content cache gates the whole pipeline, so a file
+  synced once with `--analyze=false` is skipped (as "unchanged") by a later
+  `--analyze=true` run until its content changes; a full `chiton analyze`
+  recovers it.
+- *hooks.yaml is for gating stages only:* `post-commit`/`post-checkout` are
+  configured via `chiton sync` flags, not `.chiton/hooks.yaml` (which tunes the
+  pre-commit/pre-push severity gate).
 
 ### Phase 3.5 — Broad Assistant Support
 

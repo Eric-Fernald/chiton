@@ -22,10 +22,29 @@ type Stage string
 const (
 	StagePreCommit Stage = "pre-commit"
 	StagePrePush   Stage = "pre-push"
+	// Sync stages keep the graph current after history changes (Phase 3). They
+	// run `chiton sync git` rather than the gating `chiton hooks run`.
+	StagePostCommit   Stage = "post-commit"
+	StagePostCheckout Stage = "post-checkout"
 )
 
-// Stages lists the hook stages chiton supports.
+// Stages lists the gating hook stages chiton supports (pre-commit, pre-push).
+// These are the stages `chiton hooks run` understands.
 func Stages() []Stage { return []Stage{StagePreCommit, StagePrePush} }
+
+// SyncStages lists the live-sync hook stages (post-commit, post-checkout) that
+// re-index changed files into the graph after history moves.
+func SyncStages() []Stage { return []Stage{StagePostCommit, StagePostCheckout} }
+
+// AllStages lists every hook stage chiton can install.
+func AllStages() []Stage {
+	return []Stage{StagePreCommit, StagePrePush, StagePostCommit, StagePostCheckout}
+}
+
+// IsSyncStage reports whether s is a live-sync stage (vs a gating stage).
+func IsSyncStage(s Stage) bool {
+	return s == StagePostCommit || s == StagePostCheckout
+}
 
 // StageConfig is one stage's policy.
 type StageConfig struct {
