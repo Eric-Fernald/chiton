@@ -11,11 +11,11 @@ import (
 
 // Finding is one rule violation. Stable IDs let diff_findings compare scans.
 type Finding struct {
-	RuleID    string
-	Severity  Severity
-	Category  Category
-	Message   string
-	Fix       string // optional patch suggestion (free-form text for now)
+	RuleID   string
+	Severity Severity
+	Category Category
+	Message  string
+	Fix      string // optional patch suggestion (free-form text for now)
 
 	// At least one of TargetURI or TargetNodeID must be set.
 	// TargetURI is the source_uri of the file the finding refers to.
@@ -25,6 +25,34 @@ type Finding struct {
 
 	// Optional positional info; finding ID hashes Span to keep stability.
 	Span *model.SourceSpan
+
+	// The following are set only for LLM-rule findings; deterministic findings
+	// leave them zero and are treated as EXTRACTED / confidence 1.0 /
+	// DETERMINISTIC. NodeProvenance is INFERRED, or AMBIGUOUS below the
+	// confidence threshold; Confidence is the host-supplied score in [0,1];
+	// RuleProvenance distinguishes the rule that produced the finding.
+	NodeProvenance model.Provenance
+	Confidence     float32
+	RuleProvenance RuleProvenance
+}
+
+// resolved fills in defaults so deterministic findings (which leave the
+// provenance fields zero) render exactly as before: EXTRACTED, confidence 1.0,
+// DETERMINISTIC. Any finding that sets either NodeProvenance or RuleProvenance
+// is treated as LLM-sourced and keeps its supplied confidence.
+func (f Finding) resolved() (model.Provenance, float32, RuleProvenance) {
+	if f.NodeProvenance == "" && f.RuleProvenance == "" {
+		return model.ProvExtracted, 1.0, ProvenanceDeterministic
+	}
+	prov := f.NodeProvenance
+	if prov == "" {
+		prov = model.ProvInferred
+	}
+	ruleProv := f.RuleProvenance
+	if ruleProv == "" {
+		ruleProv = ProvenanceLLM
+	}
+	return prov, f.Confidence, ruleProv
 }
 
 // FindingID returns the stable ID for this finding.
@@ -47,6 +75,7 @@ func (f Finding) AsNode(now time.Time) model.Node {
 	if f.Span != nil {
 		label = fmt.Sprintf("%s@L%d", f.RuleID, f.Span.StartLine)
 	}
+	prov, conf, ruleProv := f.resolved()
 	attrs := map[string]any{
 		"rule_id":         f.RuleID,
 		"severity":        string(f.Severity),
@@ -54,10 +83,13 @@ func (f Finding) AsNode(now time.Time) model.Node {
 		"message":         f.Message,
 		"target_uri":      f.TargetURI,
 		"target_node_id":  f.TargetNodeID,
-		"rule_provenance": string(ProvenanceDeterministic),
+		"rule_provenance": string(ruleProv),
 	}
 	if f.Fix != "" {
 		attrs["fix_suggestion"] = f.Fix
+	}
+	if ruleProv == ProvenanceLLM {
+		attrs["confidence_score"] = conf
 	}
 	return model.Node{
 		ID:         id,
@@ -66,8 +98,8 @@ func (f Finding) AsNode(now time.Time) model.Node {
 		SourceURI:  uri,
 		Span:       f.Span,
 		Attrs:      attrs,
-		Provenance: model.ProvExtracted,
-		Confidence: 1.0,
+		Provenance: prov,
+		Confidence: conf,
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
@@ -75,13 +107,14 @@ func (f Finding) AsNode(now time.Time) model.Node {
 
 // ViolatesEdge returns the finding→rule edge.
 func (f Finding) ViolatesEdge(now time.Time) model.Edge {
+	prov, conf, _ := f.resolved()
 	return model.Edge{
 		ID:         model.NewEdgeID(f.FindingID(), RuleNodeID(f.RuleID), model.EdgeViolates),
 		Src:        f.FindingID(),
 		Dst:        RuleNodeID(f.RuleID),
 		Kind:       model.EdgeViolates,
-		Provenance: model.ProvExtracted,
-		Confidence: 1.0,
+		Provenance: prov,
+		Confidence: conf,
 		CreatedAt:  now,
 	}
 }
@@ -93,13 +126,14 @@ func (f Finding) AffectsEdge(now time.Time) model.Edge {
 	if target == "" {
 		return model.Edge{}
 	}
+	prov, conf, _ := f.resolved()
 	return model.Edge{
 		ID:         model.NewEdgeID(f.FindingID(), target, model.EdgeAffects),
 		Src:        f.FindingID(),
 		Dst:        target,
 		Kind:       model.EdgeAffects,
-		Provenance: model.ProvExtracted,
-		Confidence: 1.0,
+		Provenance: prov,
+		Confidence: conf,
 		CreatedAt:  now,
 	}
 }
@@ -115,12 +149,12 @@ func RuleNodeID(ruleID string) string {
 func RuleAsNode(m Meta, now time.Time) model.Node {
 	id := RuleNodeID(m.ID)
 	attrs := map[string]any{
-		"rule_id":     m.ID,
-		"category":    string(m.Category),
-		"severity":    string(m.Severity),
-		"summary":     m.Summary,
-		"provenance":  string(m.Provenance),
-		"source":      "built-in",
+		"rule_id":    m.ID,
+		"category":   string(m.Category),
+		"severity":   string(m.Severity),
+		"summary":    m.Summary,
+		"provenance": string(m.Provenance),
+		"source":     "built-in",
 	}
 	if m.Fix != "" {
 		attrs["fix_hint"] = m.Fix

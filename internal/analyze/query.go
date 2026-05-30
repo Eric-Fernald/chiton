@@ -12,14 +12,17 @@ import (
 
 // FindingView is the lean shape returned by list/explain operations.
 type FindingView struct {
-	ID         string            `json:"id"`
-	RuleID     string            `json:"rule_id"`
-	Category   string            `json:"category"`
-	Severity   string            `json:"severity"`
-	Message    string            `json:"message"`
-	TargetURI  string            `json:"target_uri,omitempty"`
-	Span       *model.SourceSpan `json:"span,omitempty"`
-	Fix        string            `json:"fix_suggestion,omitempty"`
+	ID             string            `json:"id"`
+	RuleID         string            `json:"rule_id"`
+	Category       string            `json:"category"`
+	Severity       string            `json:"severity"`
+	Message        string            `json:"message"`
+	TargetURI      string            `json:"target_uri,omitempty"`
+	Span           *model.SourceSpan `json:"span,omitempty"`
+	Fix            string            `json:"fix_suggestion,omitempty"`
+	Provenance     string            `json:"provenance,omitempty"`      // EXTRACTED | INFERRED | AMBIGUOUS
+	RuleProvenance string            `json:"rule_provenance,omitempty"` // DETERMINISTIC | LLM
+	Confidence     float32           `json:"confidence,omitempty"`      // LLM findings only
 }
 
 // ListOptions filters findings returned by List.
@@ -28,6 +31,10 @@ type ListOptions struct {
 	MinSeverity Severity // empty = all
 	Scope       string   // substring match against target_uri; empty = all
 	Limit       int      // 0 = no cap
+	// IncludeAmbiguous controls whether low-confidence AMBIGUOUS findings
+	// (LLM findings below the confidence threshold) are returned. They are
+	// excluded by default so they never masquerade as confirmed findings.
+	IncludeAmbiguous bool
 }
 
 // List returns findings in the store, filtered by opts.
@@ -45,6 +52,9 @@ func List(ctx context.Context, gs store.GraphStore, opts ListOptions) ([]Finding
 	var out []FindingView
 	for _, n := range all {
 		if n.Kind != model.KindFinding {
+			continue
+		}
+		if !opts.IncludeAmbiguous && n.Provenance == model.ProvAmbiguous {
 			continue
 		}
 		fv := nodeToFindingView(n)
@@ -130,6 +140,11 @@ func Explain(ctx context.Context, gs store.GraphStore, idOrLabel string) (*Expla
 			if n.Kind != model.KindFinding || n.ID == node.ID {
 				continue
 			}
+			// Hide AMBIGUOUS siblings, matching List's default so they never
+			// masquerade as confirmed findings in the related list.
+			if n.Provenance == model.ProvAmbiguous {
+				continue
+			}
 			fv := nodeToFindingView(n)
 			if fv.TargetURI == exp.Finding.TargetURI {
 				exp.Related = append(exp.Related, fv)
@@ -147,15 +162,25 @@ func nodeToFindingView(n model.Node) FindingView {
 		}
 		return ""
 	}
+	var conf float32
+	switch v := n.Attrs["confidence_score"].(type) {
+	case float64:
+		conf = float32(v)
+	case float32:
+		conf = v
+	}
 	return FindingView{
-		ID:        n.ID,
-		RuleID:    get("rule_id"),
-		Category:  get("category"),
-		Severity:  get("severity"),
-		Message:   get("message"),
-		TargetURI: get("target_uri"),
-		Span:      n.Span,
-		Fix:       get("fix_suggestion"),
+		ID:             n.ID,
+		RuleID:         get("rule_id"),
+		Category:       get("category"),
+		Severity:       get("severity"),
+		Message:        get("message"),
+		TargetURI:      get("target_uri"),
+		Span:           n.Span,
+		Fix:            get("fix_suggestion"),
+		Provenance:     string(n.Provenance),
+		RuleProvenance: get("rule_provenance"),
+		Confidence:     conf,
 	}
 }
 

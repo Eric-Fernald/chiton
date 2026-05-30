@@ -40,6 +40,24 @@ type EmbeddingStore interface {
 	AllEmbeddings(ctx context.Context) ([]Embedding, error)
 }
 
+// NodeDeleter is an optional capability for batch node deletion by ID. It does
+// point lookups keyed by ID rather than the full-scan DeleteBySourceURI, so
+// callers that already hold the IDs (e.g. pruning resolved findings) can delete
+// K nodes in O(K) instead of O(K·N). Callers type-assert and fall back to
+// DeleteBySourceURI when a backend does not implement it.
+type NodeDeleter interface {
+	// DeleteByIDs deletes the given nodes plus their embeddings and adjacent
+	// edges. Missing IDs are skipped. Returns the number actually deleted.
+	DeleteByIDs(ctx context.Context, ids []string) (int, error)
+}
+
+// ReadOnlyAware is an optional capability letting callers detect a read-only
+// store and fail writes early with an actionable message instead of surfacing a
+// raw backend error.
+type ReadOnlyAware interface {
+	ReadOnly() bool
+}
+
 // GraphStore is the central abstraction over the underlying graph database.
 // All packages depend on this interface, never on a concrete implementation,
 // so the backing store (Kuzu, Badger, etc.) can be swapped without touching callers.

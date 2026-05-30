@@ -11,6 +11,7 @@ import (
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	mcpsdk "github.com/mark3labs/mcp-go/server"
 
+	"github.com/Eric-Fernald/chiton/internal/analyze"
 	"github.com/Eric-Fernald/chiton/internal/extract/subagent"
 	"github.com/Eric-Fernald/chiton/internal/graph/cluster"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
@@ -18,12 +19,18 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
 )
 
-// Deps carries the optional semantic-layer services the server wires into its
-// Phase 2 tools. Both are nilable: a graph without embeddings has no Retriever
-// (semantic_search degrades gracefully), and either may be absent in tests.
+// Deps carries the optional semantic- and analysis-layer services the server
+// wires into its Phase 2 / 2.5 tools. All are nilable: a graph without
+// embeddings has no Retriever (semantic_search degrades gracefully), and any
+// may be absent in tests.
 type Deps struct {
 	Retriever *retrieve.Engine
 	Extractor *subagent.Service
+	// LLM backs pending_analyses / submit_analysis (Phase 2.5 LLM rules).
+	LLM *analyze.LLMService
+	// BaselineDir is where diff_findings reads saved baselines from
+	// (default: .chiton/baselines).
+	BaselineDir string
 }
 
 // New creates an MCPServer exposing tools against the given graph store.
@@ -44,6 +51,13 @@ func New(gs store.GraphStore, overlay *cluster.Results, deps Deps) *mcpsdk.MCPSe
 	s.AddTool(semanticSearchTool(), semanticSearchHandler(deps.Retriever))
 	s.AddTool(pendingExtractionsTool(), pendingExtractionsHandler(deps.Extractor))
 	s.AddTool(submitExtractionTool(), submitExtractionHandler(deps.Extractor))
+	baselineDir := deps.BaselineDir
+	if baselineDir == "" {
+		baselineDir = analyze.BaselineDir(".chiton")
+	}
+	s.AddTool(diffFindingsTool(), diffFindingsHandler(gs, baselineDir))
+	s.AddTool(pendingAnalysesTool(), pendingAnalysesHandler(deps.LLM))
+	s.AddTool(submitAnalysisTool(), submitAnalysisHandler(deps.LLM))
 	return s
 }
 
@@ -430,8 +444,8 @@ func godNodesHandler(overlay *cluster.Results) mcpsdk.ToolHandlerFunc {
 		// overlay.Nodes is keyed by node ID; we need labels too. We only have
 		// IDs in the sidecar, so surface what we have and sort by betweenness.
 		type ranked struct {
-			id  string
-			nr  cluster.NodeResult
+			id string
+			nr cluster.NodeResult
 		}
 		var candidates []ranked
 		for id, nr := range overlay.Nodes {

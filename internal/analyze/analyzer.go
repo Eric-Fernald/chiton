@@ -62,11 +62,15 @@ func (a *Analyzer) Analyze(ctx context.Context, root string) (*Result, error) {
 	}
 
 	var (
-		allNodes    []model.Node
-		allEdges    []model.Edge
-		findings    []Finding
+		allNodes     []model.Node
+		allEdges     []model.Edge
+		findings     []Finding
 		filesScanned int
 	)
+	// scannedURIs records every file we extracted this run, so pruneResolved
+	// only removes stale findings for files actually re-analysed (a partial
+	// `analyze <subdir>` never touches findings outside its scope).
+	scannedURIs := map[string]bool{}
 
 	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -74,8 +78,7 @@ func (a *Analyzer) Analyze(ctx context.Context, root string) (*Result, error) {
 		}
 		if d.IsDir() {
 			// Skip common noise directories
-			base := d.Name()
-			if base == ".git" || base == "node_modules" || base == "vendor" || base == ".chiton" || base == "chiton-out" {
+			if skipDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -95,6 +98,9 @@ func (a *Analyzer) Analyze(ctx context.Context, root string) (*Result, error) {
 		filesScanned++
 
 		fileNode := findFileNode(nodes)
+		if fileNode.SourceURI != "" {
+			scannedURIs[fileNode.SourceURI] = true
+		}
 		ft := FileTarget{
 			Path:     path,
 			URI:      fileNode.SourceURI,
@@ -128,12 +134,17 @@ func (a *Analyzer) Analyze(ctx context.Context, root string) (*Result, error) {
 	if err := a.persist(ctx, rules, findings); err != nil {
 		return nil, err
 	}
+	if err := a.pruneResolved(ctx, scannedURIs, findings); err != nil {
+		return nil, err
+	}
 
 	return &Result{
 		FilesScanned: filesScanned,
-		RulesRun:     len(rules),
-		Findings:     findings,
-		Duration:     a.now().Sub(start),
+		// Count only rules actually executed here; LLM rules are dispatched
+		// separately via LLMService and are neither FileRule nor GraphRule.
+		RulesRun: len(fileRules) + len(graphRules),
+		Findings: findings,
+		Duration: a.now().Sub(start),
 	}, nil
 }
 
@@ -162,6 +173,65 @@ func (a *Analyzer) persist(ctx context.Context, rules []Rule, findings []Finding
 	}
 	if err := a.store.UpsertEdges(ctx, edges); err != nil {
 		return fmt.Errorf("upsert edges: %w", err)
+	}
+	return nil
+}
+
+// pruneResolved deletes deterministic findings that are no longer produced for
+// a re-scanned file, so the store reflects live truth (and `--diff` can detect
+// resolved findings). LLM findings are left alone — they have their own
+// lifecycle via LLMService — as are findings for files outside this scan.
+func (a *Analyzer) pruneResolved(ctx context.Context, scanned map[string]bool, current []Finding) error {
+	if len(scanned) == 0 {
+		return nil
+	}
+	newIDs := make(map[string]bool, len(current))
+	for _, f := range current {
+		newIDs[f.FindingID()] = true
+	}
+	all, err := a.store.AllNodes(ctx)
+	if err != nil {
+		return fmt.Errorf("load nodes for prune: %w", err)
+	}
+	var stale []model.Node
+	for _, n := range all {
+		if n.Kind != model.KindFinding {
+			continue
+		}
+		if rp, _ := n.Attrs["rule_provenance"].(string); rp != string(ProvenanceDeterministic) {
+			continue
+		}
+		turi, _ := n.Attrs["target_uri"].(string)
+		if !scanned[turi] || newIDs[n.ID] {
+			continue
+		}
+		stale = append(stale, n)
+	}
+	return deleteFindingNodes(ctx, a.store, stale)
+}
+
+// deleteFindingNodes removes the given finding nodes (and their edges) using the
+// store's batch NodeDeleter capability when available, falling back to per-node
+// DeleteBySourceURI otherwise. Finding source URIs are unique, so both paths
+// delete exactly the intended nodes.
+func deleteFindingNodes(ctx context.Context, gs store.GraphStore, nodes []model.Node) error {
+	if len(nodes) == 0 {
+		return nil
+	}
+	if d, ok := gs.(store.NodeDeleter); ok {
+		ids := make([]string, len(nodes))
+		for i, n := range nodes {
+			ids[i] = n.ID
+		}
+		if _, err := d.DeleteByIDs(ctx, ids); err != nil {
+			return fmt.Errorf("prune findings: %w", err)
+		}
+		return nil
+	}
+	for _, n := range nodes {
+		if _, err := gs.DeleteBySourceURI(ctx, n.SourceURI); err != nil {
+			return fmt.Errorf("prune finding %s: %w", n.ID, err)
+		}
 	}
 	return nil
 }

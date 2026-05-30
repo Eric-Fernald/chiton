@@ -28,6 +28,9 @@ func listFindingsTool() mcplib.Tool {
 			mcplib.Min(1),
 			mcplib.Max(500),
 		),
+		mcplib.WithBoolean("include_ambiguous",
+			mcplib.Description("Include low-confidence AMBIGUOUS LLM findings (default false). These never block and are shown separately."),
+		),
 		mcplib.WithReadOnlyHintAnnotation(true),
 	)
 }
@@ -35,10 +38,11 @@ func listFindingsTool() mcplib.Tool {
 func listFindingsHandler(gs store.GraphStore) mcpsdk.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		views, err := analyze.List(ctx, gs, analyze.ListOptions{
-			Category:    req.GetString("category", ""),
-			MinSeverity: analyze.Severity(req.GetString("min_severity", "")),
-			Scope:       req.GetString("scope", ""),
-			Limit:       req.GetInt("limit", 50),
+			Category:         req.GetString("category", ""),
+			MinSeverity:      analyze.Severity(req.GetString("min_severity", "")),
+			Scope:            req.GetString("scope", ""),
+			Limit:            req.GetInt("limit", 50),
+			IncludeAmbiguous: req.GetBool("include_ambiguous", false),
 		})
 		if err != nil {
 			return mcplib.NewToolResultErrorFromErr("list findings failed", err), nil

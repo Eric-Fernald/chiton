@@ -461,12 +461,47 @@ build/embed/cluster can run concurrently; the CLI is the other write path).
 **Deferred:** daemon-mode (direct LLM calls), HNSW/sqlite-vec backend, incremental
 re-embed on file change (Phase 3).
 
-### Phase 2.5 — LLM Rules + Diff Analysis
+### ✅ Phase 2.5 — LLM Rules + Diff Analysis
 
-- LLM rule dispatch through the same subagent path as semantic extraction.
-- 20-30 LLM rules in categories deterministic rules can't cover.
-- `--diff` mode with baseline tracking (last successful analysis stored under `.chiton/baselines/<git-sha>.json`).
-- MCP tool: `diff_findings`.
+- ✅ LLM rule dispatch through the same subagent path as semantic extraction.
+  `analyze.LLMService` (`internal/analyze/llm.go`) emits one schema-pinned task
+  spec per (LLM rule, code file) and ingests structured findings — chiton calls
+  no LLM itself, exactly mirroring the doc/image extraction path. Findings land
+  as `finding` nodes tagged INFERRED (or AMBIGUOUS below
+  `semantic.confidence_threshold`) with `rule_provenance=LLM` and a
+  `confidence_score`; AMBIGUOUS findings are hidden from `list_findings` by
+  default and never reach the pre-commit gate (deterministic rules run inline,
+  LLM rules don't). Completion is tracked in a `.chiton/llm-analyzed.json`
+  sidecar so the graph stays free of marker nodes.
+- ✅ 24 LLM rules across all eight categories (`internal/analyze/rules/llm/`):
+  abstraction-leak, design-rationale-mismatch, contract-violation-vs-comment,
+  undocumented-side-effect, race-condition-risk, resource-leak-risk,
+  injection-risk, missing-authz-check, n-plus-one, missing-transaction-boundary,
+  comment-rot, etc. — the semantic cases deterministic AST rules can't reach.
+- ✅ `--diff` / `--since <ref>` on `chiton analyze`, with per-commit baselines
+  under `.chiton/baselines/<git-sha>.json`. The analyzer now prunes resolved
+  deterministic findings on each run (a fix removes the finding node + its
+  edges), so the store reflects live truth and diff reports `new`/`resolved`/
+  `changed` correctly. `--diff` records a fresh baseline for HEAD; `--since` is
+  read-only against a recorded commit.
+- ✅ MCP tool `diff_findings(baseline?, target?)` → `{new, resolved, changed}`
+  (baseline-vs-store, or baseline-vs-baseline when `target` is given). Plus
+  `pending_analyses` / `submit_analysis` mirroring the extraction tools, and an
+  `include_ambiguous` flag on `list_findings`.
+
+New CLI: `chiton analyze --diff|--since|--no-llm`, `chiton analyze pending`
+(emit LLM task specs), `chiton analyze submit` (ingest LLM findings). Like
+`submit_extraction`, `submit_analysis` over MCP needs `chiton serve --writable`;
+the CLI is the other write path.
+
+Resolved-finding handling is wired on both sides: a deterministic re-scan
+prunes findings no longer produced (`Analyzer.pruneResolved`), and re-submitting
+an LLM rule for a file replaces that rule's prior findings for it
+(`LLMService.replacePriorFindings`) — so `--diff` reports `resolved` correctly
+and the store never accumulates stale findings.
+
+**Deferred:** daemon-mode (direct LLM calls for unattended diff runs) and
+incremental LLM re-analysis on file change (Phase 3).
 
 ### Phase 3 — Live Sync
 

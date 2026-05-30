@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"context"
@@ -77,73 +77,6 @@ func newEmbedder(cfg *config.Config, providerOverride, modelOverride string) (em
 	})
 }
 
-func analyzeCmd() *cobra.Command {
-	var category string
-	var minSeverity string
-
-	cmd := &cobra.Command{
-		Use:   "analyze <path>",
-		Short: "Run deterministic rules over a directory and persist findings",
-		Long: `Walk the given path, run every registered file-scope rule on each supported
-file, then run graph-scope rules over the full extracted set. Findings are
-upserted as graph nodes (VIOLATES â†’ rule, AFFECTS â†’ file/symbol) so they can
-be queried by 'chiton findings list' or the MCP tools.`,
-		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load()
-			if err != nil {
-				return err
-			}
-			gs, err := openGraphStore(cfg.GraphPath, false)
-			if err != nil {
-				return fmt.Errorf("open store: %w", err)
-			}
-			defer gs.Close()
-
-			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "analyze: scanning %s\n", args[0])
-
-			az := analyze.New(gs, nil)
-			res, err := az.Analyze(cmd.Context(), args[0])
-			if err != nil {
-				return err
-			}
-
-			minRank := -1
-			if minSeverity != "" {
-				minRank = analyze.SeverityRank(analyze.Severity(minSeverity))
-			}
-
-			filtered := res.Findings[:0:0]
-			for _, f := range res.Findings {
-				if category != "" && !strings.EqualFold(string(f.Category), category) {
-					continue
-				}
-				if minRank >= 0 && analyze.SeverityRank(f.Severity) < minRank {
-					continue
-				}
-				filtered = append(filtered, f)
-			}
-
-			fmt.Fprintf(out, "analyze: %d files scanned, %d rules run, %d findings [%s]\n",
-				res.FilesScanned, res.RulesRun, len(filtered), res.Duration.Round(time.Millisecond))
-
-			for _, f := range filtered {
-				loc := f.TargetURI
-				if f.Span != nil {
-					loc = fmt.Sprintf("%s:%d", loc, f.Span.StartLine)
-				}
-				fmt.Fprintf(out, "  [%s] %-30s %s\n  %s\n", f.Severity, f.RuleID, loc, f.Message)
-			}
-			return nil
-		},
-	}
-
-	cmd.Flags().StringVar(&category, "category", "", "Filter output to one category")
-	cmd.Flags().StringVar(&minSeverity, "min-severity", "", "Filter output to findings at or above this severity (info|low|medium|high|critical)")
-	return cmd
-}
-
 func findingsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "findings",
@@ -156,7 +89,7 @@ func findingsCmd() *cobra.Command {
 func findingsListCmd() *cobra.Command {
 	var category, minSeverity, scope string
 	var limit int
-	var asJSON bool
+	var asJSON, includeAmbiguous bool
 
 	cmd := &cobra.Command{
 		Use:   "list",
@@ -173,10 +106,11 @@ func findingsListCmd() *cobra.Command {
 			defer gs.Close()
 
 			views, err := analyze.List(cmd.Context(), gs, analyze.ListOptions{
-				Category:    category,
-				MinSeverity: analyze.Severity(minSeverity),
-				Scope:       scope,
-				Limit:       limit,
+				Category:         category,
+				MinSeverity:      analyze.Severity(minSeverity),
+				Scope:            scope,
+				Limit:            limit,
+				IncludeAmbiguous: includeAmbiguous,
 			})
 			if err != nil {
 				return err
@@ -211,6 +145,7 @@ func findingsListCmd() *cobra.Command {
 	cmd.Flags().StringVar(&scope, "scope", "", "Substring match against target_uri (e.g. 'internal/auth')")
 	cmd.Flags().IntVar(&limit, "limit", 0, "Max findings to return (0 = unlimited)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Output JSON")
+	cmd.Flags().BoolVar(&includeAmbiguous, "include-ambiguous", false, "Include low-confidence AMBIGUOUS LLM findings")
 	return cmd
 }
 
@@ -1006,13 +941,19 @@ run). The 'chiton extract submit' CLI is the alternative write path.`,
 // not fatal — the structural tools must still serve.
 func buildSemanticDeps(cmd *cobra.Command, cfg *config.Config, gs store.GraphStore, clusterResults *cluster.Results) mcpsrv.Deps {
 	errOut := cmd.ErrOrStderr()
+
+	// The LLM-rule and diff tools depend only on the graph store, never on the
+	// embedder, so wire them first — a misconfigured embedding provider must not
+	// take the Phase 2.5 analysis tools offline.
+	var deps mcpsrv.Deps
+	deps.LLM = analyze.NewLLMService(gs, nil, cfg.Semantic.ConfidenceThreshold, ".chiton")
+	deps.BaselineDir = analyze.BaselineDir(".chiton")
+
 	emb, err := newEmbedder(cfg, "", "")
 	if err != nil {
 		fmt.Fprintf(errOut, "serve: warning: embeddings disabled: %v\n", err)
-		return mcpsrv.Deps{}
+		return deps
 	}
-
-	var deps mcpsrv.Deps
 	deps.Extractor = subagent.New(gs, emb, cfg.Semantic.ConfidenceThreshold)
 
 	es, ok := gs.(store.EmbeddingStore)

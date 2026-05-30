@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Eric-Fernald/chiton/internal/analyze"
@@ -109,5 +110,220 @@ func helper() {}
 	}
 	if findings == 0 {
 		t.Fatal("expected finding nodes in store")
+	}
+}
+
+// TestAnalyzePrunesResolvedFindings confirms that re-analysing a file after the
+// offending code is removed deletes the stale deterministic finding, so the
+// store reflects live truth and --diff can report it as resolved.
+func TestAnalyzePrunesResolvedFindings(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	leaky := filepath.Join(tmp, "leaky.go")
+	if err := os.WriteFile(leaky, []byte("package main\n\nconst Key = \"AKIAIOSFODNN7EXAMPLE\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	gs, err := badgerstore.Open(filepath.Join(tmp, "graph.badger"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gs.Close()
+
+	az := analyze.New(gs, nil)
+	if _, err := az.Analyze(ctx, tmp); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := analyze.List(ctx, gs, analyze.ListOptions{Category: "security"})
+	if len(before) == 0 {
+		t.Fatal("expected a secret finding on first analyze")
+	}
+
+	// Remove the secret and re-analyze.
+	if err := os.WriteFile(leaky, []byte("package main\n\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := az.Analyze(ctx, tmp); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := analyze.List(ctx, gs, analyze.ListOptions{Category: "security"})
+	if len(after) != 0 {
+		t.Fatalf("expected the resolved finding to be pruned, still have %d: %+v", len(after), after)
+	}
+}
+
+// TestPruneDoesNotDeleteLLMFindings confirms a deterministic re-scan never
+// prunes LLM (rule_provenance=LLM) findings — they have their own lifecycle.
+func TestPruneDoesNotDeleteLLMFindings(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	clean := filepath.Join(tmp, "clean.go")
+	if err := os.WriteFile(clean, []byte("package main\n\nfunc helper() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gs, err := badgerstore.Open(filepath.Join(tmp, "graph.badger"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gs.Close()
+
+	absClean, _ := filepath.Abs(clean)
+	uri := "file://" + filepath.ToSlash(absClean)
+	llm := analyze.NewLLMService(gs, nil, 0.5, filepath.Join(tmp, ".chiton"))
+	if _, err := llm.Submit(ctx, analyze.LLMResult{
+		TaskID: "t1", RuleID: "llm/injection-risk", TargetURI: uri,
+		Findings: []analyze.LLMFindingResult{{Line: 3, Message: "untrusted flow", Confidence: 0.9}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A deterministic analyze over the same file must not touch the LLM finding.
+	if _, err := analyze.New(gs, nil).Analyze(ctx, tmp); err != nil {
+		t.Fatal(err)
+	}
+	all, _ := gs.AllNodes(ctx)
+	var llmFindings int
+	for _, n := range all {
+		if n.Kind == model.KindFinding {
+			if rp, _ := n.Attrs["rule_provenance"].(string); rp == "LLM" {
+				llmFindings++
+			}
+		}
+	}
+	if llmFindings != 1 {
+		t.Fatalf("deterministic analyze deleted an LLM finding: want 1, got %d", llmFindings)
+	}
+}
+
+// TestPruneRespectsScanScope confirms a partial `analyze <subdir>` never prunes
+// findings for files outside the scanned scope.
+func TestPruneRespectsScanScope(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	dirA := filepath.Join(tmp, "a")
+	dirB := filepath.Join(tmp, "b")
+	if err := os.MkdirAll(dirA, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dirB, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	secret := "package p\n\nconst Key = \"AKIAIOSFODNN7EXAMPLE\"\n"
+	if err := os.WriteFile(filepath.Join(dirA, "a.go"), []byte(secret), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dirB, "b.go"), []byte(secret), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gs, err := badgerstore.Open(filepath.Join(tmp, "graph.badger"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gs.Close()
+
+	az := analyze.New(gs, nil)
+	if _, err := az.Analyze(ctx, tmp); err != nil {
+		t.Fatal(err)
+	}
+	if got := secretCount(ctx, t, gs); got != 2 {
+		t.Fatalf("want 2 secret findings after full scan, got %d", got)
+	}
+
+	// Fix A's secret and analyze ONLY dirA. B's finding must remain.
+	if err := os.WriteFile(filepath.Join(dirA, "a.go"), []byte("package p\n\nfunc f() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := az.Analyze(ctx, dirA); err != nil {
+		t.Fatal(err)
+	}
+	views, _ := analyze.List(ctx, gs, analyze.ListOptions{Category: "security"})
+	if len(views) != 1 {
+		t.Fatalf("scoped analyze should leave B's finding intact: want 1, got %d: %+v", len(views), views)
+	}
+	if !strings.Contains(views[0].TargetURI, "/b/") {
+		t.Fatalf("surviving finding should be B's, got %s", views[0].TargetURI)
+	}
+}
+
+func secretCount(ctx context.Context, t *testing.T, gs *badgerstore.Store) int {
+	t.Helper()
+	views, err := analyze.List(ctx, gs, analyze.ListOptions{Category: "security"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(views)
+}
+
+// TestDiffEndToEnd exercises the real path the --diff feature ships: Analyze a
+// repo, snapshot a baseline from the store, change the code, re-Analyze (which
+// prunes resolved findings), and assert Diff reports exactly the right
+// new/resolved set — and that a surviving finding's stable FindingID keeps it
+// out of BOTH new and resolved.
+func TestDiffEndToEnd(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	// File 1 keeps a stable secret across both scans; file 2's secret is removed.
+	keep := filepath.Join(tmp, "keep.go")
+	gone := filepath.Join(tmp, "gone.go")
+	secret := func(name string) string {
+		return "package p\n\nconst " + name + " = \"AKIAIOSFODNN7EXAMPLE\"\n"
+	}
+	if err := os.WriteFile(keep, []byte(secret("K")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gone, []byte(secret("G")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gs, err := badgerstore.Open(filepath.Join(tmp, "graph.badger"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gs.Close()
+
+	az := analyze.New(gs, nil)
+	if _, err := az.Analyze(ctx, tmp); err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := analyze.CurrentFindings(ctx, gs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Remove gone.go's secret and add a brand-new offence in a third file.
+	if err := os.WriteFile(gone, []byte("package p\n\nfunc g() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "new.go"), []byte(secret("N")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := az.Analyze(ctx, tmp); err != nil {
+		t.Fatal(err)
+	}
+	current, err := analyze.CurrentFindings(ctx, gs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d := analyze.Diff(baseline, current)
+	countSecret := func(fs []analyze.FindingView) int {
+		n := 0
+		for _, f := range fs {
+			if f.RuleID == "security/hardcoded-secret" {
+				n++
+			}
+		}
+		return n
+	}
+	if countSecret(d.New) != 1 {
+		t.Fatalf("want 1 new secret (new.go), got %d: %+v", countSecret(d.New), d.New)
+	}
+	if countSecret(d.Resolved) != 1 {
+		t.Fatalf("want 1 resolved secret (gone.go), got %d: %+v", countSecret(d.Resolved), d.Resolved)
+	}
+	// keep.go's secret has a stable FindingID → neither new nor resolved.
+	for _, f := range append(append([]analyze.FindingView{}, d.New...), d.Resolved...) {
+		if f.RuleID == "security/hardcoded-secret" && strings.Contains(f.TargetURI, "keep.go") {
+			t.Fatalf("stable finding spuriously reported as new/resolved: %+v", f)
+		}
 	}
 }

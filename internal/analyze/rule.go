@@ -88,9 +88,9 @@ type FileTarget struct {
 	Path     string
 	URI      string // canonical source_uri for the file node
 	Content  []byte
-	FileNode model.Node    // file node already in the graph
-	Nodes    []model.Node  // symbols extracted from this file (excluding the file node)
-	Edges    []model.Edge  // edges whose Src or Dst is in this file
+	FileNode model.Node   // file node already in the graph
+	Nodes    []model.Node // symbols extracted from this file (excluding the file node)
+	Edges    []model.Edge // edges whose Src or Dst is in this file
 }
 
 // GraphTarget is the input to a GraphScope rule.
@@ -116,4 +116,24 @@ type FileRule interface {
 type GraphRule interface {
 	Rule
 	MatchGraph(ctx context.Context, t GraphTarget) []Finding
+}
+
+// LLMRule is a rule evaluated by a host-assistant LLM via subagent dispatch
+// rather than by Go code — for the cases deterministic AST rules can't cover
+// (design-rationale mismatch, abstraction leaks, undocumented side effects,
+// contract-vs-comment violations, etc.). chiton never calls an LLM itself:
+// analyze emits one task spec per (rule, file) and ingests the structured
+// findings the host returns, tagged INFERRED (or AMBIGUOUS below the
+// confidence threshold).
+//
+// Its Meta must set Provenance=ProvenanceLLM and Scope=FileScope. Languages
+// filters which files the rule applies to; Severity is the default severity
+// for the findings it produces. An LLMRule does NOT implement FileRule or
+// GraphRule, so the deterministic analyzer skips it.
+type LLMRule interface {
+	Rule
+	// Prompt returns the instruction block describing what to look for. The
+	// code under inspection is supplied separately as the task input, so the
+	// prompt must never reference a specific file or smuggle in input.
+	Prompt() string
 }

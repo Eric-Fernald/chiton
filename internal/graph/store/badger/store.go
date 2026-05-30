@@ -30,14 +30,22 @@ const (
 
 // Store is a BadgerDB-backed GraphStore.
 type Store struct {
-	db *badgerdb.DB
+	db       *badgerdb.DB
+	readOnly bool
 }
 
 // Compile-time checks that Store satisfies the store interfaces.
 var (
 	_ store.GraphStore     = (*Store)(nil)
 	_ store.EmbeddingStore = (*Store)(nil)
+	_ store.NodeDeleter    = (*Store)(nil)
+	_ store.ReadOnlyAware  = (*Store)(nil)
 )
+
+// ReadOnly reports whether the store was opened read-only. Callers use this to
+// fail write operations early with an actionable message instead of surfacing a
+// raw Badger "read-only transaction" error.
+func (s *Store) ReadOnly() bool { return s.readOnly }
 
 // Options configures store opens. The zero value is a plaintext store with
 // default Badger settings — historic callers can keep using Open/OpenReadOnly.
@@ -75,7 +83,7 @@ func OpenReadOnlyWith(path string, opts Options) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open badger at %s: %w", path, err)
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, readOnly: true}, nil
 }
 
 // applyEncryption layers Badger encryption options on top of bopts when key
@@ -449,6 +457,56 @@ func (s *Store) DeleteBySourceURI(_ context.Context, uri string) (int, error) {
 		}
 	}
 	return len(toDelete), wb.Flush()
+}
+
+// DeleteByIDs deletes nodes by their IDs, along with their embeddings and
+// adjacent edges. Unlike DeleteBySourceURI it does point lookups keyed by ID
+// (no full node-space scan per ID), so pruning K findings costs O(K) not
+// O(K·N). IDs that do not exist are skipped. Returns the number deleted.
+func (s *Store) DeleteByIDs(_ context.Context, ids []string) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	wb := s.db.NewWriteBatch()
+	deleted := 0
+	for _, id := range ids {
+		var present bool
+		if err := s.db.View(func(txn *badgerdb.Txn) error {
+			if _, err := txn.Get(nodeKey(id)); err != nil {
+				if err == badgerdb.ErrKeyNotFound {
+					return nil
+				}
+				return err
+			}
+			present = true
+			adjEdges, err := adjacentEdges(txn, id)
+			if err != nil {
+				return err
+			}
+			for _, e := range adjEdges {
+				_ = wb.Delete(edgeKey(e.ID))
+				_ = wb.Delete(srcKey(e))
+				_ = wb.Delete(dstKey(e))
+			}
+			return nil
+		}); err != nil {
+			wb.Cancel()
+			return 0, err
+		}
+		if !present {
+			continue
+		}
+		if err := wb.Delete(nodeKey(id)); err != nil {
+			wb.Cancel()
+			return 0, err
+		}
+		if err := wb.Delete(embKey(id)); err != nil {
+			wb.Cancel()
+			return 0, err
+		}
+		deleted++
+	}
+	return deleted, wb.Flush()
 }
 
 // SearchNodes returns all nodes whose label contains query (case-insensitive).
