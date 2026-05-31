@@ -46,7 +46,7 @@ func UpsertRulesBlock(path, content string) (created, preexisted bool, err error
 		next = strings.TrimRight(string(existing), "\n") + "\n\n" + block + "\n"
 	}
 
-	if err := os.WriteFile(path, []byte(next), 0o644); err != nil {
+	if err := writeFileAtomic(path, []byte(next), 0o644); err != nil {
 		return false, false, fmt.Errorf("write %s: %w", path, err)
 	}
 	return created, preexisted, nil
@@ -74,7 +74,7 @@ func RemoveRulesBlock(path string) (changed bool, err error) {
 		}
 		return true, nil
 	}
-	if err := os.WriteFile(path, []byte(next), 0o644); err != nil {
+	if err := writeFileAtomic(path, []byte(next), 0o644); err != nil {
 		return true, fmt.Errorf("write %s: %w", path, err)
 	}
 	return true, nil
@@ -97,11 +97,28 @@ func replaceBlock(text, block string) string {
 	startIdx := strings.Index(text, ChitonBlockStart)
 	endIdx := strings.Index(text, ChitonBlockEnd)
 	if startIdx < 0 || endIdx < 0 || endIdx < startIdx {
-		// Malformed: append a fresh block at the end instead of clobbering.
-		return strings.TrimRight(text, "\n") + "\n\n" + block + "\n"
+		// Malformed (e.g. a stray end marker before any start): strip any partial
+		// chiton regions and append a fresh block instead of clobbering user text.
+		return strings.TrimRight(stripAllBlocks(text), "\n") + "\n\n" + block + "\n"
 	}
 	endIdx += len(ChitonBlockEnd)
-	return text[:startIdx] + block + text[endIdx:]
+	// Replace the first block in place, then strip any further chiton blocks from
+	// the tail so a duplicated or leftover block (from a manual edit or a prior
+	// race) cannot survive — the file ends with exactly one canonical block.
+	return text[:startIdx] + block + stripAllBlocks(text[endIdx:])
+}
+
+// stripAllBlocks removes every well-formed chiton block from text, leaving all
+// surrounding user content intact.
+func stripAllBlocks(text string) string {
+	for strings.Contains(text, ChitonBlockStart) && strings.Contains(text, ChitonBlockEnd) {
+		next := stripBlock(text)
+		if next == text {
+			break // no progress (malformed ordering) — avoid an infinite loop
+		}
+		text = next
+	}
+	return text
 }
 
 func stripBlock(text string) string {

@@ -238,6 +238,8 @@ func (r *RustExtractor) ExtractFile(_ context.Context, path string) ([]model.Nod
 		}
 	}
 
+	ambiguous := ambiguousBareNames(symbols)
+
 	// Pass 2: CALLS edges.
 	for _, fr := range funcs {
 		bodyDepth := 0
@@ -258,7 +260,7 @@ func (r *RustExtractor) ExtractFile(_ context.Context, path string) ([]model.Nod
 						continue
 					}
 					calleeID, ok := symbols[calleeName]
-					if !ok || calleeID == fr.id {
+					if !ok || calleeID == fr.id || ambiguous[calleeName] {
 						continue
 					}
 					addEdge(callsEdge(fr.id, calleeID))

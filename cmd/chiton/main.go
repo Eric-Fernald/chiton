@@ -377,7 +377,11 @@ func buildCmd() *cobra.Command {
 
 			walkErr := filepath.WalkDir(args[0], func(path string, d fs.DirEntry, err error) error {
 				if err != nil {
-					return err
+					// A traversal error (e.g. a permission-denied subdirectory)
+					// shouldn't abort the whole build and discard cache progress;
+					// log it and keep indexing the rest of the tree.
+					fmt.Fprintf(os.Stderr, "chiton: skip %s: %v\n", path, err)
+					return nil
 				}
 				ex := extast.ForFile(path)
 				if d.IsDir() || ex == nil {
@@ -419,12 +423,14 @@ func buildCmd() *cobra.Command {
 				totalEdges += len(edges)
 				return nil
 			})
+			// Persist cache progress even if the walk aborted (e.g. an upsert
+			// error), so a partial build still skips files already indexed.
+			saveErr := ch.Save()
 			if walkErr != nil {
 				return walkErr
 			}
-
-			if err := ch.Save(); err != nil {
-				return fmt.Errorf("save cache: %w", err)
+			if saveErr != nil {
+				return fmt.Errorf("save cache: %w", saveErr)
 			}
 
 			fmt.Fprintf(out, "build: done â€” %d files scanned, %d skipped (unchanged), %d nodes, %d edges [%s]\n",

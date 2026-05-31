@@ -185,6 +185,8 @@ func (p *PythonExtractor) ExtractFile(_ context.Context, path string) ([]model.N
 		}
 	}
 
+	ambiguous := ambiguousBareNames(symbols)
+
 	// Pass 2: CALLS edges — scan each function's body lines for calls.
 	for _, fr := range funcs {
 		for i := fr.lineStart + 1; i < len(lines); i++ {
@@ -199,7 +201,7 @@ func (p *PythonExtractor) ExtractFile(_ context.Context, path string) ([]model.N
 			for _, m := range rePyCall.FindAllStringSubmatch(bodyLine, -1) {
 				calleeName := m[1]
 				calleeID, ok := symbols[calleeName]
-				if !ok || calleeID == fr.id {
+				if !ok || calleeID == fr.id || ambiguous[calleeName] {
 					continue
 				}
 				addEdge(callsEdge(fr.id, calleeID))

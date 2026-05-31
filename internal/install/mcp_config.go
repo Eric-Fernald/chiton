@@ -63,7 +63,11 @@ func WriteMCPConfig(path string, entry any) (created, preexisted bool, err error
 		doc = map[string]any{}
 	}
 
-	servers, _ := doc["mcpServers"].(map[string]any)
+	raw, present := doc["mcpServers"]
+	servers, ok := raw.(map[string]any)
+	if present && !ok {
+		return false, false, fmt.Errorf("refusing to overwrite %s: \"mcpServers\" is not a JSON object", path)
+	}
 	if servers == nil {
 		servers = map[string]any{}
 	}
@@ -76,7 +80,7 @@ func WriteMCPConfig(path string, entry any) (created, preexisted bool, err error
 		return false, false, fmt.Errorf("marshal %s: %w", path, err)
 	}
 	created = len(existing) == 0
-	if err := os.WriteFile(path, append(out, '\n'), 0o644); err != nil {
+	if err := writeFileAtomic(path, append(out, '\n'), 0o644); err != nil {
 		return false, false, fmt.Errorf("write %s: %w", path, err)
 	}
 	return created, preexisted, nil
@@ -125,7 +129,7 @@ func RemoveMCPConfigEntry(path string) (changed bool, err error) {
 	if err != nil {
 		return true, fmt.Errorf("marshal %s: %w", path, err)
 	}
-	if err := os.WriteFile(path, append(out, '\n'), 0o644); err != nil {
+	if err := writeFileAtomic(path, append(out, '\n'), 0o644); err != nil {
 		return true, fmt.Errorf("write %s: %w", path, err)
 	}
 	return true, nil

@@ -55,7 +55,7 @@ func AddAiderRead(path, file string) (created, preexisted bool, err error) {
 		return false, false, fmt.Errorf("marshal %s: %w", path, err)
 	}
 	created = len(existing) == 0
-	if err := os.WriteFile(path, out, 0o644); err != nil {
+	if err := writeFileAtomic(path, out, 0o644); err != nil {
 		return false, false, fmt.Errorf("write %s: %w", path, err)
 	}
 	return created, preexisted, nil
@@ -110,7 +110,7 @@ func RemoveAiderRead(path, file string) (changed bool, err error) {
 	if err != nil {
 		return true, fmt.Errorf("marshal %s: %w", path, err)
 	}
-	if err := os.WriteFile(path, out, 0o644); err != nil {
+	if err := writeFileAtomic(path, out, 0o644); err != nil {
 		return true, fmt.Errorf("write %s: %w", path, err)
 	}
 	return true, nil

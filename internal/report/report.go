@@ -37,7 +37,10 @@ func Generate(w io.Writer, results *cluster.Results, edges []model.Edge, opts Op
 		all = append(all, entry{id, r})
 	}
 	sort.Slice(all, func(i, j int) bool {
-		return all[i].r.Betweenness > all[j].r.Betweenness
+		if all[i].r.Betweenness != all[j].r.Betweenness {
+			return all[i].r.Betweenness > all[j].r.Betweenness
+		}
+		return all[i].id < all[j].id // stable tie-break so output is reproducible
 	})
 
 	limit := opts.MaxGodNodes
@@ -69,7 +72,10 @@ func Generate(w io.Writer, results *cluster.Results, edges []model.Edge, opts Op
 	for _, cid := range commIDs {
 		members := byComm[cid]
 		sort.Slice(members, func(i, j int) bool {
-			return members[i].Betweenness > members[j].Betweenness
+			if members[i].Betweenness != members[j].Betweenness {
+				return members[i].Betweenness > members[j].Betweenness
+			}
+			return members[i].SourceURI < members[j].SourceURI // stable tie-break
 		})
 		fmt.Fprintf(w, "### Community %d (%d nodes)\n\n", cid, len(members))
 		cap := opts.MaxPerCommunity

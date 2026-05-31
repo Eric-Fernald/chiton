@@ -61,7 +61,13 @@ for CI and demos). Restart 'chiton serve' afterwards to load the new vectors.`,
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(out, "embed: provider=%s model=%s\n", cfg.Embed.Provider, emb.Model())
+			// Report the provider actually in use, honoring the --provider override
+			// rather than the (possibly superseded) config value.
+			effectiveProvider := cfg.Embed.Provider
+			if provider != "" {
+				effectiveProvider = provider
+			}
+			fmt.Fprintf(out, "embed: provider=%s model=%s\n", effectiveProvider, emb.Model())
 
 			ctx := cmd.Context()
 			nodes, err := gs.AllNodes(ctx)

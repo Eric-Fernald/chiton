@@ -164,3 +164,28 @@ func countLineBraces(line string, inBlock bool) (open, close int, stillInBlock b
 func indentLen(s string) int {
 	return len(s) - len(strings.TrimLeft(s, " \t"))
 }
+
+// ambiguousBareNames returns the set of bare symbol names that map to more than
+// one distinct symbol — e.g. two classes each defining a method "parse". The
+// regex extractors register both a bare name and a "Class.method" qualified name
+// per method, so when two qualified names share a suffix the bare name resolves
+// ambiguously. Pass-2 callers skip emitting a CALLS edge for such names rather
+// than point it at whichever same-named symbol happened to be registered last.
+func ambiguousBareNames(symbols map[string]string) map[string]bool {
+	ambiguous := map[string]bool{}
+	firstID := map[string]string{}
+	for key, id := range symbols {
+		bare := key
+		if i := strings.LastIndex(key, "."); i >= 0 {
+			bare = key[i+1:]
+		}
+		if prev, ok := firstID[bare]; ok {
+			if prev != id {
+				ambiguous[bare] = true
+			}
+		} else {
+			firstID[bare] = id
+		}
+	}
+	return ambiguous
+}

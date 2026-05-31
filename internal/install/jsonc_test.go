@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -58,6 +59,52 @@ func TestWriteMCPConfigAcceptsJSONC(t *testing.T) {
 	servers, _ := doc["mcpServers"].(map[string]any)
 	if _, ok := servers["other"]; !ok {
 		t.Error("pre-existing 'other' server was dropped")
+	}
+}
+
+// TestWriteMCPConfigRejectsNonObject verifies a present-but-non-object
+// "mcpServers" value is refused (error) rather than silently discarded, so a
+// malformed config is never clobbered.
+func TestWriteMCPConfigRejectsNonObject(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mcp.json")
+	if err := os.WriteFile(path, []byte(`{"mcpServers": "oops-a-string"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	original, _ := os.ReadFile(path)
+	if _, _, err := WriteMCPConfig(path, ChitonServerEntry("chiton", "")); err == nil {
+		t.Fatal("expected an error when mcpServers is not an object")
+	}
+	// The original file must be untouched (no clobber).
+	now, _ := os.ReadFile(path)
+	if string(now) != string(original) {
+		t.Errorf("file was modified despite the error:\n%s", now)
+	}
+}
+
+// TestUpsertRulesBlockCollapsesDuplicates verifies a file that somehow contains
+// two chiton blocks ends with exactly one after an upsert.
+func TestUpsertRulesBlockCollapsesDuplicates(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "CLAUDE.md")
+	dup := "# My notes\n\n" +
+		ChitonBlockStart + "\nold one\n" + ChitonBlockEnd + "\n\n" +
+		"middle user text\n\n" +
+		ChitonBlockStart + "\nold two\n" + ChitonBlockEnd + "\n"
+	if err := os.WriteFile(path, []byte(dup), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := UpsertRulesBlock(path, "fresh content"); err != nil {
+		t.Fatalf("UpsertRulesBlock: %v", err)
+	}
+	out, _ := os.ReadFile(path)
+	if n := strings.Count(string(out), ChitonBlockStart); n != 1 {
+		t.Fatalf("expected exactly 1 chiton block, got %d:\n%s", n, out)
+	}
+	if !strings.Contains(string(out), "fresh content") {
+		t.Errorf("canonical block content missing:\n%s", out)
+	}
+	if !strings.Contains(string(out), "middle user text") {
+		t.Errorf("user text between blocks was lost:\n%s", out)
 	}
 }
 

@@ -39,6 +39,10 @@ func semanticSearchTool() mcplib.Tool {
 			mcplib.Min(500),
 			mcplib.Max(16000),
 		),
+		mcplib.WithArray("edge_kinds",
+			mcplib.Description("Filter graph expansion to these edge types e.g. [\"CALLS\",\"IMPORTS\"]. Empty = all kinds."),
+			mcplib.WithStringItems(),
+		),
 		mcplib.WithString("source_prefix",
 			mcplib.Description("Only return nodes whose source_uri contains this substring (scope to a package/corpus)"),
 		),
@@ -63,9 +67,9 @@ func semanticSearchHandler(eng *retrieve.Engine) mcpsdk.ToolHandlerFunc {
 			kinds = append(kinds, model.EdgeKind(strings.ToUpper(k)))
 		}
 		res, err := eng.Query(ctx, query, retrieve.Options{
-			SeedK:            req.GetInt("k", 8),
-			Hops:             req.GetInt("hops", 1),
-			MaxTokens:        req.GetInt("max_tokens", 4000),
+			SeedK:            clampInt(req.GetInt("k", 8), 1, 50),
+			Hops:             clampInt(req.GetInt("hops", 1), 0, 3),
+			MaxTokens:        clampInt(req.GetInt("max_tokens", 4000), 500, 16000),
 			EdgeKinds:        kinds,
 			SourcePrefix:     req.GetString("source_prefix", ""),
 			IncludeAmbiguous: req.GetBool("include_ambiguous", false),
@@ -123,7 +127,7 @@ func pendingExtractionsHandler(svc *subagent.Service) mcpsdk.ToolHandlerFunc {
 		if svc == nil {
 			return mcplib.NewToolResultText("extraction unavailable — the server was started without a graph store."), nil
 		}
-		specs, err := svc.Pending(ctx, req.GetString("kind", ""), req.GetInt("limit", 20))
+		specs, err := svc.Pending(ctx, req.GetString("kind", ""), clampInt(req.GetInt("limit", 20), 1, 200))
 		if err != nil {
 			return mcplib.NewToolResultErrorFromErr("pending extractions failed", err), nil
 		}

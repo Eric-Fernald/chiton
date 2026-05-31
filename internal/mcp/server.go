@@ -141,6 +141,20 @@ func shortestPathTool() mcplib.Tool {
 
 // --- handlers ---
 
+// clampInt bounds v to [lo, hi]. Tool inputs need this because mcp-go does NOT
+// enforce the schema's Min/Max annotations at dispatch — a client can send an
+// out-of-range integer (e.g. depth=100000) that must be clamped before it
+// reaches the store and drives an unbounded traversal.
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
 func getNodeHandler(gs store.GraphStore) mcpsdk.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		label, err := req.RequireString("label")
@@ -171,7 +185,7 @@ func neighborhoodHandler(gs store.GraphStore) mcpsdk.ToolHandlerFunc {
 		}
 		file := req.GetString("file", "")
 		prefix := req.GetString("source_prefix", "")
-		depth := req.GetInt("depth", 2)
+		depth := clampInt(req.GetInt("depth", 2), 1, 5)
 		kindStrs := req.GetStringSlice("edge_kinds", nil)
 
 		limit := 1
@@ -232,7 +246,7 @@ func queryHandler(gs store.GraphStore) mcpsdk.ToolHandlerFunc {
 		if err != nil {
 			return mcplib.NewToolResultError(err.Error()), nil
 		}
-		limit := req.GetInt("limit", 10)
+		limit := clampInt(req.GetInt("limit", 10), 1, 100)
 		prefix := req.GetString("source_prefix", "")
 		nodes, err := gs.SearchNodes(ctx, query, limit)
 		if err != nil {

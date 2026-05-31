@@ -40,7 +40,11 @@ func WriteCodexConfig(path, exe, graphPath string) (created, preexisted bool, er
 		}
 	}
 
-	servers, _ := doc[codexServersKey].(map[string]any)
+	raw, present := doc[codexServersKey]
+	servers, ok := raw.(map[string]any)
+	if present && !ok {
+		return false, false, fmt.Errorf("refusing to overwrite %s: %q is not a TOML table", path, codexServersKey)
+	}
 	if servers == nil {
 		servers = map[string]any{}
 	}
@@ -56,7 +60,7 @@ func WriteCodexConfig(path, exe, graphPath string) (created, preexisted bool, er
 		return false, false, fmt.Errorf("marshal %s: %w", path, err)
 	}
 	created = len(existing) == 0
-	if err := os.WriteFile(path, out, 0o644); err != nil {
+	if err := writeFileAtomic(path, out, 0o644); err != nil {
 		return false, false, fmt.Errorf("write %s: %w", path, err)
 	}
 	return created, preexisted, nil
@@ -102,7 +106,7 @@ func RemoveCodexEntry(path string) (changed bool, err error) {
 	if err != nil {
 		return true, fmt.Errorf("marshal %s: %w", path, err)
 	}
-	if err := os.WriteFile(path, out, 0o644); err != nil {
+	if err := writeFileAtomic(path, out, 0o644); err != nil {
 		return true, fmt.Errorf("write %s: %w", path, err)
 	}
 	return true, nil

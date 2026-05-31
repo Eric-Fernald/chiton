@@ -294,6 +294,33 @@ func TestLLMPendingKeepsInjectionPayloadInInputOnly(t *testing.T) {
 	}
 }
 
+// TestLLMSubmitRejectsMismatchedTarget verifies a submit whose target_uri names
+// a real file that does not match its task_id is rejected, so it cannot delete
+// another file's findings via replacePriorFindings.
+func TestLLMSubmitRejectsMismatchedTarget(t *testing.T) {
+	ctx := context.Background()
+	gs := newTestStore(t)
+	tmp := t.TempDir()
+	other := filepath.Join(tmp, "other.go")
+	if err := os.WriteFile(other, []byte("package other\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg := NewRegistry()
+	reg.Register(fakeLLMRule{id: "llm/test", cat: CategoryBugs, sev: SeverityHigh, langs: []string{"go"}})
+	svc := NewLLMService(gs, reg, 0.5, filepath.Join(tmp, ".chiton"))
+
+	absOther, _ := filepath.Abs(other)
+	otherURI := "file://" + filepath.ToSlash(absOther)
+	// task_id derived for content that is NOT other.go's → binding mismatch.
+	bogusTaskID := LLMTaskID("llm/test", "deadbeef")
+	if _, err := svc.Submit(ctx, LLMResult{
+		TaskID: bogusTaskID, RuleID: "llm/test", TargetURI: otherURI,
+		Findings: []LLMFindingResult{{Line: 1, Message: "x", Confidence: 0.9}},
+	}); err == nil {
+		t.Fatal("expected submit to reject a target_uri that doesn't match the task_id")
+	}
+}
+
 func TestLLMSubmitValidations(t *testing.T) {
 	ctx := context.Background()
 	gs := newTestStore(t)

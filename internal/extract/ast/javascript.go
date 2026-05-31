@@ -220,11 +220,14 @@ func (j *JavaScriptExtractor) ExtractFile(_ context.Context, path string) ([]mod
 		}
 	}
 
+	ambiguous := ambiguousBareNames(symbols)
+
 	// Pass 2: CALLS edges.
 	for _, fr := range funcs {
 		bodyDepth := 0
 		inBody := false
 		inBlock := false
+		declIndent := indentLen(lines[fr.lineStart])
 		for i := fr.lineStart; i < len(lines); i++ {
 			startedInBlock := inBlock
 			var open, close_ int
@@ -240,7 +243,7 @@ func (j *JavaScriptExtractor) ExtractFile(_ context.Context, path string) ([]mod
 						continue
 					}
 					calleeID, ok := symbols[calleeName]
-					if !ok || calleeID == fr.id {
+					if !ok || calleeID == fr.id || ambiguous[calleeName] {
 						continue
 					}
 					addEdge(callsEdge(fr.id, calleeID))
@@ -249,6 +252,14 @@ func (j *JavaScriptExtractor) ExtractFile(_ context.Context, path string) ([]mod
 			bodyDepth -= close_
 			if inBody && bodyDepth <= 0 {
 				break
+			}
+			// Brace-less arrow / single-expression function: once past the decl
+			// line without entering a brace body, a non-empty line dedented back to
+			// the declaration ends it — stop instead of scanning to EOF.
+			if !inBody && i > fr.lineStart {
+				if t := strings.TrimSpace(lines[i]); t != "" && indentLen(lines[i]) <= declIndent {
+					break
+				}
 			}
 		}
 	}

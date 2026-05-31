@@ -2,6 +2,8 @@ package analyze_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -169,9 +171,13 @@ func TestPruneDoesNotDeleteLLMFindings(t *testing.T) {
 
 	absClean, _ := filepath.Abs(clean)
 	uri := "file://" + filepath.ToSlash(absClean)
+	// task_id must match LLMTaskID(rule, sha(file)) — Submit now verifies the
+	// target_uri binding to prevent cross-file finding deletion.
+	sum := sha256.Sum256([]byte("package main\n\nfunc helper() {}\n"))
+	taskID := analyze.LLMTaskID("llm/injection-risk", hex.EncodeToString(sum[:]))
 	llm := analyze.NewLLMService(gs, nil, 0.5, filepath.Join(tmp, ".chiton"))
 	if _, err := llm.Submit(ctx, analyze.LLMResult{
-		TaskID: "t1", RuleID: "llm/injection-risk", TargetURI: uri,
+		TaskID: taskID, RuleID: "llm/injection-risk", TargetURI: uri,
 		Findings: []analyze.LLMFindingResult{{Line: 3, Message: "untrusted flow", Confidence: 0.9}},
 	}); err != nil {
 		t.Fatal(err)

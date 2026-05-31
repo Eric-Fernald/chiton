@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
@@ -77,6 +78,28 @@ func TestBetweennessNormalized(t *testing.T) {
 	nodes := []model.Node{node("A"), node("B"), node("C"), node("D"), node("E")}
 	edges := []model.Edge{
 		edge("A", "B"), edge("B", "C"), edge("C", "D"), edge("D", "E"),
+	}
+	m := Compute(nodes, edges)
+	for id, nm := range m {
+		if nm.Betweenness < 0 || nm.Betweenness > 1 {
+			t.Errorf("node %s betweenness %f out of [0,1]", id, nm.Betweenness)
+		}
+	}
+}
+
+// TestBetweennessSampledStaysInRange forces the sampled path (graphs larger than
+// samplingThreshold) and verifies normalized betweenness never exceeds 1. The
+// hub of a star sits on every shortest path, so the n/k extrapolation overshoots
+// past 1 without the clamp in normalize.
+func TestBetweennessSampledStaysInRange(t *testing.T) {
+	const n = samplingThreshold + 1000 // > threshold → sampled path
+	nodes := make([]model.Node, n)
+	nodes[0] = node("hub")
+	edges := make([]model.Edge, 0, n-1)
+	for i := 1; i < n; i++ {
+		id := fmt.Sprintf("s%d", i)
+		nodes[i] = node(id)
+		edges = append(edges, edge("hub", id))
 	}
 	m := Compute(nodes, edges)
 	for id, nm := range m {

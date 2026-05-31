@@ -46,7 +46,9 @@ func Load() (*Config, error) {
 	v.SetDefault("embed.provider", "ollama")
 	v.SetDefault("embed.model", "nomic-embed-text")
 	v.SetDefault("embed.endpoint", "http://localhost:11434")
-	v.SetDefault("embed.dim", 768)
+	// No embed.dim default on purpose: leaving it 0 lets each provider apply its
+	// own native dimension (Ollama 768, hash 256) instead of forcing the Ollama
+	// size onto the hash provider. An explicit embed.dim / CHITON_EMBED_DIM wins.
 	v.SetDefault("semantic.confidence_threshold", 0.5)
 
 	// Allow CHITON_EMBED_PROVIDER, CHITON_SEMANTIC_CONFIDENCE_THRESHOLD, etc.

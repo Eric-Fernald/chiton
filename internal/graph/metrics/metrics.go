@@ -181,5 +181,12 @@ func normalize(bet []float64, n int) {
 	norm := float64((n - 1) * (n - 2))
 	for i := range bet {
 		bet[i] /= norm
+		// Sampled betweenness (brandesSampled) extrapolates by n/k, which is
+		// unbiased for the sum but can overshoot per node; clamp to honor the
+		// documented [0,1] range. Exact Brandes never exceeds 1, so this is a
+		// no-op there.
+		if bet[i] > 1 {
+			bet[i] = 1
+		}
 	}
 }

@@ -221,6 +221,43 @@ impl S {
 	})
 }
 
+// TestAmbiguousBareCallsAreSkipped verifies that when two classes define a
+// method with the same bare name, a bare-name call is not misdirected to the
+// wrong class's method — the extractor skips the ambiguous edge entirely.
+func TestAmbiguousBareCallsAreSkipped(t *testing.T) {
+	src := `class A {
+    parse() {
+        return 1;
+    }
+    run() {
+        return parse();
+    }
+}
+
+class B {
+    parse() {
+        return 2;
+    }
+}
+`
+	f := writeTempFile(t, "amb.js", src)
+	nodes, edges, err := (&JavaScriptExtractor{}).ExtractFile(context.Background(), f)
+	if err != nil {
+		t.Fatalf("ExtractFile: %v", err)
+	}
+	id := map[string]string{}
+	for _, n := range nodes {
+		id[n.Label] = n.ID
+	}
+	// `parse` is defined by both A and B, so it is ambiguous; run()'s call to
+	// parse() must not produce a CALLS edge to EITHER method.
+	for _, e := range edges {
+		if e.Kind == model.EdgeCalls && (e.Dst == id["A.parse"] || e.Dst == id["B.parse"]) {
+			t.Errorf("emitted an ambiguous CALLS edge to %q", e.Dst)
+		}
+	}
+}
+
 func TestForFile(t *testing.T) {
 	cases := []struct{ path, wantNil string }{
 		{"main.go", ""},

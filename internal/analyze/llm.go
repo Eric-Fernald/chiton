@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	extast "github.com/Eric-Fernald/chiton/internal/extract/ast"
@@ -95,6 +96,9 @@ type LLMService struct {
 	threshold float32
 	stateDir  string
 	now       func() time.Time
+	// stateMu serializes the load→mutate→save of the JSON completion sidecar so
+	// concurrent submit_analysis calls don't lose each other's entries.
+	stateMu sync.Mutex
 }
 
 // NewLLMService builds a Service. reg=nil uses the default registry;
@@ -255,6 +259,14 @@ func (s *LLMService) Submit(ctx context.Context, r LLMResult) (LLMReport, error)
 	if _, ok := rule.(LLMRule); !ok {
 		return LLMReport{}, fmt.Errorf("submit: rule %q is not an LLM rule", r.RuleID)
 	}
+	// Bind the submitted target_uri to the task: the task ID is
+	// LLMTaskID(rule, content_sha), so re-deriving it from the named file's
+	// current content must reproduce r.TaskID. This stops a buggy or adversarial
+	// submit from naming a *different* file's URI and deleting that file's
+	// findings via replacePriorFindings below.
+	if err := s.verifyTaskBinding(r.TaskID, r.RuleID, r.TargetURI); err != nil {
+		return LLMReport{}, err
+	}
 	m := rule.Meta()
 	now := s.now()
 	rep := LLMReport{TaskID: r.TaskID}
@@ -352,6 +364,7 @@ func (s *LLMService) Submit(ctx context.Context, r LLMResult) (LLMReport, error)
 	// entry for the same (rule, file) — its content SHA is stale now — so the
 	// sidecar holds at most one entry per (rule, file) instead of growing by one
 	// per historical file version.
+	s.stateMu.Lock()
 	state := s.loadState()
 	for id, e := range state.Analyzed {
 		if e.RuleID == r.RuleID && e.TargetURI == r.TargetURI {
@@ -359,10 +372,45 @@ func (s *LLMService) Submit(ctx context.Context, r LLMResult) (LLMReport, error)
 		}
 	}
 	state.Analyzed[r.TaskID] = llmStateEntry{RuleID: r.RuleID, TargetURI: r.TargetURI, At: now}
-	if err := s.saveState(state); err != nil {
-		return LLMReport{}, fmt.Errorf("save analysis state: %w", err)
+	saveErr := s.saveState(state)
+	s.stateMu.Unlock()
+	if saveErr != nil {
+		return LLMReport{}, fmt.Errorf("save analysis state: %w", saveErr)
 	}
 	return rep, nil
+}
+
+// verifyTaskBinding confirms the submitted task_id was issued for target_uri, by
+// re-deriving LLMTaskID(rule, sha(file)) from the named file's current content.
+// A mismatch means a wrong file was named, or the file changed since the task
+// was issued — either way the scoped delete in replacePriorFindings must not run
+// against this target. Skipped for an empty/non-file target or an unreadable
+// file (a missing file has no findings to clobber; the live flow names a real
+// file with unchanged content).
+func (s *LLMService) verifyTaskBinding(taskID, ruleID, targetURI string) error {
+	path, ok := pathFromFileURI(targetURI)
+	if !ok {
+		return nil
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	sum := sha256.Sum256(content)
+	if want := LLMTaskID(ruleID, hex.EncodeToString(sum[:])); want != taskID {
+		return fmt.Errorf("submit: task_id does not match rule %q and target_uri %q "+
+			"(wrong file, or the file changed since the task was issued — re-run pending_analyses)", ruleID, targetURI)
+	}
+	return nil
+}
+
+// pathFromFileURI converts a "file://<slash-path>" URI back to an OS path.
+func pathFromFileURI(uri string) (string, bool) {
+	const pfx = "file://"
+	if !strings.HasPrefix(uri, pfx) {
+		return "", false
+	}
+	return filepath.FromSlash(strings.TrimPrefix(uri, pfx)), true
 }
 
 // replacePriorFindings deletes LLM finding nodes for the given (rule, file) that

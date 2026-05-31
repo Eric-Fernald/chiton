@@ -641,8 +641,14 @@ func decodeVec(b []byte) []float32 {
 	return vec
 }
 
-// GodNodes returns the top-limit nodes ranked by attrs["betweenness"] descending.
-// If communityID is non-nil, only nodes whose CommunityID matches are included.
+// GodNodes returns the top-limit nodes ranked by attrs["betweenness"] descending,
+// with a stable node-ID tie-break. If communityID is non-nil, only nodes whose
+// CommunityID matches are included.
+//
+// Note: `chiton cluster` writes betweenness (and community) to the cluster
+// sidecar, which the live god_nodes MCP tool overlays — it does NOT populate
+// attrs["betweenness"] here. So unless a caller has written that attr, every node
+// scores 0 and results fall back to the stable ID order. See store.GodNodes.
 func (s *Store) GodNodes(_ context.Context, communityID *int, limit int) ([]model.Node, error) {
 	var candidates []model.Node
 	err := s.db.View(func(txn *badgerdb.Txn) error {
@@ -690,12 +696,14 @@ func (s *Store) GodNodes(_ context.Context, communityID *int, limit int) ([]mode
 
 // sortByBetweenness sorts nodes by betweenness descending using a simple
 // insertion sort (top-k lists are typically small; avoids importing sort).
+// Ties break by node ID ascending so the order is well-defined even when many
+// nodes share a score (e.g. the common all-zero case before betweenness is set).
 func sortByBetweenness(nodes []model.Node, score func(model.Node) float64) {
 	for i := 1; i < len(nodes); i++ {
 		key := nodes[i]
 		ks := score(key)
 		j := i - 1
-		for j >= 0 && score(nodes[j]) < ks {
+		for j >= 0 && (score(nodes[j]) < ks || (score(nodes[j]) == ks && nodes[j].ID > key.ID)) {
 			nodes[j+1] = nodes[j]
 			j--
 		}
