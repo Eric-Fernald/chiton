@@ -134,6 +134,93 @@ public class Processor {
 	assertEdgeKind(t, edges, "IMPORTS")
 }
 
+func TestCountLineBraces(t *testing.T) {
+	cases := []struct {
+		line                string
+		inBlock             bool
+		wantOpen, wantClose int
+		wantStill           bool
+	}{
+		{`if (x) {`, false, 1, 0, false},
+		{`}`, false, 0, 1, false},
+		{`foo(); // } { in a line comment`, false, 0, 0, false},
+		{`a /* } */ b {`, false, 1, 0, false},  // brace in block comment ignored; real { counted
+		{`x /* opens a block`, false, 0, 0, true},
+		{`} still comment } `, true, 0, 0, true}, // wholly inside a block — braces ignored
+		{`done */ {`, true, 1, 0, false},         // block closes, then a real {
+		{`"{ not a brace }"`, false, 0, 0, false}, // string literal
+	}
+	for _, c := range cases {
+		o, cl, still := countLineBraces(c.line, c.inBlock)
+		if o != c.wantOpen || cl != c.wantClose || still != c.wantStill {
+			t.Errorf("countLineBraces(%q, %v) = (%d,%d,%v), want (%d,%d,%v)",
+				c.line, c.inBlock, o, cl, still, c.wantOpen, c.wantClose, c.wantStill)
+		}
+	}
+}
+
+// TestBlockCommentsDoNotCorruptScope verifies a stray brace inside a /* */ block
+// comment does not prematurely pop the enclosing class/impl scope, which used to
+// mis-attribute (or drop) methods declared after the comment.
+func TestBlockCommentsDoNotCorruptScope(t *testing.T) {
+	t.Run("javascript", func(t *testing.T) {
+		src := `class Widget {
+    first() {
+        return 1;
+    }
+    /* a comment with stray braces } and {
+       spanning lines } { still a comment */
+    second() {
+        return 2;
+    }
+}
+`
+		f := writeTempFile(t, "widget.js", src)
+		nodes, _, err := (&JavaScriptExtractor{}).ExtractFile(context.Background(), f)
+		if err != nil {
+			t.Fatalf("ExtractFile: %v", err)
+		}
+		assertLabel(t, nodes, "Widget.first")
+		assertLabel(t, nodes, "Widget.second")
+	})
+
+	t.Run("java", func(t *testing.T) {
+		src := `public class Box {
+    public int a() { return 1; }
+    /* stray } and { inside
+       a block comment } */
+    public int b() { return 2; }
+}
+`
+		f := writeTempFile(t, "Box.java", src)
+		nodes, _, err := (&JavaExtractor{}).ExtractFile(context.Background(), f)
+		if err != nil {
+			t.Fatalf("ExtractFile: %v", err)
+		}
+		assertLabel(t, nodes, "Box.a")
+		assertLabel(t, nodes, "Box.b")
+	})
+
+	t.Run("rust", func(t *testing.T) {
+		src := `struct S;
+
+impl S {
+    fn a(&self) -> i32 { 1 }
+    /* stray } and { in a
+       block comment } { */
+    fn b(&self) -> i32 { 2 }
+}
+`
+		f := writeTempFile(t, "s.rs", src)
+		nodes, _, err := (&RustExtractor{}).ExtractFile(context.Background(), f)
+		if err != nil {
+			t.Fatalf("ExtractFile: %v", err)
+		}
+		assertLabel(t, nodes, "S.a")
+		assertLabel(t, nodes, "S.b")
+	})
+}
+
 func TestForFile(t *testing.T) {
 	cases := []struct{ path, wantNil string }{
 		{"main.go", ""},

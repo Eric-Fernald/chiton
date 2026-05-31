@@ -3,6 +3,7 @@ package subagent
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Eric-Fernald/chiton/internal/embed"
@@ -195,6 +196,79 @@ func TestSubmitDefaultsEdgesToDescribes(t *testing.T) {
 	edges, _ := gs.AllEdges(ctx)
 	if len(edges) != 1 || edges[0].Kind != model.EdgeDescribes || edges[0].Src != "d1" {
 		t.Fatalf("default edge wrong: %+v", edges)
+	}
+}
+
+// TestSubmitDescribesWhenAllEdgesUnresolved verifies that when every declared
+// edge references a concept that was never created, the source still gets a
+// DESCRIBES edge to each concept rather than leaving them orphaned.
+func TestSubmitDescribesWhenAllEdgesUnresolved(t *testing.T) {
+	gs := newStore(t)
+	ctx := context.Background()
+	_ = gs.UpsertNodes(ctx, []model.Node{docSection("d1", "Auth", "jwt auth")})
+
+	svc := New(gs, nil, 0.5)
+	rep, err := svc.Submit(ctx, SubmitResult{
+		TaskID:   "d1",
+		Concepts: []ConceptResult{{Label: "JWT", Confidence: 0.9}},
+		Edges: []EdgeResult{
+			// Non-empty edges, but the target was never created → all skipped.
+			{From: "", To: "Nonexistent", Kind: "DESCRIBES", Confidence: 0.9},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.EdgesAdded != 1 {
+		t.Fatalf("want 1 fallback DESCRIBES edge, got %d", rep.EdgesAdded)
+	}
+	edges, _ := gs.AllEdges(ctx)
+	if len(edges) != 1 || edges[0].Kind != model.EdgeDescribes || edges[0].Src != "d1" {
+		t.Fatalf("expected one DESCRIBES edge from the source, got %+v", edges)
+	}
+	all, _ := gs.AllNodes(ctx)
+	var conceptID string
+	for _, n := range all {
+		if n.Kind == model.KindConcept {
+			conceptID = n.ID
+		}
+	}
+	if conceptID == "" || edges[0].Dst != conceptID {
+		t.Fatalf("concept left orphaned: edge dst %q, concept %q", edges[0].Dst, conceptID)
+	}
+}
+
+// TestSubmitRejectsReadOnlyStore verifies submit fails fast with an actionable
+// message on a read-only store, instead of a raw backend write error after the
+// per-concept embed round-trips.
+func TestSubmitRejectsReadOnlyStore(t *testing.T) {
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "graph.badger")
+	rw, err := badgerstore.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rw.UpsertNodes(ctx, []model.Node{docSection("d1", "Auth", "jwt auth")}); err != nil {
+		t.Fatal(err)
+	}
+	rw.Close()
+
+	ro, err := badgerstore.OpenReadOnly(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ro.Close() })
+
+	svc := New(ro, embed.NewHashEmbedder(64), 0.5)
+	_, err = svc.Submit(ctx, SubmitResult{
+		TaskID:   "d1",
+		Concepts: []ConceptResult{{Label: "JWT", Confidence: 0.9}},
+	})
+	if err == nil {
+		t.Fatal("expected an error submitting to a read-only store")
+	}
+	if !strings.Contains(err.Error(), "read-only") || !strings.Contains(err.Error(), "writable") {
+		t.Fatalf("expected an actionable read-only message, got: %v", err)
 	}
 }
 

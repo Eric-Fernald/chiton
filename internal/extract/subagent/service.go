@@ -151,6 +151,12 @@ func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, err
 	if r.TaskID == "" {
 		return SubmitReport{}, fmt.Errorf("submit: task_id is required")
 	}
+	// Reject a read-only store before doing any work (notably the per-concept
+	// embed round-trips below), mirroring the analyze submit path, so the caller
+	// gets an actionable message instead of a raw backend write error.
+	if ro, ok := s.store.(store.ReadOnlyAware); ok && ro.ReadOnly() {
+		return SubmitReport{}, fmt.Errorf("submit: store is read-only — restart 'chiton serve --writable' or use 'chiton extract submit'")
+	}
 	src, err := s.store.GetNode(ctx, r.TaskID)
 	if err != nil {
 		return SubmitReport{}, fmt.Errorf("load source node: %w", err)
@@ -243,9 +249,11 @@ func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, err
 		rep.EdgesAdded++
 	}
 
-	// If the result declared no edges, default to DESCRIBES from the source to
-	// every extracted concept, so concepts are never orphaned in the graph.
-	if len(r.Edges) == 0 {
+	// If no edges were actually written — the result declared none, OR every
+	// declared edge referenced a concept we didn't create (all skipped above) —
+	// default to DESCRIBES from the source to every extracted concept, so
+	// concepts are never orphaned in the graph.
+	if len(edges) == 0 {
 		for _, c := range r.Concepts {
 			toID, ok := conceptID[strings.TrimSpace(c.Label)]
 			if !ok {

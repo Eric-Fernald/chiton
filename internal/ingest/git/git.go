@@ -81,7 +81,13 @@ func firstParent(root string) (string, bool) {
 // RangeChanges returns the files that differ between two refs (e.g. the old and
 // new HEAD a post-checkout hook receives).
 func RangeChanges(root, from, to string) ([]Change, error) {
-	out, err := run(root, "diff", "--name-status", from, to)
+	if err := validateRef(from); err != nil {
+		return nil, err
+	}
+	if err := validateRef(to); err != nil {
+		return nil, err
+	}
+	out, err := run(root, "diff", "--name-status", "--end-of-options", from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -90,11 +96,30 @@ func RangeChanges(root, from, to string) ([]Change, error) {
 
 // ChangedSince returns the files that differ between ref and the current HEAD.
 func ChangedSince(root, ref string) ([]Change, error) {
-	out, err := run(root, "diff", "--name-status", ref, "HEAD")
+	if err := validateRef(ref); err != nil {
+		return nil, err
+	}
+	out, err := run(root, "diff", "--name-status", "--end-of-options", ref, "HEAD")
 	if err != nil {
 		return nil, err
 	}
 	return parseNameStatus(root, out), nil
+}
+
+// validateRef rejects refs that git could misparse as command-line options. A
+// leading '-' lets a crafted ref like "--output=evil" turn `git diff` into an
+// arbitrary-file-write (git treats option-like positional args as flags); git
+// ref names can never begin with '-', so this only ever rejects invalid refs.
+// Callers additionally pass "--end-of-options" before the refs as belt-and-
+// suspenders for any git that predates strict positional parsing.
+func validateRef(ref string) error {
+	if ref == "" {
+		return fmt.Errorf("git: empty ref")
+	}
+	if strings.HasPrefix(ref, "-") {
+		return fmt.Errorf("git: refusing option-like ref %q", ref)
+	}
+	return nil
 }
 
 func run(root string, args ...string) (string, error) {

@@ -30,6 +30,19 @@ import (
 // that breaks readers.
 const KeyFileVersion = 1
 
+// Minimum Argon2id parameters accepted from a loaded keyfile. These are floors,
+// not the recommended values (see DefaultKeyFile) — they exist so a corrupt or
+// tampered keyfile fails with a clear error instead of panicking inside argon2
+// (which aborts when iterations or parallelism are below 1) or silently deriving
+// a trivially weak key.
+const (
+	minMemoryKiB   = 8 * 1024 // 8 MiB floor — well below the 64 MiB default
+	minIterations  = 1
+	minParallelism = 1
+	minSaltBytes   = 16
+	keyLengthBytes = 32 // AES-256; every chiton consumer requires exactly this
+)
+
 // KeyFile is the on-disk metadata for deriving a chiton encryption key from
 // a passphrase. The passphrase itself is never persisted.
 //
@@ -75,14 +88,42 @@ func (kf *KeyFile) Salt() ([]byte, error) {
 	return b, nil
 }
 
+// validate checks the keyfile's parameters are well-formed and meet chiton's
+// minimum strength, returning a descriptive error otherwise. It guards against
+// corrupt or tampered keyfiles: argon2.IDKey panics when Iterations or
+// Parallelism is below 1, and sub-floor cost params or a short salt would
+// silently weaken the derived key.
+func (kf *KeyFile) validate() error {
+	if kf.KDF != "argon2id" {
+		return fmt.Errorf("unsupported KDF %q (want argon2id)", kf.KDF)
+	}
+	if kf.KeyLength != keyLengthBytes {
+		return fmt.Errorf("key_length must be %d for AES-256, got %d", keyLengthBytes, kf.KeyLength)
+	}
+	if kf.Iterations < minIterations {
+		return fmt.Errorf("iterations must be >= %d, got %d", minIterations, kf.Iterations)
+	}
+	if kf.Parallelism < minParallelism {
+		return fmt.Errorf("parallelism must be >= %d, got %d", minParallelism, kf.Parallelism)
+	}
+	if kf.MemoryKiB < minMemoryKiB {
+		return fmt.Errorf("memory_kib must be >= %d (8 MiB), got %d", minMemoryKiB, kf.MemoryKiB)
+	}
+	salt, err := kf.Salt()
+	if err != nil {
+		return err
+	}
+	if len(salt) < minSaltBytes {
+		return fmt.Errorf("salt must be >= %d bytes, got %d", minSaltBytes, len(salt))
+	}
+	return nil
+}
+
 // DeriveKey runs Argon2id over the passphrase and the keyfile's parameters.
 // Returns a key of length kf.KeyLength.
 func (kf *KeyFile) DeriveKey(passphrase string) ([]byte, error) {
-	if kf.KDF != "argon2id" {
-		return nil, fmt.Errorf("unsupported KDF %q", kf.KDF)
-	}
-	if kf.KeyLength == 0 {
-		return nil, fmt.Errorf("keyfile: zero key length")
+	if err := kf.validate(); err != nil {
+		return nil, fmt.Errorf("keyfile: %w", err)
 	}
 	salt, err := kf.Salt()
 	if err != nil {
@@ -134,6 +175,9 @@ func LoadKeyFile(path string) (*KeyFile, error) {
 	}
 	if kf.Version > KeyFileVersion {
 		return nil, fmt.Errorf("keyfile %s: version %d not supported (this chiton speaks v%d)", path, kf.Version, KeyFileVersion)
+	}
+	if err := kf.validate(); err != nil {
+		return nil, fmt.Errorf("keyfile %s: %w", path, err)
 	}
 	return &kf, nil
 }

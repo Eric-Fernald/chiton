@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -18,10 +19,14 @@ const (
 
 // Ollama is a thin client over a local Ollama server's /api/embed endpoint.
 // It pulls in no SDK — just net/http — to keep chiton a single static binary.
+//
+// dim is atomic because Embed self-corrects it to the model's true dimension,
+// and a single *Ollama is shared across the live-sync worker pool (concurrent
+// Embed calls would otherwise race the write against Dim()'s read).
 type Ollama struct {
 	endpoint string
 	model    string
-	dim      int
+	dim      atomic.Int64
 	client   *http.Client
 }
 
@@ -41,15 +46,16 @@ func NewOllama(cfg Config) *Ollama {
 	if dim <= 0 {
 		dim = defaultOllamaDim
 	}
-	return &Ollama{
+	o := &Ollama{
 		endpoint: endpoint,
 		model:    model,
-		dim:      dim,
 		client:   &http.Client{Timeout: 60 * time.Second},
 	}
+	o.dim.Store(int64(dim))
+	return o
 }
 
-func (o *Ollama) Dim() int      { return o.dim }
+func (o *Ollama) Dim() int      { return int(o.dim.Load()) }
 func (o *Ollama) Model() string { return o.model }
 
 type ollamaRequest struct {
@@ -108,8 +114,8 @@ func (o *Ollama) Embed(ctx context.Context, texts []string) ([][]float32, error)
 
 	// Trust the model's true dimension over the configured default; warn-free
 	// self-correction keeps the index consistent if dim was misconfigured.
-	if len(out.Embeddings[0]) > 0 {
-		o.dim = len(out.Embeddings[0])
+	if d := len(out.Embeddings[0]); d > 0 {
+		o.dim.Store(int64(d))
 	}
 	return out.Embeddings, nil
 }

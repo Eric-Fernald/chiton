@@ -67,7 +67,15 @@ func (a *Analyzer) AnalyzeFile(ctx context.Context, path string) (*Result, error
 	if fileNode.SourceURI != "" {
 		scanned[fileNode.SourceURI] = true
 	}
-	if err := a.pruneResolved(ctx, scanned, findings); err != nil {
+	// Only prune findings from the FileRules we actually ran. GraphScope rules
+	// (architecture/dead-symbol) are deliberately skipped here, so their findings
+	// — though DETERMINISTIC and targeting this same file — must survive a single-
+	// file edit rather than be wiped until the next full `chiton analyze`.
+	ruleScope := make(map[string]bool, len(usedRules))
+	for _, r := range usedRules {
+		ruleScope[r.Meta().ID] = true
+	}
+	if err := a.pruneResolved(ctx, scanned, findings, ruleScope); err != nil {
 		return nil, err
 	}
 

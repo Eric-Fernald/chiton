@@ -113,12 +113,25 @@ func importEdge(fileID, pkgNodeID string) model.Edge {
 	}
 }
 
-// countLineBraces counts unescaped { and } in a line, ignoring string literals
-// and // line comments. Block comments are not tracked across calls.
-func countLineBraces(line string) (open, close int) {
+// countLineBraces counts unescaped { and } in a line, ignoring string literals,
+// // line comments, and /* */ block comments. inBlock says whether the line
+// begins inside a block comment opened on an earlier line; stillInBlock reports
+// whether it ends inside one, so callers thread the state line-to-line. Without
+// this, a brace inside a comment (e.g. JSDoc or commented-out code) is miscounted
+// and prematurely pops the enclosing scope.
+func countLineBraces(line string, inBlock bool) (open, close int, stillInBlock bool) {
 	var inStr byte // 0, '"', '\'', or '`'
+	blk := inBlock
 	for i := 0; i < len(line); i++ {
 		c := line[i]
+		if blk {
+			// Inside /* ... */ — everything is comment until the closing */.
+			if c == '*' && i+1 < len(line) && line[i+1] == '/' {
+				blk = false
+				i++
+			}
+			continue
+		}
 		if inStr != 0 {
 			if c == '\\' {
 				i++ // skip escaped char
@@ -132,7 +145,11 @@ func countLineBraces(line string) (open, close int) {
 			inStr = c
 		case '/':
 			if i+1 < len(line) && line[i+1] == '/' {
-				return // line comment — stop
+				return open, close, false // line comment — rest of line ignored
+			}
+			if i+1 < len(line) && line[i+1] == '*' {
+				blk = true
+				i++
 			}
 		case '{':
 			open++
@@ -140,7 +157,7 @@ func countLineBraces(line string) (open, close int) {
 			close++
 		}
 	}
-	return
+	return open, close, blk
 }
 
 // indentLen returns the number of leading spaces/tabs in s.

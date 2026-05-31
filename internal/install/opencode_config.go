@@ -40,7 +40,7 @@ func WriteOpenCodeConfig(path, exe, graphPath string) (created, preexisted bool,
 
 	var doc map[string]any
 	if len(existing) > 0 {
-		if err := json.Unmarshal(existing, &doc); err != nil {
+		if err := json.Unmarshal(jsoncToJSON(existing), &doc); err != nil {
 			return false, false, fmt.Errorf("parse %s: %w", path, err)
 		}
 	}
@@ -87,7 +87,7 @@ func RemoveOpenCodeEntry(path string) (changed bool, err error) {
 		return false, fmt.Errorf("read %s: %w", path, err)
 	}
 	var doc map[string]any
-	if err := json.Unmarshal(existing, &doc); err != nil {
+	if err := json.Unmarshal(jsoncToJSON(existing), &doc); err != nil {
 		return false, fmt.Errorf("parse %s: %w", path, err)
 	}
 	servers, _ := doc["mcp"].(map[string]any)
@@ -132,7 +132,7 @@ func OpenCodeConfigHasChiton(path string) (bool, error) {
 		return false, err
 	}
 	var doc map[string]any
-	if err := json.Unmarshal(existing, &doc); err != nil {
+	if err := json.Unmarshal(jsoncToJSON(existing), &doc); err != nil {
 		return false, err
 	}
 	servers, _ := doc["mcp"].(map[string]any)

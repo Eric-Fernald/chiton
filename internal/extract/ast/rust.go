@@ -107,14 +107,23 @@ func (r *RustExtractor) ExtractFile(_ context.Context, path string) ([]model.Nod
 	}
 
 	// Pass 1: collect symbols.
+	inBlock := false
 	for lineNum, line := range lines {
+		pre := depth
+		startedInBlock := inBlock
+		var open, close_ int
+		open, close_, inBlock = countLineBraces(line, inBlock)
+
 		stripped := strings.TrimLeft(line, " \t")
-		if strings.HasPrefix(stripped, "//") || strings.HasPrefix(stripped, "///") {
+		// Skip comment lines for symbol detection — but only AFTER updating the
+		// block-comment state above, so /* */ braces never reach depth tracking.
+		if startedInBlock || strings.HasPrefix(stripped, "//") || strings.HasPrefix(stripped, "///") {
+			depth = pre + open - close_
+			for len(scopeStack) > 0 && depth <= scopeStack[len(scopeStack)-1].pushDepth {
+				scopeStack = scopeStack[:len(scopeStack)-1]
+			}
 			continue
 		}
-
-		pre := depth
-		open, close_ := countLineBraces(line)
 
 		t := top()
 		inImplBody := t != nil && t.kind == "impl" && pre > t.pushDepth
@@ -233,13 +242,16 @@ func (r *RustExtractor) ExtractFile(_ context.Context, path string) ([]model.Nod
 	for _, fr := range funcs {
 		bodyDepth := 0
 		inBody := false
+		inBlock := false
 		for i := fr.lineStart; i < len(lines); i++ {
-			open, close_ := countLineBraces(lines[i])
+			startedInBlock := inBlock
+			var open, close_ int
+			open, close_, inBlock = countLineBraces(lines[i], inBlock)
 			bodyDepth += open
 			if bodyDepth > 0 {
 				inBody = true
 			}
-			if inBody && i > fr.lineStart {
+			if inBody && i > fr.lineStart && !startedInBlock {
 				for _, m := range reRsCall.FindAllStringSubmatch(lines[i], -1) {
 					calleeName := m[1]
 					if isRsKeyword(calleeName) {

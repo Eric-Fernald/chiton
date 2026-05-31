@@ -201,9 +201,27 @@ func (q *Queue) drainLoop() {
 		default:
 		}
 		q.mu.Lock()
-		idle := len(q.timers) == 0 && len(q.running) == 0
+		// Re-feed keys re-enqueued while their handler ran (the requeue markers
+		// run() leaves behind during drain). Skip any still in flight — their own
+		// run() keeps the marker set for a later pass.
+		var requeued []string
+		for k := range q.requeue {
+			if q.running[k] {
+				continue
+			}
+			requeued = append(requeued, k)
+			delete(q.requeue, k)
+		}
+		idle := len(q.timers) == 0 && len(q.running) == 0 && len(q.requeue) == 0
 		q.mu.Unlock()
-		if idle && len(q.ready) == 0 {
+
+		for _, k := range requeued {
+			select {
+			case q.ready <- k:
+			case <-q.ctx.Done():
+			}
+		}
+		if idle && len(requeued) == 0 && len(q.ready) == 0 {
 			return
 		}
 		select {
@@ -259,8 +277,15 @@ func (q *Queue) run(key string) {
 	q.mu.Lock()
 	delete(q.running, key)
 	again := q.requeue[key]
-	delete(q.requeue, key)
 	stopped := q.stopped
+	if !stopped {
+		// Normal path: consume the marker and re-arm via Enqueue below.
+		delete(q.requeue, key)
+	}
+	// While draining (Drain set stopped), leave the marker in place: drainLoop
+	// re-feeds it so the key's final on-disk state is still processed rather than
+	// dropped. Stop() also sets stopped but cancels the context, so its leftover
+	// markers are simply never flushed (Stop abandons outstanding work by design).
 	q.mu.Unlock()
 
 	if again && !stopped {

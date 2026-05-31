@@ -184,6 +184,41 @@ func TestDrainProcessesPending(t *testing.T) {
 	}
 }
 
+// TestDrainProcessesRequeuedWork verifies Drain processes work re-enqueued
+// while a handler was in flight, instead of dropping the key's final state.
+func TestDrainProcessesRequeuedWork(t *testing.T) {
+	var runs int32
+	firstStarted := make(chan struct{})
+	proceed := make(chan struct{})
+	q := New(func(_ context.Context, _ string) error {
+		if atomic.AddInt32(&runs, 1) == 1 {
+			close(firstStarted)
+			<-proceed // hold the first run open so we can re-enqueue + drain mid-flight
+		}
+		return nil
+	}, Options{Workers: 1, Debounce: 5 * time.Millisecond})
+	q.Start(context.Background())
+
+	q.Enqueue("x")
+	<-firstStarted
+	q.Enqueue("x") // re-enqueued while the first handler runs → owed a re-run
+
+	drained := make(chan struct{})
+	go func() { q.Drain(); close(drained) }()
+
+	time.Sleep(30 * time.Millisecond) // let Drain set stopped while the handler is held
+	close(proceed)                    // release the first run
+
+	select {
+	case <-drained:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Drain did not return")
+	}
+	if got := atomic.LoadInt32(&runs); got < 2 {
+		t.Fatalf("requeued work dropped on drain: handler ran %d times, want >= 2", got)
+	}
+}
+
 // TestStressEnqueueDuringFire hammers Enqueue concurrently with timer fires on a
 // tiny debounce — the exact interleaving that made the old time.Timer.Reset
 // design double-fire its callback and panic with a negative WaitGroup counter.

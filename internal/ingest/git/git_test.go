@@ -177,6 +177,31 @@ func TestMergeCommitChanges(t *testing.T) {
 	}
 }
 
+// TestRejectsOptionLikeRefs verifies that an option-like ref (e.g.
+// "--output=...") is refused before reaching git, so it cannot be smuggled in
+// as a flag that writes an arbitrary file.
+func TestRejectsOptionLikeRefs(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	root := t.TempDir()
+	pwned := filepath.Join(root, "pwned.txt")
+	inject := "--output=" + pwned
+
+	if _, err := ChangedSince(root, inject); err == nil {
+		t.Error("ChangedSince accepted an option-like ref")
+	}
+	if _, err := RangeChanges(root, inject, "HEAD"); err == nil {
+		t.Error("RangeChanges accepted an option-like ref")
+	}
+	if _, err := RangeChanges(root, "HEAD", inject); err == nil {
+		t.Error("RangeChanges accepted an option-like to-ref")
+	}
+	if _, err := os.Stat(pwned); err == nil {
+		t.Errorf("option-like ref wrote a file at %s", pwned)
+	}
+}
+
 func TestAvailableFalseOutsideRepo(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")

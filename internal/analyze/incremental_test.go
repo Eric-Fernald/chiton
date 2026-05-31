@@ -137,6 +137,51 @@ func TestPruneFileURI_RemovesLLMFindings(t *testing.T) {
 	}
 }
 
+// TestAnalyzeFile_PreservesGraphScopeFindings verifies a single-file re-analyze
+// does NOT delete deterministic GraphScope findings (architecture/dead-symbol)
+// for that file. AnalyzeFile runs only FileRules, so it must scope its prune to
+// the rules it ran — otherwise it wipes GraphScope findings that never
+// regenerate until the next full `chiton analyze`.
+func TestAnalyzeFile_PreservesGraphScopeFindings(t *testing.T) {
+	gs := openStore(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.go")
+	uri := "file://" + filepath.ToSlash(mustAbs(t, path))
+	write(t, path, "package a\n\nfunc A() {}\n")
+
+	// Synthetic deterministic GraphScope finding targeting the file, as a full
+	// `chiton analyze` would have produced. Its rule is not a FileRule.
+	id := "graphfinding0000000000000000aa11"
+	gsf := model.Node{
+		ID:         id,
+		Kind:       model.KindFinding,
+		Label:      "architecture/dead-symbol",
+		SourceURI:  "finding://" + id,
+		Provenance: model.ProvExtracted,
+		Confidence: 1.0,
+		Attrs: map[string]any{
+			"rule_id":         "architecture/dead-symbol",
+			"category":        "architecture",
+			"severity":        "low",
+			"message":         "A is never referenced",
+			"target_uri":      uri,
+			"rule_provenance": string(analyze.ProvenanceDeterministic),
+		},
+	}
+	if err := gs.UpsertNodes(ctx, []model.Node{gsf}); err != nil {
+		t.Fatal(err)
+	}
+
+	az := analyze.New(gs, nil)
+	if _, err := az.AnalyzeFile(ctx, path); err != nil {
+		t.Fatalf("AnalyzeFile: %v", err)
+	}
+	if got, _ := gs.GetNode(ctx, id); got == nil {
+		t.Error("GraphScope finding was wrongly pruned by a single-file re-analyze")
+	}
+}
+
 func TestAnalyzeFile_UnsupportedIsNoop(t *testing.T) {
 	gs := openStore(t)
 	path := filepath.Join(t.TempDir(), "notes.txt")

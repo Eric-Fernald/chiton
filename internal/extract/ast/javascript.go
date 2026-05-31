@@ -131,9 +131,22 @@ func (j *JavaScriptExtractor) ExtractFile(_ context.Context, path string) ([]mod
 	}
 
 	// Pass 1: collect symbols.
+	inBlock := false
 	for lineNum, line := range lines {
 		pre := depth
-		open, close_ := countLineBraces(line)
+		startedInBlock := inBlock
+		var open, close_ int
+		open, close_, inBlock = countLineBraces(line, inBlock)
+
+		// A line wholly inside a /* */ block contributes no symbols; keep the
+		// (now comment-adjusted) depth and scope stack current and move on.
+		if startedInBlock {
+			depth = pre + open - close_
+			for len(scopeStack) > 0 && depth <= scopeStack[len(scopeStack)-1].pushDepth {
+				scopeStack = scopeStack[:len(scopeStack)-1]
+			}
+			continue
+		}
 
 		// Determine if we're in a class body.
 		t := top()
@@ -211,13 +224,16 @@ func (j *JavaScriptExtractor) ExtractFile(_ context.Context, path string) ([]mod
 	for _, fr := range funcs {
 		bodyDepth := 0
 		inBody := false
+		inBlock := false
 		for i := fr.lineStart; i < len(lines); i++ {
-			open, close_ := countLineBraces(lines[i])
+			startedInBlock := inBlock
+			var open, close_ int
+			open, close_, inBlock = countLineBraces(lines[i], inBlock)
 			bodyDepth += open
 			if bodyDepth > 0 {
 				inBody = true
 			}
-			if inBody && i > fr.lineStart {
+			if inBody && i > fr.lineStart && !startedInBlock {
 				for _, m := range reJSCall.FindAllStringSubmatch(lines[i], -1) {
 					calleeName := m[1]
 					if isJSKeyword(calleeName) {

@@ -64,6 +64,45 @@ func TestKeyFile_SaveLoadRoundTrip(t *testing.T) {
 	}
 }
 
+// TestDeriveKey_RejectsBadParams verifies DeriveKey returns a clean error
+// rather than panicking inside argon2 (iterations/parallelism < 1) or silently
+// deriving a weak/short key.
+func TestDeriveKey_RejectsBadParams(t *testing.T) {
+	base := func() *KeyFile { kf, _ := DefaultKeyFile(); return kf }
+	cases := map[string]func(*KeyFile){
+		"zero iterations":  func(kf *KeyFile) { kf.Iterations = 0 },
+		"zero parallelism": func(kf *KeyFile) { kf.Parallelism = 0 },
+		"low memory":       func(kf *KeyFile) { kf.MemoryKiB = 8 },
+		"non-32 keylen":    func(kf *KeyFile) { kf.KeyLength = 16 },
+		"empty salt":       func(kf *KeyFile) { kf.SaltHex = "" },
+		"short salt":       func(kf *KeyFile) { kf.SaltHex = "0011" },
+		"bad kdf":          func(kf *KeyFile) { kf.KDF = "scrypt" },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			kf := base()
+			mutate(kf)
+			// Must not panic, and must return an error.
+			if _, err := kf.DeriveKey("hunter2"); err == nil {
+				t.Errorf("DeriveKey accepted invalid keyfile (%s)", name)
+			}
+		})
+	}
+}
+
+// TestLoadKeyFile_RejectsTampered verifies a hand-edited/corrupt keyfile fails
+// at load time instead of flowing into argon2 and panicking later.
+func TestLoadKeyFile_RejectsTampered(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keyfile.json")
+	tampered := `{"version":1,"kdf":"argon2id","salt_hex":"00112233445566778899aabbccddeeff","memory_kib":64,"iterations":0,"parallelism":0,"key_length":32,"cipher":"AES-256-GCM"}`
+	if err := os.WriteFile(path, []byte(tampered), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadKeyFile(path); err == nil {
+		t.Error("LoadKeyFile accepted a keyfile with iterations=0/parallelism=0")
+	}
+}
+
 func TestLoadKeyFile_Missing(t *testing.T) {
 	got, err := LoadKeyFile(filepath.Join(t.TempDir(), "absent.json"))
 	if err != nil {

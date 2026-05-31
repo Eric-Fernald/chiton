@@ -55,7 +55,7 @@ func WriteMCPConfig(path string, entry any) (created, preexisted bool, err error
 
 	var doc map[string]any
 	if len(existing) > 0 {
-		if err := json.Unmarshal(existing, &doc); err != nil {
+		if err := json.Unmarshal(jsoncToJSON(existing), &doc); err != nil {
 			return false, false, fmt.Errorf("parse %s: %w", path, err)
 		}
 	}
@@ -97,7 +97,7 @@ func RemoveMCPConfigEntry(path string) (changed bool, err error) {
 	}
 
 	var doc map[string]any
-	if err := json.Unmarshal(existing, &doc); err != nil {
+	if err := json.Unmarshal(jsoncToJSON(existing), &doc); err != nil {
 		return false, fmt.Errorf("parse %s: %w", path, err)
 	}
 	servers, _ := doc["mcpServers"].(map[string]any)
@@ -142,7 +142,7 @@ func MCPConfigHasChiton(path string) (bool, error) {
 		return false, err
 	}
 	var doc map[string]any
-	if err := json.Unmarshal(existing, &doc); err != nil {
+	if err := json.Unmarshal(jsoncToJSON(existing), &doc); err != nil {
 		return false, err
 	}
 	servers, _ := doc["mcpServers"].(map[string]any)

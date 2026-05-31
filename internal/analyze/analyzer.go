@@ -134,7 +134,9 @@ func (a *Analyzer) Analyze(ctx context.Context, root string) (*Result, error) {
 	if err := a.persist(ctx, rules, findings); err != nil {
 		return nil, err
 	}
-	if err := a.pruneResolved(ctx, scannedURIs, findings); err != nil {
+	// A full Analyze runs every rule, so all deterministic findings for the
+	// scanned files are in scope to prune (ruleScope nil = no restriction).
+	if err := a.pruneResolved(ctx, scannedURIs, findings, nil); err != nil {
 		return nil, err
 	}
 
@@ -181,7 +183,14 @@ func (a *Analyzer) persist(ctx context.Context, rules []Rule, findings []Finding
 // a re-scanned file, so the store reflects live truth (and `--diff` can detect
 // resolved findings). LLM findings are left alone — they have their own
 // lifecycle via LLMService — as are findings for files outside this scan.
-func (a *Analyzer) pruneResolved(ctx context.Context, scanned map[string]bool, current []Finding) error {
+//
+// ruleScope, when non-nil, restricts pruning to findings whose rule_id is in the
+// set. The incremental AnalyzeFile runs only FileRules, so it passes the IDs of
+// the rules it ran: without this, GraphScope findings (architecture/dead-symbol)
+// — which target the same file URI and are also DETERMINISTIC — would be wiped on
+// every single-file edit and never regenerate until a full `chiton analyze`. A
+// nil scope (full Analyze, which runs every rule) prunes all deterministic kinds.
+func (a *Analyzer) pruneResolved(ctx context.Context, scanned map[string]bool, current []Finding, ruleScope map[string]bool) error {
 	if len(scanned) == 0 {
 		return nil
 	}
@@ -200,6 +209,11 @@ func (a *Analyzer) pruneResolved(ctx context.Context, scanned map[string]bool, c
 		}
 		if rp, _ := n.Attrs["rule_provenance"].(string); rp != string(ProvenanceDeterministic) {
 			continue
+		}
+		if ruleScope != nil {
+			if rid, _ := n.Attrs["rule_id"].(string); !ruleScope[rid] {
+				continue // a rule not run in this pass — leave its findings intact
+			}
 		}
 		turi, _ := n.Attrs["target_uri"].(string)
 		if !scanned[turi] || newIDs[n.ID] {
