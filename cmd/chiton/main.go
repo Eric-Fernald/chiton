@@ -891,6 +891,7 @@ func serveCmd() *cobra.Command {
 	var stdio bool
 	var addr string
 	var writable bool
+	var graphPath string
 
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -901,11 +902,20 @@ By default the store opens read-only so 'chiton build', 'embed', and 'cluster'
 can run concurrently; the read tools (semantic_search, pending_extractions)
 work in this mode. Pass --writable to allow the submit_extraction write tool
 over MCP (this takes the store's write lock, so concurrent build/embed cannot
-run). The 'chiton extract submit' CLI is the alternative write path.`,
+run). The 'chiton extract submit' CLI is the alternative write path.
+
+Pass --graph to point at a specific store; this is what 'chiton install'
+records in the MCP config so the server uses the same store as 'chiton build'.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := config.Load()
 			if err != nil {
 				return err
+			}
+			// --graph overrides the configured/default store path so the MCP
+			// config written by `chiton install --graph <path>` resolves to the
+			// intended store regardless of the server's working directory.
+			if graphPath != "" {
+				cfg.GraphPath = graphPath
 			}
 
 			gs, err := openGraphStore(cfg.GraphPath, !writable)
@@ -933,6 +943,7 @@ run). The 'chiton extract submit' CLI is the alternative write path.`,
 	cmd.Flags().BoolVar(&stdio, "stdio", false, "serve over stdio (for MCP assistants)")
 	cmd.Flags().StringVar(&addr, "http", ":7474", "HTTP listen address (for debug)")
 	cmd.Flags().BoolVar(&writable, "writable", false, "open the store read-write so submit_extraction works over MCP (disables concurrent build/embed)")
+	cmd.Flags().StringVar(&graphPath, "graph", "", "Graph store path to serve (default: configured/built-in graph_path)")
 	return cmd
 }
 

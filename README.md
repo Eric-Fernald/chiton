@@ -13,10 +13,10 @@ The point isn't cheaper context (although that's still a benefit with ~10% token
 it's *better* context: the model gets exactly what's relevant instead of a haystack of 
 files to grep through.
 
-> **Status:** actively developed, single-user and on-device first. Phases 0–3
+> **Status:** actively developed, single-user and on-device first. Phases 0–3.5
 > (core graph, rule engine, install layer, semantic layer, LLM rules + diff
-> analysis, and live sync) are implemented. Meeting/transcript ingestion, broad
-> multi-assistant installers, and the HTML dashboard are on the roadmap (see
+> analysis, live sync, and broad multi-assistant installers) are implemented.
+> Meeting/transcript ingestion and the HTML dashboard are on the roadmap (see
 > [docs/PLAN.md](docs/PLAN.md)).
 
 ---
@@ -121,7 +121,7 @@ chiton search "where do we handle auth?"
 | `chiton findings list\|explain` | Inspect persisted findings (filter by severity, category, scope). |
 | `chiton sync watch\|git\|once` | Live sync: fsnotify watcher, git-driven re-index, or one-shot reconcile. |
 | `chiton hooks install\|uninstall\|status\|run` | Manage git hooks (gating pre-commit/pre-push; syncing post-commit/post-checkout). |
-| `chiton install\|uninstall\|doctor` | Register/remove chiton with AI assistants; report install state. |
+| `chiton install\|uninstall\|doctor` | Register/remove chiton with AI assistants; report install state. `--assistant <name>` (claude-code, copilot-vscode, cursor, codex, gemini-cli, opencode, aider, antigravity, copilot-cli), `all`, or `auto` (default: detected). |
 | `chiton serve --stdio` | Start the MCP server over stdio (use `--http :7474` for debugging, `--writable` for submit tools). |
 
 ## MCP tools
@@ -241,7 +241,7 @@ chiton/
 │   ├── analyze/           rule engine, findings, diff, LLM-rule dispatch
 │   ├── ingest/            incremental updater + fsnotify + git front-ends
 │   ├── crypto/            argon2id KDF + keyfile for encryption at rest
-│   ├── install/           per-assistant installers (Claude Code, Copilot)
+│   ├── install/           per-assistant installers (Claude Code, Copilot, Cursor, Codex, Gemini CLI, OpenCode, Aider, Antigravity, Copilot CLI)
 │   ├── hooks/             git hook install + gating runner
 │   ├── mcp/               MCP server and tool handlers
 │   └── report/            GRAPH_REPORT.md generator
@@ -257,11 +257,11 @@ the vector index (flat today, HNSW/sqlite-vec deferred) and the job queue
 
 ## Roadmap
 
-Shipped through **Phase 3** (live sync). Next up: broad multi-assistant
-installers (Cursor, Codex, Gemini CLI, Aider, …), meeting/transcript ingestion
-with decision-to-code linkage, URL/paper ingest, an HTML graph export, and an
-honest cross-corpus benchmark suite. See [docs/PLAN.md](docs/PLAN.md) for the
-full plan and design rationale.
+Shipped through **Phase 3.5** (live sync + broad multi-assistant installers:
+Cursor, Codex, Gemini CLI, OpenCode, Aider, Antigravity, Copilot CLI). Next up:
+meeting/transcript ingestion with decision-to-code linkage, URL/paper ingest, an
+HTML graph export, and an honest cross-corpus benchmark suite. See
+[docs/PLAN.md](docs/PLAN.md) for the full plan and design rationale.
 
 ## License
 

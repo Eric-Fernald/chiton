@@ -589,11 +589,62 @@ betweenness (full `chiton cluster` refreshes it).
   configured via `chiton sync` flags, not `.chiton/hooks.yaml` (which tunes the
   pre-commit/pre-push severity gate).
 
-### Phase 3.5 — Broad Assistant Support
+### ✅ Phase 3.5 — Broad Assistant Support
 
-- Add installers for Cursor, Codex, Gemini CLI, OpenCode, Aider, Antigravity, Copilot CLI.
-- Per-installer integration tests that write the config, start the server, and verify at least one tool call succeeds.
-- `chiton install --assistant all` auto-detection.
+- ✅ Seven new installers under `internal/install/`, each implementing the same
+  `Installer` interface as the Phase 1.5 Claude Code / Copilot VS Code ones and
+  registered via `init()`. Config paths/formats were web-researched and
+  adversarially verified against each vendor's current (2026) official docs:
+  - **cursor** — JSON `mcpServers` at `.cursor/mcp.json` (project) /
+    `~/.cursor/mcp.json` (`--user-scope`); rule at `.cursor/rules/chiton.mdc`
+    (MDC + `alwaysApply` frontmatter, since a plain `.md` there is ignored).
+  - **codex** (OpenAI Codex CLI) — **TOML** `[mcp_servers.chiton]` in the
+    user-scope `~/.codex/config.toml` (the project file loads only for trusted
+    projects); rules in `AGENTS.md`.
+  - **gemini-cli** — JSON `mcpServers` at `.gemini/settings.json` /
+    `~/.gemini/settings.json`; rules in `GEMINI.md` (AGENTS.md is not
+    auto-loaded by Gemini CLI).
+  - **opencode** — JSON under the singular **`mcp`** key with a flat
+    `command` array (`["<chiton>","serve","--stdio"]`, `type:"local"`) at
+    `opencode.json` / `~/.config/opencode/opencode.json`; rules in `AGENTS.md`.
+  - **antigravity** (Google Antigravity IDE) — JSON `mcpServers` in the
+    user-only `~/.gemini/config/mcp_config.json` (not `.antigravity/`); rules in
+    `AGENTS.md` to avoid the `~/.gemini/GEMINI.md` collision with Gemini CLI.
+  - **copilot-cli** (GitHub `copilot` terminal agent, ≠ the VS Code extension) —
+    JSON `mcpServers` (`type:"local"` + `tools:["*"]`) in
+    `~/.copilot/mcp-config.json` (honours `COPILOT_HOME`); rules in `AGENTS.md`.
+  - **aider** — Aider has **no native MCP support** (the MCP PRs are unmerged as
+    of 2026), so this installer honestly wires only what Aider offers: a
+    `CONVENTIONS.md` rules block plus a `read:` entry in `.aider.conf.yml` (the
+    file is otherwise not auto-loaded), and reports that chiton's MCP tools are
+    unavailable so Aider falls back to the `chiton` CLI.
+- ✅ Shared, format-specific config helpers added beside the existing JSON
+  `mcpServers` writer: a TOML merge (`toml_config.go`, codex), an OpenCode
+  `mcp`-array writer (`opencode_config.go`), and an Aider YAML `read:`-list merge
+  (`aider_config.go`) — all idempotent and foreign-key-preserving like the
+  Phase 1.5 helpers. `WriteMCPConfig` now takes `any` so Copilot CLI's richer
+  entry shape reuses it. User-scope writes resolve through an overridable
+  `homeDir` seam (`userscope.go`).
+- ✅ Per-installer integration test (`integration_test.go`): builds the chiton
+  binary, seeds a one-node store, has each MCP-capable installer write its
+  config, **recovers the launch command back out of that config** (JSON / TOML /
+  OpenCode array), starts the server exactly as the assistant would, and asserts
+  a real `tools/call query_graph` returns the seeded node. Plus a uniform
+  Install→Doctor→re-Install→Uninstall contract test over every registered
+  installer.
+- ✅ `chiton install --assistant all` and `auto` already dispatch through
+  `install.Resolve`/`Available`/`Detect`; the new installers register into that
+  set automatically. `Detect` is workspace-scoped (repo footprint only) so
+  auto-detection stays deterministic.
+- ✅ Fixed a latent bug surfaced by the integration test: `chiton serve` never
+  accepted the `--graph` flag the installers emit, so any MCP config written
+  with a graph path launched a server that died on `unknown flag`. `serve` now
+  honours `--graph` (overriding the configured `graph_path`).
+
+**Deferred:** Cursor/Copilot CLI also support a repo-relative `.mcp.json`
+workspace path (trust/prompt-mode gated) — the installers target the
+fully-documented, no-caveat locations instead. A first-party VS Code extension
+remains Phase 6.
 
 ### Phase 4 — Meetings & External Sources
 

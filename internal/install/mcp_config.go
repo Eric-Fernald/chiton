@@ -15,23 +15,35 @@ type ServerEntry struct {
 	Args    []string `json:"args"`
 }
 
-// ChitonServerEntry returns the canonical chiton MCP entry for a given exe
-// path and graph path. graphPath may be empty.
-func ChitonServerEntry(exe, graphPath string) ServerEntry {
+// ChitonServeArgs returns the argv (after the binary) that launches chiton's
+// stdio MCP server. graphPath may be empty (the server then uses its
+// configured/default graph_path). Shared by every installer so all assistants
+// launch the server identically, regardless of their config file format.
+func ChitonServeArgs(graphPath string) []string {
 	args := []string{"serve", "--stdio"}
 	if graphPath != "" {
 		args = append(args, "--graph", graphPath)
 	}
-	return ServerEntry{Command: exe, Args: args}
+	return args
+}
+
+// ChitonServerEntry returns the canonical chiton MCP entry for a given exe
+// path and graph path. graphPath may be empty.
+func ChitonServerEntry(exe, graphPath string) ServerEntry {
+	return ServerEntry{Command: exe, Args: ChitonServeArgs(graphPath)}
 }
 
 // WriteMCPConfig writes (or merges) the chiton entry into an MCP config file
 // at path. If the file already exists, the chiton entry is upserted under
 // "mcpServers" and any unrelated keys are preserved.
 //
+// entry is any JSON-serialisable value: most assistants want a ServerEntry
+// (command + args), but some (e.g. Copilot CLI) carry extra fields like
+// type/env/tools, so the entry type is left open.
+//
 // Returns whether the file was created (true) or updated in place (false),
 // plus whether a chiton entry was already present before this call.
-func WriteMCPConfig(path string, entry ServerEntry) (created, preexisted bool, err error) {
+func WriteMCPConfig(path string, entry any) (created, preexisted bool, err error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return false, false, fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
 	}
