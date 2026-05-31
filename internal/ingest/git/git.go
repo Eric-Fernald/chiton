@@ -44,13 +44,38 @@ func Available(root string) bool {
 }
 
 // LastCommitChanges returns the files touched by HEAD (the just-made commit).
-// Uses --root so the initial commit reports its files as additions.
+//
+// An ordinary commit is diffed against its parent. A merge commit is diffed
+// against its first parent: a plain `git diff-tree HEAD` prints nothing for a
+// merge (diff-tree only reports paths that differ from *every* parent), which
+// would silently leave every file a merge brings in stale in the graph. The
+// initial, parentless commit has nothing to diff against, so --root reports all
+// of its files as additions.
 func LastCommitChanges(root string) ([]Change, error) {
+	if parent, ok := firstParent(root); ok {
+		out, err := run(root, "diff", "--name-status", parent, "HEAD")
+		if err != nil {
+			return nil, err
+		}
+		return parseNameStatus(root, out), nil
+	}
 	out, err := run(root, "diff-tree", "--no-commit-id", "--name-status", "-r", "--root", "HEAD")
 	if err != nil {
 		return nil, err
 	}
 	return parseNameStatus(root, out), nil
+}
+
+// firstParent reports HEAD's first parent ("HEAD^") and whether HEAD has one.
+// Diffing against the first parent gives a merge commit's net change relative to
+// the branch it landed on; the initial commit is parentless and returns false.
+func firstParent(root string) (string, bool) {
+	// rev-parse --verify --quiet exits non-zero (and silent) when HEAD^ does not
+	// resolve — i.e. on the root commit.
+	if _, err := run(root, "rev-parse", "--verify", "--quiet", "HEAD^"); err != nil {
+		return "", false
+	}
+	return "HEAD^", true
 }
 
 // RangeChanges returns the files that differ between two refs (e.g. the old and

@@ -214,7 +214,9 @@ func (q *Queue) drainLoop() {
 	}
 }
 
-// launch acquires a worker slot and runs key in a fresh goroutine.
+// launch acquires a worker slot and runs key in a fresh goroutine — unless the
+// key is already in flight, in which case it defers the work instead of starting
+// a second handler (preserving the single-key-serialization invariant).
 func (q *Queue) launch(key string) {
 	select {
 	case q.workers <- struct{}{}:
@@ -222,6 +224,17 @@ func (q *Queue) launch(key string) {
 		return
 	}
 	q.mu.Lock()
+	if q.running[key] {
+		// A handler for this key is already running. The timer-fires-then-Enqueue
+		// re-arm race can land the same key in `ready` twice; running it now would
+		// break the documented "never concurrent with itself" guarantee. Mark it to
+		// run once more after the in-flight handler finishes (run() consumes
+		// requeue) and release the slot we just took.
+		q.requeue[key] = true
+		q.mu.Unlock()
+		<-q.workers
+		return
+	}
 	q.running[key] = true
 	q.mu.Unlock()
 	q.wg.Add(1)

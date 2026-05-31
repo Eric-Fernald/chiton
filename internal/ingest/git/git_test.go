@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -102,6 +103,77 @@ func TestIntegration(t *testing.T) {
 	}
 	if len(since) != 1 || since[0].Op != OpDelete {
 		t.Fatalf("ChangedSince expected 1 delete, got %+v", since)
+	}
+}
+
+// TestMergeCommitChanges verifies LastCommitChanges reports the files a merge
+// commit brings onto the branch. A plain `git diff-tree HEAD` is empty for a
+// merge, which used to leave every merged-in file stale in the graph.
+func TestMergeCommitChanges(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	root := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	write := func(name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	runGit("init")
+	write("base.go", "package base\n")
+	runGit("add", "base.go")
+	runGit("commit", "-m", "base")
+
+	// Capture the default branch name (main or master, depending on git config).
+	out, err := exec.Command("git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("rev-parse branch: %v", err)
+	}
+	base := strings.TrimSpace(string(out))
+
+	// Feature branch adds a file.
+	runGit("checkout", "-b", "feature")
+	write("feature.go", "package feature\n")
+	runGit("add", "feature.go")
+	runGit("commit", "-m", "feature work")
+
+	// A divergent commit on base forces a real (non-fast-forward) merge.
+	runGit("checkout", base)
+	write("mainwork.go", "package mainwork\n")
+	runGit("add", "mainwork.go")
+	runGit("commit", "-m", "main work")
+
+	// HEAD is now a 2-parent merge commit.
+	runGit("merge", "--no-ff", "-m", "merge feature", "feature")
+
+	changes, err := LastCommitChanges(root)
+	if err != nil {
+		t.Fatalf("LastCommitChanges: %v", err)
+	}
+	// The merge's net change vs its first parent is the feature file it brings in.
+	var gotFeature bool
+	for _, c := range changes {
+		if filepath.Base(c.Path) == "feature.go" {
+			if c.Op != OpUpsert {
+				t.Errorf("feature.go op = %v, want upsert", c.Op)
+			}
+			gotFeature = true
+		}
+	}
+	if !gotFeature {
+		t.Fatalf("merge commit did not report feature.go; got %+v", changes)
 	}
 }
 

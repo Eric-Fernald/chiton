@@ -225,6 +225,61 @@ func TestStressEnqueueDuringFire(t *testing.T) {
 	}
 }
 
+// TestNoConcurrentSelfRun guards the documented invariant that a single key
+// never runs concurrently with itself. The handler holds each run open briefly
+// to widen the window in which the old launch() could start a second handler for
+// a key already in flight (the timer-fires-then-Enqueue-re-arms race lands the
+// same key in `ready` twice). Run with -race for full coverage.
+func TestNoConcurrentSelfRun(t *testing.T) {
+	var mu sync.Mutex
+	inFlight := map[string]int{}
+	var violated int32
+	q := New(func(_ context.Context, key string) error {
+		mu.Lock()
+		inFlight[key]++
+		if inFlight[key] > 1 {
+			atomic.StoreInt32(&violated, 1)
+		}
+		mu.Unlock()
+
+		time.Sleep(time.Millisecond) // hold the run open to widen any overlap
+
+		mu.Lock()
+		inFlight[key]--
+		mu.Unlock()
+		return nil
+	}, Options{Workers: 8, Debounce: time.Millisecond})
+	q.Start(context.Background())
+
+	keys := []string{"a", "b", "c", "d", "e"}
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				for _, k := range keys {
+					q.Enqueue(k)
+				}
+			}
+		}()
+	}
+	time.Sleep(300 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+	q.Drain()
+
+	if atomic.LoadInt32(&violated) != 0 {
+		t.Fatal("a key ran concurrently with itself (single-key-serialization invariant violated)")
+	}
+}
+
 // TestOnDone fires after each handler run.
 func TestOnDone(t *testing.T) {
 	var doneCount int32
