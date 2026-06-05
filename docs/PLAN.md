@@ -1569,7 +1569,7 @@ llm.timeout_seconds: 60
 
 ```yaml
 llm.max_calls_per_minute: 30
-llm.max_total_input_tokens_per_session: 5_000_000
+llm.max_total_input_tokens_per_session: 5000000
 llm.budget_usd_per_session: 5.00       # provider pricing tables embedded
                                        # in cost.go; conservative estimates
 ```
@@ -1745,34 +1745,6 @@ Cost (self-host)   $0         $0         $$$        $0         $$           $/mo
 > (**) Sourcegraph has Cody, not a true MCP server, though they're moving that way.
 
 The honest summary: **chiton is the only entry that combines on-device, embedded store, hybrid retrieval, meeting ingest, multi-assistant MCP, incremental updates, and a code-analysis rule engine in one binary.** Each individual capability exists somewhere else; the combination is the value.
-
----
-
-## Licensing & Commercialization Stance
-
-- **License:** MIT for the core (matching Graphify and TrueCourse).
-- No CLA required. Contributions accepted under inbound=outbound MIT.
-- No telemetry, ever, in the open-source binary.
-- If a hosted/team variant ever ships, it lives in a separate repo with a separate license. The OSS binary stays feature-complete for single-user use; we never cripple it to upsell.
-- Sponsorship via GitHub Sponsors is fine; gating features behind sponsorship is not.
-- **Trademark:** hold the name once chosen. License the name for forks that don't materially diverge; require renaming for ones that do.
-
----
-
-## Naming
-
-"chiton" is a working placeholder. Final name must be:
-
-- Available as a GitHub org/repo name.
-- Available as an npm/pypi/crates.io package name (we won't publish there but namesquatters will still cause confusion).
-- Trademark-clear in US/EU for "computer software" (USPTO class 9).
-- Pronounceable by English, German, Japanese speakers without explanation. No silent letters, no "is it nem-oh or muh-NEE-moh."
-- Not already a meaningful word in a major programming context (rules out "atlas", "graph", "memo", "recall", "index").
-
-**Candidates to evaluate before Phase 1 ships:**
-chiton, gradient, contour, lattice, marrow, bedrock, koan, prism, cinder, foundry (taken), atlas (taken), recall (taken)
-
-Final naming decision is a Phase 0 exit criterion. Until then, all package paths use `github.com/Eric-Fernald/chiton` as a placeholder.
 
 ---
 
