@@ -646,16 +646,67 @@ workspace path (trust/prompt-mode gated) — the installers target the
 fully-documented, no-caveat locations instead. A first-party VS Code extension
 remains Phase 6.
 
-### Phase 4 — Meetings & External Sources
+### ✅ Phase 4 — Meetings & External Sources
 
-- Whisper.cpp wrapper for local audio/video transcription.
-- URL ingest: papers (PDF parse), tweets, YouTube audio.
-- Microsoft Teams integration:
-  - Azure AD app registration, `OnlineMeetings.Read` + `CallRecords.Read.All`.
-  - Webhook receiver for `callRecords` change notifications.
-  - Transcript fetch via `/me/onlineMeetings/{id}/transcripts`.
-  - Speaker-turn nodes + `DISCUSSED_IN` edges back into the code/doc graph.
-- Meeting → code linkage extractor (LLM) that finds "we decided X about Y" and creates `DECIDED_IN` edges to the corresponding code/symbol nodes.
+The unifying insight: Teams, Zoom, and whisper.cpp **all export WebVTT/SRT**, so a
+single pure-Go transcript parser (`internal/extract/meeting`) is the convergence
+point for every source. Once a transcript is parsed it flows through one path —
+`meeting.ToGraph` → meeting/turn/person nodes → the subagent linkage that ties
+decisions back to code — regardless of whether it came from a local file, a
+whisper transcription, or the Microsoft Graph API.
+
+- ✅ **Transcript ingest** (`internal/extract/meeting`): a dependency-free parser
+  for WebVTT (incl. Teams `<v Name>` voice spans), SRT, and plain
+  "Speaker: text" notes, with timestamp parsing and same-speaker cue coalescing.
+  `ToGraph` emits a `meeting` node plus `meeting_turn` children (CONTAINS) and
+  deduped, PII-tagged `person` nodes (`meeting --MENTIONED--> person`
+  participants) — all `EXTRACTED`/1.0. The meeting and its turns share the
+  meeting's `source_uri` so a re-ingest replaces it atomically (the same pattern
+  the AST extractors use for a file and its symbols); persons use a shared
+  `person://` identity. CLI: `chiton meeting ingest <file>...`.
+- ✅ **Whisper transcription** (`internal/ingest/audio`): a `Transcriber`
+  interface with a pure-Go shell-out backend (auto-detects OpenAI `whisper` /
+  whisper.cpp `whisper-cli` on PATH, parses their WebVTT) as the default, plus an
+  in-process **whisper.cpp CGo backend behind `//go:build whisper_cgo`**
+  (`go get github.com/ggerganov/whisper.cpp/bindings/go`; needs CGO_ENABLED=1 +
+  libwhisper) — excluded from the default build so `go build ./...` stays pure-Go.
+  CLI: `chiton meeting transcribe <audio>`.
+- ✅ **URL ingest** (`internal/ingest/url`): fetch http(s)/`file://`/local paths;
+  dispatch by content type — HTML→text+`<title>` via `golang.org/x/net/html`,
+  PDF→text via `github.com/ledongthuc/pdf`, VTT/SRT→prose via the meeting parser,
+  YouTube→transcript via a `yt-dlp` shell-out. Creates a `url` node with
+  `doc_section` children, so the existing `pending_extractions` flow extracts its
+  concepts for free. CLI: `chiton add-url <url>`; MCP write tool `add_url`.
+- ✅ **Microsoft Teams integration** (`internal/ingest/teams`): real
+  `msgraph-sdk-go` + `azidentity` client (app-only client-credentials auth),
+  listing + fetching transcripts via
+  `/users/{id}/onlineMeetings/{id}/transcripts/{id}/content` as WebVTT, behind a
+  `TranscriptSource` interface so the ingest orchestration is unit-tested with a
+  fake. A pure-`net/http` **webhook receiver** does the Graph subscription
+  `validationToken` handshake and dispatches `changeNotification`s (clientState-
+  validated, constant-time) to auto-ingest new transcripts. CLI:
+  `chiton teams fetch --meeting <id>` and `chiton teams serve-webhook`.
+- ✅ **Meeting → code linkage** (`internal/extract/meeting/linkage.go`): the
+  capability the plan calls unique. A `LinkService` mirroring the doc/LLM-rule
+  subagent path — `Pending` emits one schema-pinned task per un-linked meeting
+  (transcript text + a candidate-symbol menu, transcript treated strictly as
+  data), `Submit` ingests decisions and writes `decision`/`rationale` nodes with
+  `DECIDED_IN` (decision→meeting and decision→code symbol), `DISCUSSED_IN`
+  (symbol→meeting), `ACTION_FOR` (decision→person), `MENTIONED`, and
+  `RATIONALE_FOR` edges, tagged `INFERRED` (or `AMBIGUOUS` below the confidence
+  threshold). Symbol labels resolve to real nodes via the store (no fabricated
+  links); re-submit supersedes a meeting's prior decisions. CLI:
+  `chiton meeting pending|submit`; MCP: `pending_meeting_links` /
+  `submit_meeting_links`.
+- ✅ **MCP read tools** `search_meetings(query, since?, limit?, include_pii?)` and
+  `decisions_about(topic, since?, limit?)` — the latter answers "why is this
+  function like this?" with the meeting that decided it. Participant names (PII)
+  are hidden unless `include_pii` is set.
+
+**Deferred:** daemon-mode (chiton calling an LLM itself for unattended linkage —
+the subagent `pending`/`submit` flow is the path today); tweet ingest beyond a
+best-effort HTML fetch (no X API); speaker diarization in the whisper backend;
+incremental re-linkage on transcript change (re-ingest + re-link is manual).
 
 ### Phase 5 — Polish & Distribution
 

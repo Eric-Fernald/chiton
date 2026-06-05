@@ -12,11 +12,13 @@ import (
 	mcpsdk "github.com/mark3labs/mcp-go/server"
 
 	"github.com/Eric-Fernald/chiton/internal/analyze"
+	"github.com/Eric-Fernald/chiton/internal/extract/meeting"
 	"github.com/Eric-Fernald/chiton/internal/extract/subagent"
 	"github.com/Eric-Fernald/chiton/internal/graph/cluster"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 	"github.com/Eric-Fernald/chiton/internal/graph/retrieve"
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
+	urlingest "github.com/Eric-Fernald/chiton/internal/ingest/url"
 )
 
 // Deps carries the optional semantic- and analysis-layer services the server
@@ -28,6 +30,12 @@ type Deps struct {
 	Extractor *subagent.Service
 	// LLM backs pending_analyses / submit_analysis (Phase 2.5 LLM rules).
 	LLM *analyze.LLMService
+	// MeetingLinker backs pending_meeting_links / submit_meeting_links (Phase 4
+	// meeting→code linkage). nil disables those tools.
+	MeetingLinker *meeting.LinkService
+	// URLIngester backs the add_url write tool (Phase 4). nil (e.g. a read-only
+	// server) makes add_url report that it is unavailable.
+	URLIngester *urlingest.Ingester
 	// BaselineDir is where diff_findings reads saved baselines from
 	// (default: .chiton/baselines).
 	BaselineDir string
@@ -58,6 +66,12 @@ func New(gs store.GraphStore, overlay *cluster.Results, deps Deps) *mcpsdk.MCPSe
 	s.AddTool(diffFindingsTool(), diffFindingsHandler(gs, baselineDir))
 	s.AddTool(pendingAnalysesTool(), pendingAnalysesHandler(deps.LLM))
 	s.AddTool(submitAnalysisTool(), submitAnalysisHandler(deps.LLM))
+	// Phase 4: meetings & external sources.
+	s.AddTool(searchMeetingsTool(), searchMeetingsHandler(gs))
+	s.AddTool(decisionsAboutTool(), decisionsAboutHandler(gs))
+	s.AddTool(pendingMeetingLinksTool(), pendingMeetingLinksHandler(deps.MeetingLinker))
+	s.AddTool(submitMeetingLinksTool(), submitMeetingLinksHandler(deps.MeetingLinker))
+	s.AddTool(addURLTool(), addURLHandler(deps.URLIngester))
 	return s
 }
 

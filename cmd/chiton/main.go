@@ -24,6 +24,7 @@ import (
 	chitoncrypto "github.com/Eric-Fernald/chiton/internal/crypto"
 	"github.com/Eric-Fernald/chiton/internal/embed"
 	extast "github.com/Eric-Fernald/chiton/internal/extract/ast"
+	"github.com/Eric-Fernald/chiton/internal/extract/meeting"
 	"github.com/Eric-Fernald/chiton/internal/extract/subagent"
 	"github.com/Eric-Fernald/chiton/internal/graph/cluster"
 	"github.com/Eric-Fernald/chiton/internal/graph/metrics"
@@ -32,6 +33,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
 	badgerstore "github.com/Eric-Fernald/chiton/internal/graph/store/badger"
 	"github.com/Eric-Fernald/chiton/internal/hooks"
+	urlingest "github.com/Eric-Fernald/chiton/internal/ingest/url"
 	"github.com/Eric-Fernald/chiton/internal/install"
 	mcpsrv "github.com/Eric-Fernald/chiton/internal/mcp"
 	"github.com/Eric-Fernald/chiton/internal/report"
@@ -55,7 +57,7 @@ clusters them with Leiden, and serves the result to AI assistants over MCP
 so they spend fewer tokens navigating architecture, docs, and prior tool calls.`,
 	}
 
-	root.AddCommand(initCmd(), buildCmd(), queryCmd(), serveCmd(), installCmd(), uninstallCmd(), doctorCmd(), clusterCmd(), reportCmd(), analyzeCmd(), findingsCmd(), hooksCmd(), embedCmd(), searchCmd(), extractCmd(), syncCmd())
+	root.AddCommand(initCmd(), buildCmd(), queryCmd(), serveCmd(), installCmd(), uninstallCmd(), doctorCmd(), clusterCmd(), reportCmd(), analyzeCmd(), findingsCmd(), hooksCmd(), embedCmd(), searchCmd(), extractCmd(), syncCmd(), meetingCmd(), addURLCmd(), teamsCmd())
 	return root
 }
 
@@ -966,6 +968,10 @@ func buildSemanticDeps(cmd *cobra.Command, cfg *config.Config, gs store.GraphSto
 	var deps mcpsrv.Deps
 	deps.LLM = analyze.NewLLMService(gs, nil, cfg.Semantic.ConfidenceThreshold, ".chiton")
 	deps.BaselineDir = analyze.BaselineDir(".chiton")
+	// Phase 4: meeting→code linkage (read pending always; submit guarded by the
+	// store's read-only flag) and URL ingest (add_url; also read-only-guarded).
+	deps.MeetingLinker = meeting.NewLinkService(gs, cfg.Semantic.ConfidenceThreshold)
+	deps.URLIngester = urlingest.New(gs)
 
 	emb, err := newEmbedder(cfg, "", "")
 	if err != nil {
