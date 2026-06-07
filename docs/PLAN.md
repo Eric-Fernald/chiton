@@ -708,17 +708,48 @@ the subagent `pending`/`submit` flow is the path today); tweet ingest beyond a
 best-effort HTML fetch (no X API); speaker diarization in the whisper backend;
 incremental re-linkage on transcript change (re-ingest + re-link is manual).
 
-### Phase 5 — Polish & Distribution
+### ✅ Phase 5 — Polish & Distribution
 
-- HTML interactive graph export (vis.js or cytoscape.js, generated static).
-- Mermaid export for embedding in docs.
-- `chiton install` command per assistant (writes rules file + registers MCP).
-- Cross-repo graph merging.
-- Honest benchmark suite: token cost per query across 3-5 corpora of varying size and shape, published as a table not a hero number.
-- HTTP/SSE transport for shared-daemon mode.
-- Unix socket transport for Linux/macOS power users.
-- Per-assistant install matrix published in README.
-- First public release. MIT license.
+- ✅ **HTML interactive graph export** — `internal/report/visual.go`
+  (`GenerateHTML`) emits a self-contained vis-network page: nodes coloured by
+  community, sized by degree, with a live search box and click-to-inspect. Node
+  labels/URIs are JSON-escaped so untrusted content can't break out of the
+  `<script>` data block. CLI: `chiton visualize --format html`.
+- ✅ **Mermaid export** — `GenerateMermaid` writes a `flowchart LR` with
+  per-community subgraphs (label-escaped, capped at `mermaidMaxNodes` since
+  Mermaid's layout degrades on dense graphs). CLI: `chiton visualize --format
+  mermaid`. Both honour `--scope` and `--max-nodes`.
+- ✅ **`chiton install` per assistant** — shipped in Phase 1.5 / 3.5; the
+  per-assistant matrix is now published in the README and `docs/INSTALL.md`.
+- ✅ **Cross-repo graph merging** — `internal/graph/portable` (`Read` + `Merge`)
+  plus `chiton export` / `chiton merge` (alias `import`). Node IDs are stable
+  content hashes, so merging is idempotent and dedups nodes shared across repos;
+  embeddings are routed into the vector keyspace, not inlined into node JSON.
+- ✅ **Honest benchmark suite** — `internal/bench` + `chiton bench` (`--synth N`
+  for a reproducible corpus, `--json`). Measures token cost three ways
+  (naive / grep+read / chiton's byte-faithful MCP payload) across corpora of
+  varying size; results in `docs/BENCHMARK.md` as a table. **The honest finding:
+  vs naive, chiton is ~7–14× cheaper at scale; vs grep+read it is roughly par on
+  raw token count (cheaper for hub symbols, costlier for large depth-2
+  neighborhoods). The value is better/typed context, not raw token reduction.**
+- ✅ **HTTP/SSE transport for shared-daemon mode** — `chiton serve --http`
+  (mcp-go SSE server); the default non-stdio transport.
+- ✅ **Unix socket transport** — `chiton serve --unix <path>` serves the SSE
+  handler over a Unix domain socket (`cmd/chiton/serve_transport.go`): refuses to
+  clobber a non-socket path, cleans a stale socket, graceful Ctrl-C shutdown,
+  and fails fast with a clear message on Windows.
+- ✅ **Per-assistant install matrix published in README** (plus the full
+  `docs/INSTALL.md`, `docs/MCP.md`, `docs/SKILL.md`, `docs/SECURITY.md`).
+- ✅ **Version + release plumbing** — `chiton version` (ldflags-injected
+  version/commit/date with a VCS-build-info fallback; also `chiton --version`)
+  and a `Makefile` with `build`/`test`/`vet`/`release` (cross-compile) targets.
+
+**Deferred:** "first public release" is a milestone, not code — the release
+plumbing (version stamping, cross-compile `make release`) is in place, but
+tagging/publishing is a manual step. HTML export uses vis-network from a CDN (a
+fully-offline bundled asset is a later option). Loopback-only default bind +
+`0.0.0.0` warning for `--http` (called out in the threat model) is documented in
+`docs/SECURITY.md` but not yet enforced.
 
 ### Phase 5.5 — Dashboard (Optional)
 

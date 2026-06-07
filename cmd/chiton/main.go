@@ -55,9 +55,10 @@ func rootCmd() *cobra.Command {
 		Long: `Chiton ingests code, docs, and meeting transcripts into a typed graph,
 clusters them with Leiden, and serves the result to AI assistants over MCP
 so they spend fewer tokens navigating architecture, docs, and prior tool calls.`,
+		Version: resolveVersion(),
 	}
 
-	root.AddCommand(initCmd(), buildCmd(), queryCmd(), serveCmd(), installCmd(), uninstallCmd(), doctorCmd(), clusterCmd(), reportCmd(), analyzeCmd(), findingsCmd(), hooksCmd(), embedCmd(), searchCmd(), extractCmd(), syncCmd(), meetingCmd(), addURLCmd(), teamsCmd())
+	root.AddCommand(initCmd(), buildCmd(), queryCmd(), serveCmd(), installCmd(), uninstallCmd(), doctorCmd(), clusterCmd(), reportCmd(), visualizeCmd(), analyzeCmd(), findingsCmd(), hooksCmd(), embedCmd(), searchCmd(), extractCmd(), syncCmd(), meetingCmd(), addURLCmd(), teamsCmd(), exportCmd(), mergeCmd(), benchCmd(), versionCmd())
 	return root
 }
 
@@ -898,13 +899,17 @@ needed. Restart chiton serve after clustering to load the new results.`,
 func serveCmd() *cobra.Command {
 	var stdio bool
 	var addr string
+	var unixPath string
 	var writable bool
 	var graphPath string
 
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the MCP server",
-		Long: `Start the MCP server over stdio (for assistants) or HTTP (for debugging).
+		Long: `Start the MCP server over one of three transports (identical tool surface):
+  --stdio        assistant-launched (the assistant starts/stops the process)
+  --http :7474   HTTP + SSE — a shared daemon across sessions, or for debugging
+  --unix <path>  a Unix domain socket — low-latency shared daemon (Linux/macOS)
 
 By default the store opens read-only so 'chiton build', 'embed', and 'cluster'
 can run concurrently; the read tools (semantic_search, pending_extractions)
@@ -940,16 +945,24 @@ records in the MCP config so the server uses the same store as 'chiton build'.`,
 			deps := buildSemanticDeps(cmd, cfg, gs, clusterResults)
 			s := mcpsrv.New(gs, clusterResults, deps)
 
-			if stdio {
+			// Transport selection: stdio (assistant-launched), Unix socket
+			// (low-latency shared daemon), or HTTP/SSE (default; shared daemon
+			// across sessions / debugging). All expose the identical tool surface.
+			switch {
+			case stdio:
 				return mcpsdk.ServeStdio(s)
+			case unixPath != "":
+				return serveUnix(cmd, mcpsdk.NewSSEServer(s), unixPath)
+			default:
+				fmt.Fprintf(cmd.OutOrStdout(), "serve: listening on %s (SSE)\n", addr)
+				return mcpsdk.NewSSEServer(s).Start(addr)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "serve: listening on %s\n", addr)
-			return mcpsdk.NewSSEServer(s).Start(addr)
 		},
 	}
 
 	cmd.Flags().BoolVar(&stdio, "stdio", false, "serve over stdio (for MCP assistants)")
-	cmd.Flags().StringVar(&addr, "http", ":7474", "HTTP listen address (for debug)")
+	cmd.Flags().StringVar(&addr, "http", ":7474", "HTTP/SSE listen address (shared daemon / debug)")
+	cmd.Flags().StringVar(&unixPath, "unix", "", "serve over a Unix domain socket at this path (Linux/macOS shared daemon)")
 	cmd.Flags().BoolVar(&writable, "writable", false, "open the store read-write so submit_extraction works over MCP (disables concurrent build/embed)")
 	cmd.Flags().StringVar(&graphPath, "graph", "", "Graph store path to serve (default: configured/built-in graph_path)")
 	return cmd

@@ -13,11 +13,13 @@ The point isn't cheaper context (although that's still a benefit with ~10% token
 it's *better* context: the model gets exactly what's relevant instead of a haystack of 
 files to grep through.
 
-> **Status:** actively developed, single-user and on-device first. Phases 0–3.5
-> (core graph, rule engine, install layer, semantic layer, LLM rules + diff
-> analysis, live sync, and broad multi-assistant installers) are implemented.
-> Meeting/transcript ingestion and the HTML dashboard are on the roadmap (see
-> [docs/PLAN.md](docs/PLAN.md)).
+> **Status:** actively developed, single-user and on-device first. Phases 0–5
+> are implemented — core graph, rule engine, install layer, semantic layer, LLM
+> rules + diff analysis, live sync, broad multi-assistant installers,
+> meeting/transcript ingestion with decision-to-code linkage, and the Phase 5
+> polish layer (interactive HTML + Mermaid export, cross-repo graph merging, a
+> Unix-socket transport, and an honest cross-corpus benchmark). See
+> [docs/PLAN.md](docs/PLAN.md) for the full roadmap.
 
 ---
 
@@ -26,8 +28,11 @@ files to grep through.
 Chiton answers structural and navigational questions with typed edges
 (`CALLS`, `IMPORTS`, `CONTAINS`, `DESCRIBES`, `VIOLATES`, …) rather than raw file
 dumps. Ask "what does `X` depend on?" or "how are `A` and `B` connected?" and the
-assistant gets a small, structured subgraph — far fewer tokens, far less
-attention dilution, and no manual cross-referencing.
+assistant gets a small, structured subgraph — precise, with little attention
+dilution and no manual cross-referencing. On raw token count it is dramatically
+cheaper than dumping whole files and roughly on par with `grep`+`read` (see
+[docs/BENCHMARK.md](docs/BENCHMARK.md) for honest, measured numbers); the real
+gain is *better* context, not fewer tokens.
 
 Every node and edge carries **provenance** and **confidence**:
 
@@ -113,6 +118,11 @@ chiton search "where do we handle auth?"
 | `chiton query <label>` | Look up a node by label substring and print its neighborhood (`--depth`, `--edge-kinds`, `--json`). |
 | `chiton cluster` | Run Leiden community detection + betweenness; writes `cluster.json` sidecar. |
 | `chiton report` | Generate `GRAPH_REPORT.md` (god nodes, community summaries). Needs a prior `cluster`. |
+| `chiton visualize` | Export an interactive HTML graph (`--format html`) or a Mermaid diagram (`--format mermaid`). `--scope`, `--max-nodes`. |
+| `chiton export` | Write the whole graph to a portable JSON snapshot (`--out`, default stdout). |
+| `chiton merge <snap>…` | Merge exported snapshot(s) into the current graph (cross-repo merging; idempotent, dedups shared nodes). Alias: `import`. |
+| `chiton bench [path]` | Benchmark token cost (chiton vs naive vs grep+read); `--synth N` for a synthetic corpus, `--json`. |
+| `chiton version` | Print version + build metadata. |
 | `chiton embed <path>` | Embed nodes for semantic search (`--provider`, `--all`, `--link-similar`). |
 | `chiton search <query>` | Hybrid semantic + graph search from the CLI. |
 | `chiton extract pending\|submit` | Emit semantic-extraction task specs / ingest the structured results. |
@@ -122,7 +132,7 @@ chiton search "where do we handle auth?"
 | `chiton sync watch\|git\|once` | Live sync: fsnotify watcher, git-driven re-index, or one-shot reconcile. |
 | `chiton hooks install\|uninstall\|status\|run` | Manage git hooks (gating pre-commit/pre-push; syncing post-commit/post-checkout). |
 | `chiton install\|uninstall\|doctor` | Register/remove chiton with AI assistants; report install state. `--assistant <name>` (claude-code, copilot-vscode, cursor, codex, gemini-cli, opencode, aider, antigravity, copilot-cli), `all`, or `auto` (default: detected). |
-| `chiton serve --stdio` | Start the MCP server over stdio (use `--http :7474` for debugging, `--writable` for submit tools). |
+| `chiton serve` | Start the MCP server: `--stdio` (assistants), `--http :7474` (SSE / shared daemon), or `--unix <path>` (socket). `--writable` for submit tools. |
 
 ## MCP tools
 
@@ -151,6 +161,35 @@ Write tools (`submit_extraction`, `submit_analysis`) need a writable store: run
 `chiton serve --writable`, or use the `chiton extract submit` / `chiton analyze
 submit` CLI. The default read-only server lets `build`, `embed`, and `cluster`
 run concurrently.
+
+The server speaks the same tool surface over three transports: `--stdio`
+(assistant-launched), `--http :7474` (SSE; a shared daemon across sessions or
+for debugging), and `--unix <path>` (a Unix-domain socket for Linux/macOS power
+users). Full reference: [docs/MCP.md](docs/MCP.md).
+
+## Assistant support
+
+`chiton install` registers the MCP server, a `/chiton` skill, and an always-on
+rules block. Run it with no flags to auto-detect assistants in the workspace,
+`--assistant all` for every one, `--assistant <name>` for a specific one, or
+`--user-scope` for user-global config. `chiton doctor` reports the state;
+`chiton uninstall` reverses it.
+
+| Assistant (`--assistant`) | MCP config | Rules file | MCP? |
+|---|---|---|---|
+| `claude-code` | `.mcp.json` | `CLAUDE.md` + `.claude/skills/chiton/` | yes |
+| `copilot-vscode` | `.vscode/mcp.json` | `.github/copilot-instructions.md` | yes |
+| `cursor` | `.cursor/mcp.json` | `.cursor/rules/chiton.mdc` | yes |
+| `codex` | `~/.codex/config.toml` | `AGENTS.md` | yes |
+| `gemini-cli` | `.gemini/settings.json` | `GEMINI.md` | yes |
+| `opencode` | `opencode.json` (`mcp`) | `AGENTS.md` | yes |
+| `antigravity` | `~/.gemini/config/mcp_config.json` | `AGENTS.md` | yes |
+| `copilot-cli` | `~/.copilot/mcp-config.json` | `AGENTS.md` | yes |
+| `aider` | `.aider.conf.yml` (`read:`) | `CONVENTIONS.md` | no¹ |
+
+¹ Aider has no native MCP yet, so chiton wires its rules/CLI fallback only. Full
+per-platform paths, caveats, and troubleshooting: [docs/INSTALL.md](docs/INSTALL.md).
+The slash-command reference is in [docs/SKILL.md](docs/SKILL.md).
 
 ## The rule engine
 
@@ -190,6 +229,23 @@ re-clustered. Betweenness is a global metric carried forward between full
 > Stop the watcher with Ctrl-C so BadgerDB closes cleanly; a hard kill can leave
 > the write-ahead log needing recovery on the next open.
 
+## Visualizing & sharing the graph
+
+```sh
+chiton visualize --format html --out graph.html   # interactive, pan/zoom/search (vis-network)
+chiton visualize --format mermaid --out graph.mmd  # Mermaid flowchart for Markdown docs
+chiton export --out graph.json                     # portable JSON snapshot of the whole graph
+chiton merge other-repo.json                       # merge another repo's snapshot into this graph
+```
+
+The HTML export is a self-contained page: nodes coloured by community, sized by
+degree, with a live search box. Mermaid output drops straight into a Markdown
+file a renderer (GitHub, Obsidian, mkdocs) draws inline; both honour `--scope`
+and `--max-nodes`. `export`/`merge` are the portable interchange path — node IDs
+are stable content hashes, so merging several repos' snapshots into one store
+dedups shared nodes and builds a **cross-repo** graph. The honest token-cost
+benchmark lives in [docs/BENCHMARK.md](docs/BENCHMARK.md) (`chiton bench`).
+
 ## Configuration
 
 chiton reads `.chitonrc` (TOML) from the working directory or `$HOME`, with
@@ -223,6 +279,13 @@ out for CI or synthetic data with `chiton init --encrypt=false`.
   extractors for symbols and imports.
 - **Markdown** — `doc_section` nodes per heading with `CONTAINS` nesting.
 - **Images** — image nodes at build time, described via vision subagents.
+- **Meetings** — Teams/Zoom/whisper transcripts (WebVTT/SRT) become `meeting`,
+  `meeting_turn`, and `person` nodes; subagent linkage ties the decisions made
+  in them back to the code symbols they reference (`chiton meeting`).
+- **URLs** — articles, PDFs, and YouTube transcripts via `chiton add-url`.
+
+Encryption at rest, secrets, and meeting PII are covered in
+[docs/SECURITY.md](docs/SECURITY.md).
 
 ## Architecture
 
@@ -243,9 +306,11 @@ chiton/
 │   ├── crypto/            argon2id KDF + keyfile for encryption at rest
 │   ├── install/           per-assistant installers (Claude Code, Copilot, Cursor, Codex, Gemini CLI, OpenCode, Aider, Antigravity, Copilot CLI)
 │   ├── hooks/             git hook install + gating runner
-│   ├── mcp/               MCP server and tool handlers
-│   └── report/            GRAPH_REPORT.md generator
-└── docs/                  PLAN.md (full roadmap), PHASE0_BENCHMARK.md
+│   ├── mcp/               MCP server and tool handlers (stdio / SSE / unix)
+│   ├── report/            GRAPH_REPORT.md + interactive HTML + Mermaid export
+│   ├── graph/portable/    JSON snapshot read/merge (export, cross-repo merging)
+│   └── bench/             token-cost benchmark harness + synthetic corpus
+└── docs/                  PLAN.md, INSTALL.md, MCP.md, SKILL.md, SECURITY.md, BENCHMARK.md
 ```
 
 The `GraphStore` interface is the project's spine — every package depends on it,
@@ -257,10 +322,12 @@ the vector index (flat today, HNSW/sqlite-vec deferred) and the job queue
 
 ## Roadmap
 
-Shipped through **Phase 3.5** (live sync + broad multi-assistant installers:
-Cursor, Codex, Gemini CLI, OpenCode, Aider, Antigravity, Copilot CLI). Next up:
-meeting/transcript ingestion with decision-to-code linkage, URL/paper ingest, an
-HTML graph export, and an honest cross-corpus benchmark suite. See
+Shipped through **Phase 5** — core graph, rule engine, install layer, semantic
+layer, LLM rules + diff analysis, live sync, broad multi-assistant installers,
+meeting/transcript ingestion with decision-to-code linkage, and the polish layer
+(HTML + Mermaid export, cross-repo merging, Unix-socket transport, cross-corpus
+benchmark). Next up: an optional static findings/graph dashboard (Phase 5.5) and
+a first-party VS Code extension plus browser/email ingest (Phase 6). See
 [docs/PLAN.md](docs/PLAN.md) for the full plan and design rationale.
 
 ## License
