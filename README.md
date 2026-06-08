@@ -119,6 +119,7 @@ chiton search "where do we handle auth?"
 | `chiton cluster` | Run Leiden community detection + betweenness; writes `cluster.json` sidecar. |
 | `chiton report` | Generate `GRAPH_REPORT.md` (god nodes, community summaries). Needs a prior `cluster`. |
 | `chiton visualize` | Export an interactive HTML graph (`--format html`) or a Mermaid diagram (`--format mermaid`). `--scope`, `--max-nodes`. |
+| `chiton dashboard build` | Generate a read-only static dashboard (interactive graph + findings explorer) into a directory (`--out`, default `chiton-dashboard/`). `--scope`, `--max-nodes`, `--title`, `--include-ambiguous`. Not a server — open `index.html` directly. |
 | `chiton export` | Write the whole graph to a portable JSON snapshot (`--out`, default stdout). |
 | `chiton merge <snap>…` | Merge exported snapshot(s) into the current graph (cross-repo merging; idempotent, dedups shared nodes). Alias: `import`. |
 | `chiton bench [path]` | Benchmark token cost (chiton vs naive vs grep+read); `--synth N` for a synthetic corpus, `--json`. |
@@ -234,6 +235,7 @@ re-clustered. Betweenness is a global metric carried forward between full
 ```sh
 chiton visualize --format html --out graph.html   # interactive, pan/zoom/search (vis-network)
 chiton visualize --format mermaid --out graph.mmd  # Mermaid flowchart for Markdown docs
+chiton dashboard build                             # static dashboard: graph + findings explorer → chiton-dashboard/
 chiton export --out graph.json                     # portable JSON snapshot of the whole graph
 chiton merge other-repo.json                       # merge another repo's snapshot into this graph
 ```
@@ -241,10 +243,14 @@ chiton merge other-repo.json                       # merge another repo's snapsh
 The HTML export is a self-contained page: nodes coloured by community, sized by
 degree, with a live search box. Mermaid output drops straight into a Markdown
 file a renderer (GitHub, Obsidian, mkdocs) draws inline; both honour `--scope`
-and `--max-nodes`. `export`/`merge` are the portable interchange path — node IDs
-are stable content hashes, so merging several repos' snapshots into one store
-dedups shared nodes and builds a **cross-repo** graph. The honest token-cost
-benchmark lives in [docs/BENCHMARK.md](docs/BENCHMARK.md) (`chiton bench`).
+and `--max-nodes`. `dashboard build` adds a read-only **findings explorer** next
+to that graph — filter findings by severity, category, community, file, and
+provenance, and click any finding to focus its node in the graph — written as
+static `index.html` you open directly (no server). `export`/`merge` are the
+portable interchange path — node IDs are stable content hashes, so merging
+several repos' snapshots into one store dedups shared nodes and builds a
+**cross-repo** graph. The honest token-cost benchmark lives in
+[docs/BENCHMARK.md](docs/BENCHMARK.md) (`chiton bench`).
 
 ## Configuration
 
@@ -307,7 +313,7 @@ chiton/
 │   ├── install/           per-assistant installers (Claude Code, Copilot, Cursor, Codex, Gemini CLI, OpenCode, Aider, Antigravity, Copilot CLI)
 │   ├── hooks/             git hook install + gating runner
 │   ├── mcp/               MCP server and tool handlers (stdio / SSE / unix)
-│   ├── report/            GRAPH_REPORT.md + interactive HTML + Mermaid export
+│   ├── report/            GRAPH_REPORT.md + interactive HTML + Mermaid + dashboard
 │   ├── graph/portable/    JSON snapshot read/merge (export, cross-repo merging)
 │   └── bench/             token-cost benchmark harness + synthetic corpus
 └── docs/                  PLAN.md, INSTALL.md, MCP.md, SKILL.md, SECURITY.md, BENCHMARK.md

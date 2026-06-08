@@ -54,6 +54,27 @@ func TestGenerateMermaid(t *testing.T) {
 	}
 }
 
+func TestGenerateHTMLNoUntrustedInnerHTMLSinks(t *testing.T) {
+	// Regression: node label/uri/kind are ingested, untrusted strings. The
+	// legend and detail panel must build the DOM via textContent/createTextNode,
+	// never innerHTML — otherwise a label like "<img src=x onerror=…>" runs.
+	evil := []model.Node{sym("a", "<img src=x onerror=alert(1)>"), sym("b", "B")}
+	edges := []model.Edge{{ID: "e1", Src: "a", Dst: "b", Kind: model.EdgeCalls}}
+	var buf bytes.Buffer
+	if err := GenerateHTML(&buf, evil, edges, nil, DefaultVisual); err != nil {
+		t.Fatalf("html: %v", err)
+	}
+	out := buf.String()
+	for _, sink := range []string{"detail.innerHTML", "row.innerHTML"} {
+		if strings.Contains(out, sink) {
+			t.Errorf("found unsafe innerHTML sink %q — untrusted node data must use textContent/createTextNode", sink)
+		}
+	}
+	if !strings.Contains(out, "createTextNode") {
+		t.Error("expected safe DOM construction (createTextNode) in the rendered page")
+	}
+}
+
 func TestGenerateHTMLEscapesScriptClose(t *testing.T) {
 	edges := []model.Edge{{ID: "e1", Src: "a", Dst: "b", Kind: model.EdgeCalls}}
 

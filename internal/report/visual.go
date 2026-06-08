@@ -373,7 +373,11 @@ const htmlTemplate = `<!DOCTYPE html>
   var legend = document.getElementById("legend");
   Object.keys(kinds).sort().forEach(function (k) {
     var row = document.createElement("div");
-    row.innerHTML = '<span class="dot" style="background:' + (kindBorder[k] || "#888") + '"></span>' + k;
+    var dot = document.createElement("span");
+    dot.className = "dot";
+    dot.style.background = kindBorder[k] || "#888";
+    row.appendChild(dot);
+    row.appendChild(document.createTextNode(k)); // k is a node kind — never innerHTML it
     legend.appendChild(row);
   });
 
@@ -381,8 +385,17 @@ const htmlTemplate = `<!DOCTYPE html>
   network.on("click", function (params) {
     if (params.nodes.length) {
       var n = nodesDS.get(params.nodes[0]);
-      detail.innerHTML = "<b>" + n.label + "</b><br>" + n._kind + "<br>" + n._uri +
-        "<br>community " + n._comm + " · degree " + n._deg + " · betweenness " + n._btw.toFixed(4);
+      // Build with textContent/createTextNode — node label/uri/kind are
+      // ingested, untrusted strings and must never reach innerHTML.
+      detail.textContent = "";
+      var b = document.createElement("b"); b.textContent = n.label; detail.appendChild(b);
+      detail.appendChild(document.createElement("br"));
+      detail.appendChild(document.createTextNode(n._kind));
+      detail.appendChild(document.createElement("br"));
+      detail.appendChild(document.createTextNode(n._uri));
+      detail.appendChild(document.createElement("br"));
+      detail.appendChild(document.createTextNode(
+        "community " + n._comm + " · degree " + n._deg + " · betweenness " + n._btw.toFixed(4)));
     } else {
       detail.textContent = "Click a node for details.";
     }

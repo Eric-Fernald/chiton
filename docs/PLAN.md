@@ -751,13 +751,46 @@ fully-offline bundled asset is a later option). Loopback-only default bind +
 `0.0.0.0` warning for `--http` (called out in the threat model) is documented in
 `docs/SECURITY.md` but not yet enforced.
 
-### Phase 5.5 — Dashboard (Optional)
+### ✅ Phase 5.5 — Dashboard (Optional)
 
-- Read-only static web UI generated from the graph + findings.
-- Same vis.js/cytoscape export already planned for Phase 5.
-- Findings explorer: filter by severity, category, file, community.
-- NOT a server. Generated as static files on `chiton dashboard build`.
-- If users demand a live server, that becomes a separate sub-project, not bloat in the daemon.
+- ✅ **Read-only static dashboard** generated from the graph + findings —
+  `internal/report/dashboard.go` (`GenerateDashboard`) emits a single
+  self-contained `index.html` with two tabs: an interactive graph view
+  (vis-network, reusing the Phase 5 `buildView` projection so the same
+  community-colour / degree-sizing / node-cap logic backs both exports) and a
+  findings explorer. Like the HTML graph export, all node/edge/finding data is
+  embedded inline (so the file opens straight from disk over `file://` with no
+  CORS/static-server requirement) and only the vis-network library loads from a
+  CDN. Untrusted node labels and finding messages are embedded via the same
+  HTML-safe `marshalForScript` path, so they can't break out of the `<script>`
+  block (covered by `TestGenerateDashboardEscapesScriptClose`).
+- ✅ **Findings explorer** filters by severity, category, **community**, file
+  (source_uri substring), and provenance, with click-to-sort columns and a
+  header severity breakdown. Each finding cross-links into the graph view:
+  clicking `[graph]` focuses the affected node when it survived the `--max-nodes`
+  cap, and degrades gracefully (an explanatory note) when it was trimmed. The
+  per-finding **community** is resolved in the CLI by joining the finding's
+  `target_node_id` to the cluster overlay (falling back to any node sharing the
+  finding's `target_uri`, preferring the file node, then -1/"none" when the
+  overlay is absent or the target isn't in the graph). The report package stays
+  free of an `analyze` dependency via a lean `DashboardFinding` projection — the
+  CLI converts `analyze.FindingView` into it, mirroring how `buildView` projects
+  raw nodes.
+- ✅ **NOT a server.** `chiton dashboard build` (`cmd/chiton/dashboard.go`) opens
+  the store read-only, loads nodes/edges + the optional `cluster.json` overlay +
+  findings (`analyze.List`, honouring the AMBIGUOUS default and an
+  `--include-ambiguous` opt-in), and writes static files into a directory
+  (`--out`, default `./chiton-dashboard`). Flags mirror `chiton visualize`:
+  `--scope` (subtree filter applied to both the graph and findings),
+  `--max-nodes`, `--title`. A live server, if ever demanded, stays a separate
+  sub-project rather than bloat in the daemon.
+
+New CLI: `chiton dashboard build [--out|--scope|--max-nodes|--title|--include-ambiguous]`.
+
+**Deferred:** cytoscape as an alternative renderer (vis-network is the single
+renderer, shared with `chiton visualize`); a bundled-offline vis-network asset
+(still CDN-loaded, same as the Phase 5 HTML export); incremental/auto dashboard
+refresh on graph change (re-run `chiton dashboard build`).
 
 ### Phase 6 — Stretch (only if Phase 0-5 land)
 
