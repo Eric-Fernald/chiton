@@ -18,10 +18,13 @@ type TrailingWhitespace struct{}
 
 func (TrailingWhitespace) Meta() analyze.Meta {
 	return analyze.Meta{
-		ID:         "style/trailing-whitespace",
-		Category:   analyze.CategoryStyle,
-		Severity:   analyze.SeverityInfo,
-		Scope:      analyze.FileScope,
+		ID:       "style/trailing-whitespace",
+		Category: analyze.CategoryStyle,
+		Severity: analyze.SeverityInfo,
+		Scope:    analyze.FileScope,
+		// Restrict to source languages: Markdown uses two trailing spaces as a
+		// hard line break, and image/binary files have no meaningful "lines".
+		Languages:  []string{"go", "py", "js", "ts", "jsx", "tsx", "rs", "java"},
 		Summary:    "Line ends with trailing whitespace.",
 		Fix:        "Configure your editor to strip trailing whitespace on save.",
 		Provenance: analyze.ProvenanceDeterministic,

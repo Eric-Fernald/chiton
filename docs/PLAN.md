@@ -395,10 +395,17 @@ chiton/
 
 Single Go binary that:
 
-1. ✅ Walks a directory of Go + Markdown files.
-2. ✅ Tree-sitter extracts symbols, calls, imports.
-3. ✅ Stores nodes/edges in BadgerDB (Kuzu deferred to a later phase).
-4. ✅ Exposes ONE MCP tool: `get_node_neighborhood(label)`.
+1. ✅ Walks a directory of Go + Markdown files (`filepath.WalkDir`, dispatched by
+   extension in `internal/extract/ast`).
+2. ✅ Extracts symbols, calls, and imports from the AST. **Implemented with the
+   Go standard library `go/parser`/`go/ast`, NOT tree-sitter** — the original
+   tree-sitter dependency was dropped to keep builds pure-Go/CGo-free across
+   Windows/macOS/Linux; Go uses the stdlib parser and the other languages use
+   regex line-scanners (Phase 1), so chiton ships with no tree-sitter dependency.
+3. ✅ Stores nodes/edges in BadgerDB behind the `store.GraphStore` interface
+   (Kuzu deferred to a stub).
+4. ✅ Exposes the `get_node_neighborhood(label)` MCP tool (`internal/mcp`, on
+   `github.com/mark3labs/mcp-go`).
 
 **Target test:** point Claude Code at this workspace's `Projects/Go_Projects/` folder, ask "what does fetchall depend on?", verify graph traversal beats grep on token usage.
 
@@ -406,25 +413,59 @@ Single Go binary that:
 
 ### ✅ Phase 1 — Core Graph Features
 
-- ✅ Add 5+ language extractors (Go stdlib parser; Python, JS/TS, Rust, Java via regex line-scanning).
-- ✅ SHA256 content cache + incremental re-extraction.
-- ✅ Leiden clustering (full-graph pass first; incremental later).
-- ✅ `GRAPH_REPORT.md` generator (god nodes + community summaries).
-- ✅ MCP tools: `query_graph`, `shortest_path`, `god_nodes`, `graph_summary`.
-- ✅ CLI: `chiton init`, `chiton build`, `chiton query`, `chiton serve`.
+- ✅ Five language extractors (`internal/extract/ast`): Go via the stdlib
+  `go/parser` AST (file/symbol nodes + CONTAINS/IMPORTS/CALLS edges); Python,
+  JS/TS (`.js/.ts/.jsx/.tsx`), Rust, and Java via two-pass regex line-scanners
+  (declarations first, then call resolution; ambiguous bare names skipped rather
+  than mis-linked). Markdown + image extractors land in Phase 2.
+- ✅ SHA256 content cache (`internal/cache`, `cache.json` beside the graph) so
+  `build` skips unchanged files; incremental re-extraction replaces a file's
+  stale nodes/edges (`DeleteBySourceURI` + re-upsert).
+- ✅ Leiden clustering (`internal/graph/cluster`): a genuine port — greedy
+  modularity local-moving → constrained refinement → aggregation, iterated to
+  convergence — persisted to a `cluster.json` sidecar loaded at serve start.
+  Incremental re-clustering follows in Phase 3.
+- ✅ `chiton report` writes `GRAPH_REPORT.md` (`internal/report`): highest-degree
+  / god nodes plus per-community summaries.
+- ✅ MCP tools `query_graph`, `shortest_path`, `god_nodes`, `graph_summary`
+  (alongside Phase 0's `get_node_neighborhood` / `get_node`).
+- ✅ CLI: `chiton init`, `chiton build`, `chiton query`, `chiton serve`
+  (`cmd/chiton`, cobra; `openGraphStore` auto-detects encryption from the keyfile).
 
-### Phase 1.5 — Deterministic Rule Engine + Install Layer
+### ✅ Phase 1.5 — Deterministic Rule Engine + Install Layer
 
-- ✅ Rule registry + `Match` interface.
-- 80-rule starter pack across 8 categories (see TrueCourse section for breakdown). *(seeded with ~20 rules across all 8 categories; security, bugs, quality, architecture, performance, reliability, database, style)*
-- ✅ Findings as graph nodes, persisted in the graph store (BadgerDB).
-- ✅ `chiton analyze` + `findings list/explain` CLI. *(fix command deferred)*
-- ✅ Pre-commit + pre-push hooks via `chiton hooks install` + `.chiton/hooks.yaml` policy file (block-on threshold, timeout, diff-baseline).
-- ✅ MCP tools: `list_findings`, `explain_finding`. *(apply_fix deferred)*
-- ✅ Install layer scaffold (`internal/install/`); Claude Code + Copilot VS Code installers shipped, others stubbed for Phase 3.5.
+- ✅ Rule registry + interfaces (`internal/analyze`): `Rule` / `FileRule` /
+  `GraphRule`, each declaring a `Meta` (id, category, severity, scope, languages,
+  fix hint, provenance); rules self-register at `init()` into a package registry.
+  Eight fixed categories and the five-level severity ladder (info → critical).
+- ✅ **75 high-signal deterministic rules across all eight categories** (the one
+  previously-open item; expanded from ~25). Breakdown: architecture 9, security
+  15, bugs 12, quality 10, performance 8, reliability 8, database 8, style 5.
+  Multi-language — Go graph-scope rules over the import/symbol topology, plus
+  file-scope scanners for Go, Python, JS/TS, Rust, and Java that mask
+  string-literal and comment contents and carry language filters so they stay
+  low-false-positive. The pack was adversarially reviewed for false positives and
+  dog-fooded against chiton's own source. (One candidate, `commented-out-code`,
+  was deliberately dropped — it could not be made reliably low-FP with line
+  heuristics; a noisy rule is worse than no rule. The ~80 target is met in spirit
+  with 75 high-signal rules rather than padded with marginal ones.)
+- ✅ Findings (and the rules they violate) persisted as graph nodes
+  (`finding` / `rule` kinds) with `VIOLATES` → rule and `AFFECTS` → code edges;
+  stable finding IDs (`sha256(rule_id + location)`) so `--diff` compares scans;
+  a re-scan prunes findings that no longer fire (`pruneResolved`) so the store
+  reflects live truth.
+- ✅ `chiton analyze` + `chiton findings list` / `explain` CLI. *(deterministic
+  `fix` command deferred)*
+- ✅ Pre-commit + pre-push hooks via `chiton hooks install` + a committed
+  `.chiton/hooks.yaml` policy file (block-on severity threshold, timeout,
+  diff-baseline).
+- ✅ MCP tools `list_findings`, `explain_finding`. *(apply_fix deferred)*
+- ✅ Install layer scaffold (`internal/install/`); Claude Code + Copilot VS Code
+  installers shipped here, the other seven added in Phase 3.5.
 - ✅ `SKILL.md` template embedded via `go:embed`.
 - ✅ `chiton install` / `uninstall` / `doctor` commands.
-- ✅ Encryption at rest (AES-256-GCM via BadgerDB, argon2id KDF + keyfile next to the graph; opt-out via `chiton init --encrypt=false`).
+- ✅ Encryption at rest (AES-256-GCM via BadgerDB, argon2id KDF + keyfile next to
+  the graph; opt-out via `chiton init --encrypt=false`).
 
 ### ✅ Phase 2 — Semantic Layer
 

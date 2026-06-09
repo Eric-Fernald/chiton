@@ -24,6 +24,7 @@ func (SelectStarFromUnbounded) Meta() analyze.Meta {
 		Category:   analyze.CategoryDatabase,
 		Severity:   analyze.SeverityMedium,
 		Scope:      analyze.FileScope,
+		Languages:  []string{"go", "py", "js", "ts", "java"},
 		Summary:    "SELECT * FROM <table> without a WHERE or LIMIT — risks accidental full scans.",
 		Fix:        "Add WHERE/LIMIT, or select explicit columns to make intent explicit.",
 		Provenance: analyze.ProvenanceDeterministic,
@@ -34,12 +35,12 @@ var selectStarRe = regexp.MustCompile(`(?i)SELECT\s+\*\s+FROM\s+[\w."` + "`" + `
 
 func (SelectStarFromUnbounded) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
+	sc := bufio.NewScanner(bytes.NewReader(maskDBBlocks(t.Content, t.URI)))
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	line := 0
 	for sc.Scan() {
 		line++
-		text := sc.Text()
+		text := stripDBComment(sc.Text(), t.URI)
 		if !selectStarRe.MatchString(text) {
 			continue
 		}

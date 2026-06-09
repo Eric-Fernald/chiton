@@ -16,10 +16,13 @@ type MixedIndent struct{}
 
 func (MixedIndent) Meta() analyze.Meta {
 	return analyze.Meta{
-		ID:         "style/mixed-indent",
-		Category:   analyze.CategoryStyle,
-		Severity:   analyze.SeverityLow,
-		Scope:      analyze.FileScope,
+		ID:       "style/mixed-indent",
+		Category: analyze.CategoryStyle,
+		Severity: analyze.SeverityLow,
+		Scope:    analyze.FileScope,
+		// Restrict to source languages: Markdown and image/binary files should
+		// not be scanned for indentation style.
+		Languages:  []string{"go", "py", "js", "ts", "jsx", "tsx", "rs", "java"},
 		Summary:    "Leading whitespace mixes tabs and spaces.",
 		Fix:        "Pick one (Go: tabs, Python/JS: spaces) and let the formatter normalise.",
 		Provenance: analyze.ProvenanceDeterministic,
