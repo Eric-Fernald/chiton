@@ -13,15 +13,15 @@ import (
 )
 
 var (
-	reRsUse      = regexp.MustCompile(`^\s*(?:pub\s+)?use\s+([^;]+);`)
-	reRsExtern   = regexp.MustCompile(`^\s*extern\s+crate\s+(\w+)`)
-	reRsFn       = regexp.MustCompile(`^\s*(?:pub\s+)?(?:async\s+)?(?:unsafe\s+)?fn\s+(\w+)`)
-	reRsStruct   = regexp.MustCompile(`^\s*(?:pub\s+)?struct\s+(\w+)`)
-	reRsEnum     = regexp.MustCompile(`^\s*(?:pub\s+)?enum\s+(\w+)`)
-	reRsTrait    = regexp.MustCompile(`^\s*(?:pub\s+)?trait\s+(\w+)`)
-	reRsImpl     = regexp.MustCompile(`^\s*impl(?:<[^>]*>)?\s+(?:(\w+)\s+for\s+)?(\w+)`)
-	reRsCall     = regexp.MustCompile(`\b([a-zA-Z_]\w*)\s*\(`)
-	reRsMod      = regexp.MustCompile(`^\s*(?:pub\s+)?mod\s+(\w+)`)
+	reRsUse    = regexp.MustCompile(`^\s*(?:pub\s+)?use\s+([^;]+);`)
+	reRsExtern = regexp.MustCompile(`^\s*extern\s+crate\s+(\w+)`)
+	reRsFn     = regexp.MustCompile(`^\s*(?:pub\s+)?(?:async\s+)?(?:unsafe\s+)?fn\s+(\w+)`)
+	reRsStruct = regexp.MustCompile(`^\s*(?:pub\s+)?struct\s+(\w+)`)
+	reRsEnum   = regexp.MustCompile(`^\s*(?:pub\s+)?enum\s+(\w+)`)
+	reRsTrait  = regexp.MustCompile(`^\s*(?:pub\s+)?trait\s+(\w+)`)
+	reRsImpl   = regexp.MustCompile(`^\s*impl(?:<[^>]*>)?\s+(?:(\w+)\s+for\s+)?(\w+)`)
+	reRsCall   = regexp.MustCompile(`\b([a-zA-Z_]\w*)\s*\(`)
+	reRsMod    = regexp.MustCompile(`^\s*(?:pub\s+)?mod\s+(\w+)`)
 )
 
 // RustExtractor parses Rust source files using regex-based line scanning.

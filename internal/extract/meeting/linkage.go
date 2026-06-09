@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
@@ -558,7 +559,13 @@ func truncateLabel(s string) string {
 	if len(s) <= max {
 		return s
 	}
-	return strings.TrimSpace(s[:max]) + "…"
+	// Cut on a rune boundary so a multi-byte character is never split, which
+	// would persist an invalid-UTF-8 label.
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return strings.TrimSpace(s[:cut]) + "…"
 }
 
 func attrString(n model.Node, key string) string {

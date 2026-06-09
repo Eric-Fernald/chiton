@@ -223,10 +223,7 @@ func parseSRT(data []byte) []Turn {
 			continue
 		}
 		if !inCue {
-			// A bare index line between cues — skip it.
-			if isAllDigits(line) {
-				continue
-			}
+			// Anything between cues (bare index lines, stray text) is skipped.
 			continue
 		}
 		payload = append(payload, stripVTTTags(line))

@@ -43,7 +43,7 @@ func (f *Flat) Search(query []float32, k int) []Result {
 		return nil
 	}
 	q := normalized(query)
-	if len(q) == 0 {
+	if len(q) == 0 || isZero(q) {
 		return nil
 	}
 
@@ -107,6 +107,17 @@ func normalized(v []float32) []float32 {
 		out[i] = x * inv
 	}
 	return out
+}
+
+// isZero reports whether every component of v is zero (a zero vector has no
+// direction, so cosine similarity against it is meaningless).
+func isZero(v []float32) bool {
+	for _, x := range v {
+		if x != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func dot(a, b []float32) float32 {

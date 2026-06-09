@@ -51,13 +51,13 @@ const (
 // raised on newer hardware by writing a higher Version with stronger params.
 type KeyFile struct {
 	Version     int    `json:"version"`
-	KDF         string `json:"kdf"`           // "argon2id"
-	SaltHex     string `json:"salt_hex"`      // 16-byte salt, hex-encoded
-	MemoryKiB   uint32 `json:"memory_kib"`    // Argon2id memory cost
-	Iterations  uint32 `json:"iterations"`    // Argon2id time cost
-	Parallelism uint8  `json:"parallelism"`   // Argon2id parallelism
-	KeyLength   uint32 `json:"key_length"`    // bytes (32 for AES-256)
-	Cipher      string `json:"cipher"`        // "AES-256-GCM"
+	KDF         string `json:"kdf"`         // "argon2id"
+	SaltHex     string `json:"salt_hex"`    // 16-byte salt, hex-encoded
+	MemoryKiB   uint32 `json:"memory_kib"`  // Argon2id memory cost
+	Iterations  uint32 `json:"iterations"`  // Argon2id time cost
+	Parallelism uint8  `json:"parallelism"` // Argon2id parallelism
+	KeyLength   uint32 `json:"key_length"`  // bytes (32 for AES-256)
+	Cipher      string `json:"cipher"`      // "AES-256-GCM"
 }
 
 // DefaultKeyFile returns a KeyFile with a fresh random salt and chiton's

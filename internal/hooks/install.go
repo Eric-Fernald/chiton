@@ -160,7 +160,7 @@ func exists(path string) (bool, error) {
 }
 
 // shellQuote single-quotes s for safe use as a POSIX sh argument. Embedded
-// single quotes are encoded as '\''.
+// single quotes are encoded as '\”.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

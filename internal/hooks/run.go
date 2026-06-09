@@ -49,7 +49,7 @@ func Run(ctx context.Context, gs store.GraphStore, opts RunOptions) (*Result, er
 	min := opts.Config.MinBlockingSeverity()
 	out := &Result{
 		Stage:         opts.Stage,
-		FilesScanned: res.FilesScanned,
+		FilesScanned:  res.FilesScanned,
 		RulesRun:      res.RulesRun,
 		TotalFindings: len(res.Findings),
 		BlockingMin:   min,

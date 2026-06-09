@@ -22,12 +22,12 @@ const (
 
 // Semantic edges — derived from LLM extraction.
 const (
-	EdgeDescribes   EdgeKind = "DESCRIBES"
+	EdgeDescribes    EdgeKind = "DESCRIBES"
 	EdgeRationaleFor EdgeKind = "RATIONALE_FOR"
-	EdgeSimilarTo   EdgeKind = "SIMILAR_TO"
-	EdgeContradicts EdgeKind = "CONTRADICTS"
-	EdgeElaborates  EdgeKind = "ELABORATES"
-	EdgeDerivedFrom EdgeKind = "DERIVED_FROM"
+	EdgeSimilarTo    EdgeKind = "SIMILAR_TO"
+	EdgeContradicts  EdgeKind = "CONTRADICTS"
+	EdgeElaborates   EdgeKind = "ELABORATES"
+	EdgeDerivedFrom  EdgeKind = "DERIVED_FROM"
 )
 
 // Meeting/discussion edges.

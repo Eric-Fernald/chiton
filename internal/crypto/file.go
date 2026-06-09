@@ -14,8 +14,8 @@ import (
 const envelopeVersion byte = 1
 
 const (
-	gcmNonceLen   = 12
-	headerLen     = 1 + gcmNonceLen
+	gcmNonceLen = 12
+	headerLen   = 1 + gcmNonceLen
 )
 
 // EncryptBytes seals plaintext with AES-256-GCM under key (must be 32 bytes).

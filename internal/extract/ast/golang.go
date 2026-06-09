@@ -6,10 +6,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
-	"io/fs"
 	goast "go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -273,4 +273,3 @@ func receiverType(expr goast.Expr) (string, bool) {
 	}
 	return "", false
 }
-

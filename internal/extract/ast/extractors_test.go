@@ -144,10 +144,10 @@ func TestCountLineBraces(t *testing.T) {
 		{`if (x) {`, false, 1, 0, false},
 		{`}`, false, 0, 1, false},
 		{`foo(); // } { in a line comment`, false, 0, 0, false},
-		{`a /* } */ b {`, false, 1, 0, false},  // brace in block comment ignored; real { counted
+		{`a /* } */ b {`, false, 1, 0, false}, // brace in block comment ignored; real { counted
 		{`x /* opens a block`, false, 0, 0, true},
-		{`} still comment } `, true, 0, 0, true}, // wholly inside a block — braces ignored
-		{`done */ {`, true, 1, 0, false},         // block closes, then a real {
+		{`} still comment } `, true, 0, 0, true},  // wholly inside a block — braces ignored
+		{`done */ {`, true, 1, 0, false},          // block closes, then a real {
 		{`"{ not a brace }"`, false, 0, 0, false}, // string literal
 	}
 	for _, c := range cases {
@@ -323,4 +323,3 @@ func assertEdgeKind(t *testing.T, edges []model.Edge, kind string) {
 	}
 	t.Errorf("no edge with kind %q", kind)
 }
-

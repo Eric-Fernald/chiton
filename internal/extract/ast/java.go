@@ -13,11 +13,11 @@ import (
 )
 
 var (
-	reJavaImport    = regexp.MustCompile(`^\s*import\s+(?:static\s+)?([^;]+);`)
-	reJavaClass     = regexp.MustCompile(`(?:^|\s)(?:public|protected|private|abstract|final|static|\s)*class\s+(\w+)`)
-	reJavaInterface = regexp.MustCompile(`(?:^|\s)(?:public|protected|private|abstract|\s)*interface\s+(\w+)`)
-	reJavaEnum      = regexp.MustCompile(`(?:^|\s)(?:public|protected|private|\s)*enum\s+(\w+)`)
-	reJavaExtends   = regexp.MustCompile(`\bextends\s+([\w.]+)`)
+	reJavaImport     = regexp.MustCompile(`^\s*import\s+(?:static\s+)?([^;]+);`)
+	reJavaClass      = regexp.MustCompile(`(?:^|\s)(?:public|protected|private|abstract|final|static|\s)*class\s+(\w+)`)
+	reJavaInterface  = regexp.MustCompile(`(?:^|\s)(?:public|protected|private|abstract|\s)*interface\s+(\w+)`)
+	reJavaEnum       = regexp.MustCompile(`(?:^|\s)(?:public|protected|private|\s)*enum\s+(\w+)`)
+	reJavaExtends    = regexp.MustCompile(`\bextends\s+([\w.]+)`)
 	reJavaImplements = regexp.MustCompile(`\bimplements\s+([\w.,\s]+?)(?:\{|$)`)
 
 	// Method: modifiers* ReturnType methodName ( — at indented level

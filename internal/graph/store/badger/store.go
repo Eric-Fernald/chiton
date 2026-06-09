@@ -262,7 +262,7 @@ func (s *Store) Neighbors(_ context.Context, id string, depth int, edgeKinds []m
 	var resultNodes []model.Node
 	var resultEdges []model.Edge
 
-	seed, err := s.GetNode(nil, id)
+	seed, err := s.GetNode(context.TODO(), id)
 	if err != nil {
 		return store.Subgraph{}, err
 	}
@@ -303,7 +303,7 @@ func (s *Store) Neighbors(_ context.Context, id string, depth int, edgeKinds []m
 		}
 
 		for _, nid := range nextFrontier {
-			n, err := s.GetNode(nil, nid)
+			n, err := s.GetNode(context.TODO(), nid)
 			if err != nil {
 				return store.Subgraph{}, err
 			}
@@ -321,7 +321,7 @@ func (s *Store) Neighbors(_ context.Context, id string, depth int, edgeKinds []m
 // Returns an empty Path (no error) when no path exists.
 func (s *Store) ShortestPath(_ context.Context, src, dst string) (store.Path, error) {
 	if src == dst {
-		n, err := s.GetNode(nil, src)
+		n, err := s.GetNode(context.TODO(), src)
 		if err != nil || n == nil {
 			return store.Path{}, err
 		}

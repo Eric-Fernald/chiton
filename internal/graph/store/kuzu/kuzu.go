@@ -19,8 +19,8 @@ var ErrUnavailable = errors.New("kuzu: CGo not available on this platform; use t
 // Replace this file with the real Kuzu implementation once CGo is available.
 type Store struct{}
 
-func Open(_ string) (*Store, error)                                          { return nil, ErrUnavailable }
-func (s *Store) Close() error                                                { return ErrUnavailable }
+func Open(_ string) (*Store, error)                                         { return nil, ErrUnavailable }
+func (s *Store) Close() error                                               { return ErrUnavailable }
 func (s *Store) UpsertNodes(_ context.Context, _ []model.Node) error        { return ErrUnavailable }
 func (s *Store) UpsertEdges(_ context.Context, _ []model.Edge) error        { return ErrUnavailable }
 func (s *Store) GetNode(_ context.Context, _ string) (*model.Node, error)   { return nil, ErrUnavailable }
