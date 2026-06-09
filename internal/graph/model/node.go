@@ -19,6 +19,7 @@ const (
 	KindDecision    NodeKind = "decision"
 	KindPerson      NodeKind = "person"
 	KindURL         NodeKind = "url"
+	KindEmail       NodeKind = "email"
 	KindRationale   NodeKind = "rationale"
 	KindRule        NodeKind = "rule"
 	KindFinding     NodeKind = "finding"

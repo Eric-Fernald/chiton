@@ -29,6 +29,14 @@ type Options struct {
 	// removed or renamed away. fsnotify delivers no per-child events for this,
 	// so the consumer must prune anything it indexed under that directory.
 	OnDirRemove func(dir string)
+	// WatchRootOnly, when true, watches only the root directory itself and does
+	// not descend into (or add watches for) its subdirectories. Use it when the
+	// files of interest sit directly in one directory whose subtree is large and
+	// irrelevant (e.g. a browser profile dir). Leave IgnoreDir nil in that case:
+	// IgnoreDir is also consulted against file-event leaf names (see
+	// pathIgnored), so a predicate meant only to suppress descent would also drop
+	// the very file events you want to receive.
+	WatchRootOnly bool
 }
 
 // Watcher watches a directory tree and reports relevant file changes.
@@ -87,10 +95,11 @@ func (w *Watcher) handle(ev fsnotify.Event) {
 	path := ev.Name
 
 	// A newly created directory must be watched, and any files already inside
-	// it (created before we added the watch) re-synced.
+	// it (created before we added the watch) re-synced — unless we are watching
+	// the root directory only, in which case new subdirectories are ignored.
 	if ev.Op&fsnotify.Create != 0 {
 		if fi, err := os.Stat(path); err == nil && fi.IsDir() {
-			if !w.ignoredDir(path) {
+			if !w.opts.WatchRootOnly && !w.ignoredDir(path) {
 				_ = w.addTree(path)
 				w.enqueueExisting(path)
 			}
@@ -123,8 +132,15 @@ func (w *Watcher) handle(ev fsnotify.Event) {
 	w.enqueue(path)
 }
 
-// addTree walks dir and adds a watch for every non-ignored directory.
+// addTree walks dir and adds a watch for every non-ignored directory. In
+// WatchRootOnly mode it watches just dir itself and does not descend.
 func (w *Watcher) addTree(dir string) error {
+	if w.opts.WatchRootOnly {
+		if err := w.w.Add(dir); err != nil && w.opts.OnError != nil {
+			w.opts.OnError(err)
+		}
+		return nil
+	}
 	return filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			// A directory may vanish between listing and walking; skip it.

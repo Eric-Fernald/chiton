@@ -792,11 +792,69 @@ renderer, shared with `chiton visualize`); a bundled-offline vis-network asset
 (still CDN-loaded, same as the Phase 5 HTML export); incremental/auto dashboard
 refresh on graph change (re-run `chiton dashboard build`).
 
-### Phase 6 — Stretch (only if Phase 0-5 land)
+### ✅ Phase 6 — Stretch (browser + email ingestion)
 
-- Browser history ingestion (Chrome/Edge SQLite history file watcher).
-- Email ingestion (Outlook via Graph, Gmail via API).
-- Multi-user mode (shared graph store, role-based access). This is where you would consider whether to commercialize like Penpax does.
+The two ingestion stretch items landed; multi-user and the VS Code extension are
+deferred-by-decision (see below). Both new sources reuse the existing ingest
+spine — each becomes graph nodes the existing query/search/extraction tools serve
+unchanged, so no new MCP surface was needed.
+
+- ✅ **Browser history ingestion** (`internal/ingest/browser`) — reads a
+  Chromium-family History database (Chrome / Edge / Brave; the Default profile
+  plus numbered `Profile N` dirs, auto-detected per-OS) and upserts one `url`
+  node per visited page (title, visit count, last-visit time). The History file
+  is a SQLite DB Chromium keeps locked while running, so chiton copies it (plus
+  any `-wal`/`-shm` sidecars) to a temp file and reads the copy with the **pure-Go
+  `modernc.org/sqlite` driver** — no CGo, consistent with the pure-Go principle
+  behind BadgerDB-over-Kuzu. Chrome's 1601-epoch microsecond timestamps are
+  converted to UTC; non-web URLs (`chrome://`, `about:`, `file://`, extension
+  pages) are filtered. Only page **metadata** is ingested — chiton never fetches
+  the pages, so browser ingest does no network I/O and raises no SSRF surface
+  (use `add-url` to pull a page's content). Nodes are keyed on a stable ID so
+  re-ingest refreshes visit counts in place rather than duplicating.
+  `chiton browser watch` re-ingests on change, reusing the Phase 3 `fswatch` +
+  `jobs.Queue` debounce/coalesce machinery (watching only the profile dir, not
+  its heavy subtree). CLI: `chiton browser ingest|watch`
+  (`--db`/`--limit`/`--since`/`--min-visits`).
+- ✅ **Email ingestion** (`internal/ingest/email`) — each message becomes an
+  `email` node with `doc_section` body children (so the existing
+  `pending_extractions` flow extracts its concepts for free, exactly like URL
+  ingest) and PII-tagged `person` nodes for the participants, sharing the meeting
+  subsystem's `person://` scheme + PII convention (keyed on email address, so
+  they dedupe email participants but don't auto-merge with meeting display-name
+  persons). Replies link to the message they answer with a
+  `REFERENCES` edge when the parent is in the same batch. Provider wiring lives
+  behind the `Source` interface (mirroring Teams' `TranscriptSource`):
+  - **local** `.eml` / `.mbox` via stdlib `net/mail` — the dependency-free,
+    fully-tested default (multipart walking, base64/quoted-printable decoding,
+    HTML→text with `<script>`/`<style>` stripped, RFC 2047 header decoding, mbox
+    `From `-line splitting, UTF-8-BOM tolerance).
+  - **Gmail** via a thin `net/http` REST client (`format=raw` → the same local
+    parser); a user-supplied OAuth2 token (`CHITON_GMAIL_TOKEN`) keeps the
+    `google.golang.org/api` SDK out of the dependency tree.
+  - **Outlook** via `msgraph-sdk-go` app-only auth (`CHITON_OUTLOOK_*`), reusing
+    the Teams Graph-client pattern.
+  Re-ingest replaces a message atomically (DeleteBySourceURI on a stable
+  `email://message/<message-id>` URI; person nodes survive). CLI:
+  `chiton email ingest|gmail|outlook`.
+
+**Out by decision (not implemented):**
+- **Multi-user mode (shared graph store, role-based access)** — Resolved Design
+  Decision #2 scopes this out of the OSS daemon: each developer keeps a local
+  per-repo graph, and team mode, if ever revisited, becomes a separate hosted
+  product rather than daemon bloat. Building it here would contradict that
+  decision and the "single-user, on-device first" non-goal.
+- **First-party VS Code extension** — Resolved Design Decision #3 places it in
+  Phase 6 but gates it on "after public release" (still a milestone, not code,
+  per Phase 5) and it is a separate TypeScript Marketplace sub-project, not Go
+  daemon code. Deferred until the public-release gate is met.
+
+**Deferred:** browser/email as MCP write tools (CLI-only today, like
+`teams fetch` / `meeting ingest`; the ingested nodes are served by the existing
+read tools); fetching page content for history entries (metadata-only by design);
+incremental re-linkage of email threads across separate ingest runs (within-batch
+only); Gmail OAuth device-flow (the user supplies a token today); non-UTF-8
+charset transcoding in email bodies (best-effort UTF-8).
 
 ---
 
