@@ -20,9 +20,6 @@ const KindMeetingLinkage = "meeting_linkage"
 // doc/image nodes never collide because each Pending only scans its own kinds.
 const linkageStatusDone = "done"
 
-// DefaultConfidenceThreshold splits INFERRED from AMBIGUOUS when none is set.
-const DefaultConfidenceThreshold = 0.5
-
 // defaultMaxCandidates caps the candidate-symbol hint menu in a task spec, so a
 // large corpus does not blow the host assistant's context budget. The menu is a
 // hint only — submit resolves any returned label against the whole graph.
@@ -30,8 +27,8 @@ const defaultMaxCandidates = 300
 
 // defaultDiscussedConfidence is the confidence assigned to a "merely discussed"
 // symbol link, which the host reports without a per-item score. It is a real
-// confidence (not the threshold), run through resolveProvenance like every other
-// INFERRED edge so it splits INFERRED/AMBIGUOUS consistently.
+// confidence (not the threshold), run through model.ResolveProvenance like every
+// other INFERRED edge so it splits INFERRED/AMBIGUOUS consistently.
 const defaultDiscussedConfidence float32 = 0.7
 
 // LinkService runs chiton's meeting→code linkage in subagent mode: it emits one
@@ -51,10 +48,10 @@ type LinkService struct {
 }
 
 // NewLinkService builds a LinkService. threshold<=0 uses
-// DefaultConfidenceThreshold.
+// model.DefaultConfidenceThreshold.
 func NewLinkService(s store.GraphStore, threshold float32) *LinkService {
 	if threshold <= 0 {
-		threshold = DefaultConfidenceThreshold
+		threshold = model.DefaultConfidenceThreshold
 	}
 	return &LinkService{store: s, threshold: threshold, maxCandidates: defaultMaxCandidates, now: time.Now}
 }
@@ -135,10 +132,10 @@ func (s *LinkService) Pending(ctx context.Context, limit int) ([]LinkTaskSpec, e
 		if n.Kind != model.KindMeeting {
 			continue
 		}
-		if attrString(n, "extraction_status") == linkageStatusDone {
+		if model.AttrString(n.Attrs, "extraction_status") == linkageStatusDone {
 			continue
 		}
-		text := attrString(n, "text")
+		text := model.AttrString(n.Attrs, "text")
 		if strings.TrimSpace(text) == "" {
 			continue
 		}
@@ -198,7 +195,7 @@ func (s *LinkService) Submit(ctx context.Context, r LinkResult) (LinkReport, err
 		if summary == "" {
 			continue
 		}
-		prov, conf := resolveProvenance(d.Confidence, s.threshold)
+		prov, conf := model.ResolveProvenance(d.Confidence, s.threshold)
 		if prov == model.ProvAmbiguous {
 			rep.Ambiguous++
 		}
@@ -312,7 +309,7 @@ func (s *LinkService) Submit(ctx context.Context, r LinkResult) (LinkReport, err
 			continue
 		}
 		linkedSymbols[symID] = true
-		prov, conf := resolveProvenance(defaultDiscussedConfidence, s.threshold)
+		prov, conf := model.ResolveProvenance(defaultDiscussedConfidence, s.threshold)
 		if prov == model.ProvAmbiguous {
 			rep.Ambiguous++
 		}
@@ -538,21 +535,6 @@ func nonEmptyActions(items []ActionItem) []map[string]any {
 	return out
 }
 
-// resolveProvenance maps a host-supplied confidence to a provenance tag and a
-// clamped confidence. At or above threshold → INFERRED; below → AMBIGUOUS.
-func resolveProvenance(conf, threshold float32) (model.Provenance, float32) {
-	if conf < 0 {
-		conf = 0
-	}
-	if conf > 1 {
-		conf = 1
-	}
-	if conf >= threshold {
-		return model.ProvInferred, conf
-	}
-	return model.ProvAmbiguous, conf
-}
-
 func truncateLabel(s string) string {
 	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
 	const max = 80
@@ -566,16 +548,6 @@ func truncateLabel(s string) string {
 		cut--
 	}
 	return strings.TrimSpace(s[:cut]) + "…"
-}
-
-func attrString(n model.Node, key string) string {
-	if n.Attrs == nil {
-		return ""
-	}
-	if v, ok := n.Attrs[key].(string); ok {
-		return v
-	}
-	return ""
 }
 
 func sortedKeys(set map[string]bool) []string {

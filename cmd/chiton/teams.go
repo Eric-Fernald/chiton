@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -126,11 +124,10 @@ public URL for the subscription itself.`,
 			mux.Handle("/notifications", handler)
 			srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 
-			// Shut down cleanly on Ctrl-C so the store closes BadgerDB properly.
-			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-			defer stop()
+			// Shut down cleanly on Ctrl-C so the store closes BadgerDB properly;
+			// cmd.Context() is cancelled by the root signal handler.
 			go func() {
-				<-ctx.Done()
+				<-cmd.Context().Done()
 				shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				_ = srv.Shutdown(shutCtx)

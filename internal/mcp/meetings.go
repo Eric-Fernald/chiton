@@ -454,7 +454,7 @@ func buildMeetingViews(ctx context.Context, gs store.GraphStore) ([]meetingView,
 			Title:        n.Label,
 			SourceURI:    n.SourceURI,
 			text:         strings.ToLower(attrStr(n, "text")),
-			Participants: attrStrings(n, "participants"),
+			Participants: model.AttrStrings(n.Attrs, "participants"),
 			Decisions:    meetingDecisions[n.ID],
 		}
 		v.ParticipantCount = len(v.Participants)
@@ -496,27 +496,6 @@ func attrStr(n model.Node, key string) string {
 		return v
 	}
 	return ""
-}
-
-// attrStrings reads a []string-ish attr, tolerating both []string and []any
-// (the latter occurs after a JSON round-trip through the store).
-func attrStrings(n model.Node, key string) []string {
-	if n.Attrs == nil {
-		return nil
-	}
-	switch v := n.Attrs[key].(type) {
-	case []string:
-		return v
-	case []any:
-		out := make([]string, 0, len(v))
-		for _, x := range v {
-			if s, ok := x.(string); ok {
-				out = append(out, s)
-			}
-		}
-		return out
-	}
-	return nil
 }
 
 // actionItems extracts action items (text + assignee) stored on a decision

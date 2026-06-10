@@ -194,7 +194,7 @@ Each developer maintains their own local graph in their own `<repo>/.chiton/` di
 - Avoids the entire compliance/audit surface that a shared graph containing source code + meeting transcripts would create.
 - The committed-to-repo files (`.chiton/hooks.yaml`, `.chiton/sources.yaml`) are the only shared state, which is enough for teams to agree on rule policies and source allowlists.
 
-If team mode is ever revisited it becomes a separate hosted product (see Licensing & Commercialization Stance), not bloat in the OSS daemon.
+If team mode is ever revisited it becomes a separate hosted product (see Licensing & Commercialization Stance), not bloat in the core daemon.
 
 ### 3. IDE inline integration — DECIDED: YES, VS CODE EXTENSION IN PHASE 6
 
@@ -207,7 +207,7 @@ A first-party VS Code extension that:
 
 **Architecture:** the extension is a thin client over the existing MCP server (HTTP transport). No duplicated logic. This is exactly why we kept the MCP tool surface stable and transport-agnostic.
 
-**Roadmap placement:** Phase 6 (after public release), since it gates on the MCP path being battle-tested across other assistants first. Distributed via the VS Code Marketplace under the same MIT license as the core; binary download of `chiton` itself is a one-click install from the extension if not already present.
+**Roadmap placement:** Phase 6 (after public release), since it gates on the MCP path being battle-tested across other assistants first. Distributed via the VS Code Marketplace under the same proprietary license as the core; binary download of `chiton` itself is a one-click install from the extension if not already present.
 
 ### 4. Graph versioning / branching — DECIDED: NO
 
@@ -290,7 +290,7 @@ chiton/
 ├── go.mod
 ├── go.sum
 ├── README.md
-├── LICENSE                MIT (matching Graphify's license stance)
+├── LICENSE                Proprietary (all rights reserved)
 └── Makefile
 ```
 
@@ -881,7 +881,7 @@ unchanged, so no new MCP surface was needed.
 
 **Out by decision (not implemented):**
 - **Multi-user mode (shared graph store, role-based access)** — Resolved Design
-  Decision #2 scopes this out of the OSS daemon: each developer keeps a local
+  Decision #2 scopes this out of the core daemon: each developer keeps a local
   per-repo graph, and team mode, if ever revisited, becomes a separate hosted
   product rather than daemon bloat. Building it here would contradict that
   decision and the "single-user, on-device first" non-goal.
@@ -1037,7 +1037,7 @@ Expose ONE tool first: `get_node_neighborhood`
 
 Then add: `query_graph` (string → top-K nodes by label substring + neighborhood), `shortest_path`, `get_node`.
 
-`cmd/chiton/serve.go`: `chiton serve --stdio` (for assistants) or `chiton serve --http :7474` (for debugging).
+`cmd/chiton/serve.go`: `chiton serve --stdio` (for assistants) or `chiton serve --http 127.0.0.1:7474` (for debugging).
 
 **Exit criterion:** a manual JSON-RPC request to the stdio server returns the fetchall neighborhood in <50ms.
 
@@ -1237,7 +1237,7 @@ At the efficient end of the spectrum (chiton, Graphify, CLAUDE.md), output now d
 
 - **Serve-layer latency:** a Go MCP server adds ~1-2ms of overhead per call vs Python's 10-30ms. Across a 50-turn session that's seconds of saved UI lag, but more importantly it makes the assistant feel like the graph is "free to consult" — which changes how often it consults it.
 - **Concurrent ingest:** a single goroutine pool can saturate 8 cores doing AST extraction while another pool drains the LLM-extraction queue. Doing this in Python requires multiprocessing and is painful.
-- **Single binary deployment:** zero runtime dependencies, ships as a 30-50 MB binary. Critical for the "every teammate runs it locally" workflow.
+- **Single binary deployment:** zero runtime dependencies, ships as a single self-contained binary. Critical for the "every teammate runs it locally" workflow.
 - **Memory model:** real value types and arenas mean the graph store can handle Corpus C without becoming a Python heap nightmare.
 
 ### The Bottom-Line Number to Remember
@@ -1301,7 +1301,7 @@ TrueCourse (`truecourse-ai/truecourse`, MIT, ~313 stars, ~26 releases on a ~2 mo
 
 **Graceful degradation across the stack.** Like TrueCourse, deterministic rules run with no LLM key. UNLIKE TrueCourse, we also run without git (analyze loose folders), without CGo (BadgerDB is pure Go; Kuzu/sqlite-vec stay optional), and without an MCP-aware host (CLI mode). Every layer has a fallback.
 
-**Single static binary.** No `pnpm install`, no Node.js, no shipped `node_modules`. `chiton` is a 30-50 MB Go binary; first invocation is sub-100ms cold. Compare to TrueCourse's ~300ms Node startup before it does anything useful.
+**Single static binary.** No `pnpm install`, no Node.js, no shipped `node_modules`. `chiton` is a self-contained Go binary with zero runtime dependencies; first invocation is sub-100ms cold. Compare to TrueCourse's ~300ms Node startup before it does anything useful.
 
 **Zero telemetry, period.** Nothing to opt out of. No phone-home, no anonymous events, no "checking for updates" call. If we ever need usage data, we will ask explicitly and locally.
 
@@ -1611,7 +1611,7 @@ The same `chiton serve` binary runs in three modes; the per-platform installer p
 | Mode | Description |
 |---|---|
 | `--stdio` | Default for assistant integrations. JSON-RPC over stdin/stdout. Lifecycle: assistant starts and stops the process. |
-| `--http :7474` | Long-running HTTP server with SSE for streaming responses. Used by the dashboard and for users who want one daemon shared across multiple assistant sessions. |
+| `--http 127.0.0.1:7474` | Long-running HTTP server with SSE for streaming responses. Used by the dashboard and for users who want one daemon shared across multiple assistant sessions. |
 | `--unix /tmp/chiton.sock` | Same as `--http` but over a Unix socket (Linux/macOS). Slightly lower latency, no port management. |
 
 The MCP tool surface is identical across all three modes — only the transport differs.
@@ -1855,7 +1855,7 @@ This matters because Graphify's Python implementation serializes nearly everythi
 
 ### Metrics
 
-*Prometheus format on `--http :7474/metrics`, opt-in.*
+*Prometheus format on `--http 127.0.0.1:7474/metrics`, opt-in.*
 
 ```
 chiton_nodes_total{kind=...}
@@ -1898,7 +1898,7 @@ Multi-assistant    yes        yes        no         no         IDE only     IDE 
 Incremental        yes        partial    no         partial    yes          yes       yes        n/a
 Code analysis      yes        no         no         no         yes          partial   no         no
 rules
-License            MIT        MIT        MIT        MIT        Fair Source  prop.     Apache 2   prop.
+License            prop.      MIT        MIT        MIT        Fair Source  prop.     Apache 2   prop.
 Cold start         <100ms     ~2s        n/a        ~1s        cloud        ~3s       ~500ms     n/a
 100k-node memory   ~600MB     ~2GB OOM   cloud      ~1.5GB     cloud        ~1GB      n/a        n/a
 Cost (self-host)   $0         $0         $$$        $0         $$           $/mo      $0 + LLM   $/mo

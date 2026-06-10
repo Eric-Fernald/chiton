@@ -13,12 +13,13 @@ The point isn't cheaper context (although that's still a benefit with ~10% token
 it's *better* context: the model gets exactly what's relevant instead of a haystack of 
 files to grep through.
 
-> **Status:** actively developed, single-user and on-device first. Phases 0–5
+> **Status:** actively developed, single-user and on-device first. Phases 0–6
 > are implemented — core graph, rule engine, install layer, semantic layer, LLM
 > rules + diff analysis, live sync, broad multi-assistant installers,
-> meeting/transcript ingestion with decision-to-code linkage, and the Phase 5
+> meeting/transcript ingestion with decision-to-code linkage, the Phase 5
 > polish layer (interactive HTML + Mermaid export, cross-repo graph merging, a
-> Unix-socket transport, and an honest cross-corpus benchmark). See
+> Unix-socket transport, and an honest cross-corpus benchmark), the static
+> dashboard, and browser-history + email ingestion. See
 > [docs/PLAN.md](docs/PLAN.md) for the full roadmap.
 
 ---
@@ -48,7 +49,7 @@ When sources conflict, prefer `EXTRACTED` facts over `INFERRED` ones.
   ingest            extract              store + index            serve
   ------            -------              -------------            -----
   file walk    →    Go AST (go/ast)  →   BadgerDB graph      →   MCP (stdio/HTTP)
-  fsnotify          line scanners        (encrypted at rest)      14 graph + semantic
+  fsnotify          line scanners        (encrypted at rest)      19 graph + semantic
   git hooks         Markdown structure   pure-Go vector index     + analysis tools
                     image nodes          Leiden communities       CLI (thin wrapper)
                     rule engine          betweenness / god nodes
@@ -79,12 +80,13 @@ When sources conflict, prefer `EXTRACTED` facts over `INFERRED` ones.
 
 ## Install
 
-Build from source:
+chiton is proprietary and the repository is private, so installing means
+building from source with repository access:
 
 ```sh
-go build -o chiton ./cmd/chiton
-# or install onto your PATH:
-go install github.com/Eric-Fernald/chiton/cmd/chiton@latest
+git clone https://github.com/Eric-Fernald/chiton.git
+cd chiton
+make build              # or: go build ./cmd/chiton
 ```
 
 `chiton --help` lists every subcommand.
@@ -133,7 +135,12 @@ chiton search "where do we handle auth?"
 | `chiton sync watch\|git\|once` | Live sync: fsnotify watcher, git-driven re-index, or one-shot reconcile. |
 | `chiton hooks install\|uninstall\|status\|run` | Manage git hooks (gating pre-commit/pre-push; syncing post-commit/post-checkout). |
 | `chiton install\|uninstall\|doctor` | Register/remove chiton with AI assistants; report install state. `--assistant <name>` (claude-code, copilot-vscode, cursor, codex, gemini-cli, opencode, aider, antigravity, copilot-cli), `all`, or `auto` (default: detected). |
-| `chiton serve` | Start the MCP server: `--stdio` (assistants), `--http :7474` (SSE / shared daemon), or `--unix <path>` (socket). `--writable` for submit tools. |
+| `chiton meeting ingest\|transcribe\|pending\|submit` | Ingest meeting transcripts (`.vtt`/`.srt`/`.txt`), whisper-transcribe audio first, or emit/ingest meeting→code linkage task specs. |
+| `chiton add-url <url-or-path>` | Ingest a web page, PDF, or YouTube transcript as a `url` node with `doc_section` children (`--kind`, `--author`, `--contributor`). |
+| `chiton teams fetch\|serve-webhook` | Fetch + ingest all transcripts for one Teams meeting (`--meeting <id>`), or run the Graph change-notification webhook receiver. |
+| `chiton browser ingest\|watch` | Ingest local browser history (Chrome/Edge/Brave) as `url` nodes; `watch` re-ingests on change. `--db <History>`, `--browser`, `--since`, `--min-visits`. |
+| `chiton email ingest\|gmail\|outlook` | Ingest email: local `.eml`/`.mbox` files, the Gmail API (`CHITON_GMAIL_TOKEN`, `--query`), or Microsoft Graph (`CHITON_OUTLOOK_*`, `--max`). |
+| `chiton serve` | Start the MCP server: `--stdio` (assistants), `--http 127.0.0.1:7474` (SSE / shared daemon), or `--unix <path>` (socket). `--writable` for submit tools. |
 
 ## MCP tools
 
@@ -153,20 +160,25 @@ wrapper over the same logic.
 | `diff_findings` | `{new, resolved, changed}` versus a saved baseline. |
 | `pending_extractions` / `submit_extraction` | Subagent semantic extraction: task specs in, concepts + edges out. |
 | `pending_analyses` / `submit_analysis` | Subagent LLM-rule analysis: task specs in, findings out. |
+| `search_meetings` | Find ingested meetings by content, with their decisions and linked code symbols. Participant names (PII) hidden unless `include_pii`. |
+| `decisions_about` | Decisions made about a topic or code symbol — rationale, the meeting they were decided in, and the code they govern. |
+| `pending_meeting_links` / `submit_meeting_links` | Subagent meeting→code linkage: transcript + candidate-symbol task specs in, decisions + edges out. |
+| `add_url` | Fetch a URL (article, paper PDF, or YouTube transcript) and ingest it as a `url` node with `doc_section` children. |
 
 > **Note:** `query_graph` matches node *labels*, not call sites — chiton indexes
 > package-level `IMPORTS` but not individual call expressions, so use grep for
 > "which lines call X?". `CALLS` edges connect symbol nodes, not file nodes.
 
-Write tools (`submit_extraction`, `submit_analysis`) need a writable store: run
-`chiton serve --writable`, or use the `chiton extract submit` / `chiton analyze
-submit` CLI. The default read-only server lets `build`, `embed`, and `cluster`
-run concurrently.
+Write tools (`submit_extraction`, `submit_analysis`, `submit_meeting_links`,
+`add_url`) need a writable store: run `chiton serve --writable`, or use the CLI
+write path (`chiton extract submit`, `chiton analyze submit`, `chiton meeting
+submit`, `chiton add-url`). The default read-only server lets `build`, `embed`,
+and `cluster` run concurrently.
 
 The server speaks the same tool surface over three transports: `--stdio`
-(assistant-launched), `--http :7474` (SSE; a shared daemon across sessions or
-for debugging), and `--unix <path>` (a Unix-domain socket for Linux/macOS power
-users). Full reference: [docs/MCP.md](docs/MCP.md).
+(assistant-launched), `--http 127.0.0.1:7474` (SSE; a shared daemon across
+sessions or for debugging), and `--unix <path>` (a Unix-domain socket for
+Linux/macOS power users). Full reference: [docs/MCP.md](docs/MCP.md).
 
 ## Assistant support
 
@@ -259,7 +271,7 @@ chiton reads `.chitonrc` (TOML) from the working directory or `$HOME`, with
 
 | Key | Default | Notes |
 |---|---|---|
-| `graph_path` | `./chiton-out/graph…` | Where the BadgerDB store lives. |
+| `graph_path` | `./chiton-out/graph.kuzu` | Where the BadgerDB store lives (the name is historical). |
 | `log_level` | `info` | |
 | `embed.provider` | `ollama` | `ollama` or `hash` (offline/CI). |
 | `embed.model` | `nomic-embed-text` | |
@@ -268,7 +280,10 @@ chiton reads `.chitonrc` (TOML) from the working directory or `$HOME`, with
 | `semantic.confidence_threshold` | `0.5` | Splits `INFERRED` from `AMBIGUOUS`. |
 
 The committed `.chiton/` files (`hooks.yaml`, `sources.yaml`) are the only shared
-state — the graph store, cache, vector index, and keyfile are git-ignored.
+state — `chiton init` writes a `.chiton/.gitignore` that keeps everything else
+under `.chiton/` (including the encryption keyfile) out of git. The graph store,
+cache, and cluster sidecar live under `chiton-out/`, which is **not**
+auto-ignored — add `chiton-out/` to your repo's `.gitignore`.
 
 ## Encryption at rest
 
@@ -328,12 +343,13 @@ the vector index (flat today, HNSW/sqlite-vec deferred) and the job queue
 
 ## Roadmap
 
-Shipped through **Phase 5** — core graph, rule engine, install layer, semantic
+Shipped through **Phase 6** — core graph, rule engine, install layer, semantic
 layer, LLM rules + diff analysis, live sync, broad multi-assistant installers,
-meeting/transcript ingestion with decision-to-code linkage, and the polish layer
+meeting/transcript ingestion with decision-to-code linkage, the polish layer
 (HTML + Mermaid export, cross-repo merging, Unix-socket transport, cross-corpus
-benchmark). Next up: an optional static findings/graph dashboard (Phase 5.5) and
-a first-party VS Code extension plus browser/email ingest (Phase 6). See
+benchmark), the static findings/graph dashboard (Phase 5.5), and browser-history
++ email ingestion (Phase 6). Remaining: a first public release, a first-party
+VS Code extension, and an optional daemon-mode LLM path. See
 [docs/PLAN.md](docs/PLAN.md) for the full plan and design rationale.
 
 ## License

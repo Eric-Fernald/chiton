@@ -43,6 +43,19 @@ func TestHardcodedSecret_Positive(t *testing.T) {
 	}
 }
 
+func TestHardcodedSecret_SkipsTestSources(t *testing.T) {
+	src := `const Key = "AKIAIOSFODNN7EXAMPLE"`
+	r := HardcodedSecret{}
+	// Fixture keys in test files must not produce critical findings.
+	if got := r.MatchFile(context.Background(), target(t, "analyzer_test.go", src)); len(got) != 0 {
+		t.Fatalf("expected no findings for test fixture, got %+v", got)
+	}
+	// The same key in a non-test file still must.
+	if got := r.MatchFile(context.Background(), target(t, "analyzer.go", src)); len(got) != 1 {
+		t.Fatalf("expected 1 finding in non-test file, got %d", len(got))
+	}
+}
+
 func TestHardcodedSecret_Negative(t *testing.T) {
 	src := `
 // just a regular file

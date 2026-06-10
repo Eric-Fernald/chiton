@@ -204,10 +204,12 @@ status is labelled **shipped** or **planned**.
 ### Out of scope (v1)
 
 - **Multi-tenant isolation.** chiton is single-user, single-machine.
-- **Network attackers on the MCP socket.** The design intends loopback-only
-  binding with a warning on `0.0.0.0`; note that the current `chiton serve`
-  `--http` flag **defaults to `:7474` (all interfaces)** and does not emit that
-  warning. Bind it deliberately and do not expose it on untrusted networks.
+- **Network attackers on the MCP socket.** `chiton serve` binds `--http` to
+  **loopback by default (`127.0.0.1:7474`)** and prints a stderr warning when
+  asked to bind a non-loopback address (`0.0.0.0`, `::`, or an empty host —
+  all of which listen on every interface). The HTTP transport still has **no
+  authentication**, so even with the warning, do not expose it on untrusted
+  networks.
 - **Live-memory attacks** against a running, unlocked process (cold-boot,
   `/proc/<pid>/mem` by a privileged process, debugger attach). The design
   mentions mlock'ing the key; **mlock is not implemented today.** A kernel-level

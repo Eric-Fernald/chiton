@@ -2,8 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
 	"time"
@@ -129,12 +127,10 @@ func syncWatchCmd() *cobra.Command {
 			}
 			defer closeStore()
 
-			// Cancel on Ctrl-C / SIGTERM so the watcher drains and flushes.
-			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
-			defer stop()
-
+			// cmd.Context() is cancelled by the root signal handler on
+			// Ctrl-C / SIGTERM, so the watcher drains and flushes.
 			fmt.Fprintf(cmd.OutOrStdout(), "sync: watching %s (re-embed=%v re-analyze=%v)\n", root, f.reembed, f.reanalyze)
-			return eng.Watch(ctx, root)
+			return eng.Watch(cmd.Context(), root)
 		},
 	}
 	f.bind(cmd, true)

@@ -96,16 +96,6 @@ type GraphStore interface {
 	// clustering and metrics computation.
 	AllEdges(ctx context.Context) ([]model.Edge, error)
 
-	// GodNodes returns the top-limit nodes ranked by betweenness read from
-	// attrs["betweenness"], breaking ties by node ID for a stable order. If
-	// communityID is non-nil, only nodes in that community are returned.
-	//
-	// Note: `chiton cluster` writes betweenness to the cluster sidecar (consumed
-	// by the live god_nodes tool), NOT into node attrs — so a caller needing real
-	// betweenness ranking must populate attrs["betweenness"] first; otherwise
-	// every node scores 0 and results fall back to the stable ID order.
-	GodNodes(ctx context.Context, communityID *int, limit int) ([]model.Node, error)
-
 	// Snapshot writes a self-contained JSON export of the entire graph to w.
 	// Intended for portability, git-diffable snapshots, and cross-repo merging.
 	Snapshot(ctx context.Context, w io.Writer) error

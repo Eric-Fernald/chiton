@@ -34,8 +34,6 @@ func (DeadSymbol) Meta() analyze.Meta {
 }
 
 func (DeadSymbol) MatchGraph(_ context.Context, t analyze.GraphTarget) []analyze.Finding {
-	nodes := indexNodesByID(t.Nodes)
-
 	// Count non-CONTAINS in-edges for each symbol.
 	inCount := map[string]int{}
 	for _, e := range t.Edges {
@@ -56,11 +54,22 @@ func (DeadSymbol) MatchGraph(_ context.Context, t analyze.GraphTarget) []analyze
 		if isExportedName(n.Label) {
 			continue
 		}
+		// init and main are invoked by the runtime, never via graph edges.
+		if n.Label == "init" || n.Label == "main" {
+			continue
+		}
+		// Methods ("Type.method"): the Go extractor emits no CALLS edges for
+		// receiver-method calls, so every private method called only via its
+		// receiver would look dead. Skip them until call extraction covers
+		// selector expressions.
+		if strings.Contains(n.Label, ".") {
+			continue
+		}
 		if inCount[n.ID] > 0 {
 			continue
 		}
 		// Skip symbols defined in test files.
-		if isTestSource(n.SourceURI) {
+		if analyze.IsTestSource(n.SourceURI) {
 			continue
 		}
 		// Make sure the node is a function-like — flagging unused types adds
@@ -69,7 +78,6 @@ func (DeadSymbol) MatchGraph(_ context.Context, t analyze.GraphTarget) []analyze
 		if !isFuncLike(lk) {
 			continue
 		}
-		_ = nodes // currently unused, retained for future neighbour lookups
 		out = append(out, analyze.Finding{
 			RuleID:       "architecture/dead-symbol",
 			Severity:     analyze.SeverityLow,
@@ -106,19 +114,6 @@ func isExportedName(label string) bool {
 	}
 	c := label[0]
 	return c >= 'A' && c <= 'Z'
-}
-
-func isTestSource(uri string) bool {
-	low := strings.ToLower(uri)
-	switch {
-	case strings.HasSuffix(low, "_test.go"):
-		return true
-	case strings.Contains(low, ".test."), strings.Contains(low, ".spec."):
-		return true
-	case strings.Contains(low, "/tests/"), strings.Contains(low, "\\tests\\"):
-		return true
-	}
-	return false
 }
 
 func init() { analyze.Register(DeadSymbol{}) }

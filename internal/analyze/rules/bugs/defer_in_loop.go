@@ -91,32 +91,37 @@ func (DeferInLoop) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.
 }
 
 // stripGoComment is a small approximation of countLineBraces — drops the
-// content of // line comments. Block comments are not tracked across lines,
-// matching the existing extractor's behaviour.
+// content of // line comments and blanks the content of string literals so
+// keywords (and braces) inside strings never match. Block comments are not
+// tracked across lines, matching the existing extractor's behaviour.
 func stripGoComment(s string) string {
+	b := []byte(s)
 	var inStr byte
-	for i := 0; i < len(s); i++ {
-		c := s[i]
+	for i := 0; i < len(b); i++ {
+		c := b[i]
 		if inStr != 0 {
-			if c == '\\' && i+1 < len(s) {
+			if c == '\\' && i+1 < len(b) {
+				b[i], b[i+1] = ' ', ' '
 				i++
 				continue
 			}
 			if c == inStr {
 				inStr = 0
+				continue
 			}
+			b[i] = ' '
 			continue
 		}
 		switch c {
 		case '"', '\'', '`':
 			inStr = c
 		case '/':
-			if i+1 < len(s) && s[i+1] == '/' {
-				return s[:i]
+			if i+1 < len(b) && b[i+1] == '/' {
+				return string(b[:i])
 			}
 		}
 	}
-	return s
+	return string(b)
 }
 
 func init() { analyze.Register(DeferInLoop{}) }

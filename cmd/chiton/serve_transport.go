@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/signal"
 	"runtime"
 	"time"
 
@@ -50,10 +49,9 @@ func serveUnix(cmd *cobra.Command, handler http.Handler, path string) error {
 
 	srv := &http.Server{Handler: handler}
 
-	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
-	defer stop()
+	// cmd.Context() is cancelled by the root signal handler on Ctrl-C.
 	go func() {
-		<-ctx.Done()
+		<-cmd.Context().Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)

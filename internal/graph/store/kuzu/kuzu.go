@@ -19,6 +19,9 @@ var ErrUnavailable = errors.New("kuzu: CGo not available on this platform; use t
 // Replace this file with the real Kuzu implementation once CGo is available.
 type Store struct{}
 
+// Compile-time check that the stub satisfies store.GraphStore.
+var _ store.GraphStore = (*Store)(nil)
+
 func Open(_ string) (*Store, error)                                         { return nil, ErrUnavailable }
 func (s *Store) Close() error                                               { return ErrUnavailable }
 func (s *Store) UpsertNodes(_ context.Context, _ []model.Node) error        { return ErrUnavailable }
@@ -26,6 +29,8 @@ func (s *Store) UpsertEdges(_ context.Context, _ []model.Edge) error        { re
 func (s *Store) GetNode(_ context.Context, _ string) (*model.Node, error)   { return nil, ErrUnavailable }
 func (s *Store) Snapshot(_ context.Context, _ io.Writer) error              { return ErrUnavailable }
 func (s *Store) DeleteBySourceURI(_ context.Context, _ string) (int, error) { return 0, ErrUnavailable }
+func (s *Store) AllNodes(_ context.Context) ([]model.Node, error)           { return nil, ErrUnavailable }
+func (s *Store) AllEdges(_ context.Context) ([]model.Edge, error)           { return nil, ErrUnavailable }
 func (s *Store) SearchNodes(_ context.Context, _ string, _ int) ([]model.Node, error) {
 	return nil, ErrUnavailable
 }

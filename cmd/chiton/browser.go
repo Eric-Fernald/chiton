@@ -2,8 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"os/signal"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -108,16 +106,15 @@ func browserWatchCmd() *cobra.Command {
 			}
 			defer closeStore()
 
-			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
-			defer stop()
-
+			// cmd.Context() is cancelled by the root signal handler on Ctrl-C,
+			// so the watcher stops and the store closes cleanly.
 			ing := browser.New(gs)
 			opts := browser.Options{Limit: limit, MinVisits: minVisits}
 			logf := func(format string, args ...any) {
 				fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", args...)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "browser: watching %d history database(s) (Ctrl-C to stop)\n", len(dbs))
-			return ing.Watch(ctx, dbs, opts, time.Duration(debounceMS)*time.Millisecond, logf)
+			return ing.Watch(cmd.Context(), dbs, opts, time.Duration(debounceMS)*time.Millisecond, logf)
 		},
 	}
 	cmd.Flags().StringVar(&dbPath, "db", "", "Path to a specific History SQLite file (default: auto-detect)")

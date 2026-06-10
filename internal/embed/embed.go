@@ -57,14 +57,14 @@ func New(cfg Config) (Embedder, error) {
 func TextFor(n model.Node) string {
 	switch n.Kind {
 	case model.KindSymbol:
-		return join(n.Label, attrString(n, "docstring"))
+		return join(n.Label, model.AttrString(n.Attrs, "docstring"))
 	case model.KindDocSection:
-		if t := attrString(n, "text"); t != "" {
+		if t := model.AttrString(n.Attrs, "text"); t != "" {
 			return join(n.Label, t)
 		}
 		return n.Label
 	case model.KindConcept:
-		return join(n.Label, attrString(n, "description"))
+		return join(n.Label, model.AttrString(n.Attrs, "description"))
 	default:
 		return ""
 	}
@@ -72,16 +72,6 @@ func TextFor(n model.Node) string {
 
 // Embeddable reports whether TextFor would return a non-empty string.
 func Embeddable(n model.Node) bool { return TextFor(n) != "" }
-
-func attrString(n model.Node, key string) string {
-	if n.Attrs == nil {
-		return ""
-	}
-	if v, ok := n.Attrs[key].(string); ok {
-		return v
-	}
-	return ""
-}
 
 func join(parts ...string) string {
 	out := make([]string, 0, len(parts))

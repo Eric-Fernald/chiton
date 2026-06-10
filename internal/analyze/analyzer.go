@@ -61,17 +61,47 @@ func (a *Analyzer) Analyze(ctx context.Context, root string) (*Result, error) {
 		}
 	}
 
-	var (
-		allNodes     []model.Node
-		allEdges     []model.Edge
-		findings     []Finding
-		filesScanned int
-	)
-	// scannedURIs records every file we extracted this run, so pruneResolved
+	w, err := a.walkAndMatch(ctx, root, fileRules)
+	if err != nil {
+		return nil, err
+	}
+	findings := append(w.findings, a.matchGraphRules(ctx, graphRules, w.nodes, w.edges)...)
+
+	if err := a.persist(ctx, rules, findings); err != nil {
+		return nil, err
+	}
+	// A full Analyze runs every rule, so all deterministic findings for the
+	// scanned files are in scope to prune (ruleScope nil = no restriction).
+	if err := a.pruneResolved(ctx, w.scannedURIs, findings, nil); err != nil {
+		return nil, err
+	}
+
+	return &Result{
+		FilesScanned: w.filesScanned,
+		// Count only rules actually executed here; LLM rules are dispatched
+		// separately via LLMService and are neither FileRule nor GraphRule.
+		RulesRun: len(fileRules) + len(graphRules),
+		Findings: findings,
+		Duration: a.now().Sub(start),
+	}, nil
+}
+
+// walkResult accumulates the per-file outputs of walkAndMatch.
+type walkResult struct {
+	nodes    []model.Node
+	edges    []model.Edge
+	findings []Finding
+	// scannedURIs records every file extracted this run, so pruneResolved
 	// only removes stale findings for files actually re-analysed (a partial
 	// `analyze <subdir>` never touches findings outside its scope).
-	scannedURIs := map[string]bool{}
+	scannedURIs  map[string]bool
+	filesScanned int
+}
 
+// walkAndMatch walks root, extracts each supported source file, and runs the
+// applicable FileScope rules over it.
+func (a *Analyzer) walkAndMatch(ctx context.Context, root string, fileRules []FileRule) (*walkResult, error) {
+	w := &walkResult{scannedURIs: map[string]bool{}}
 	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -95,11 +125,11 @@ func (a *Analyzer) Analyze(ctx context.Context, root string) (*Result, error) {
 		if err != nil {
 			return nil
 		}
-		filesScanned++
+		w.filesScanned++
 
 		fileNode := findFileNode(nodes)
 		if fileNode.SourceURI != "" {
-			scannedURIs[fileNode.SourceURI] = true
+			w.scannedURIs[fileNode.SourceURI] = true
 		}
 		ft := FileTarget{
 			Path:     path,
@@ -115,39 +145,27 @@ func (a *Analyzer) Analyze(ctx context.Context, root string) (*Result, error) {
 			if !ruleApplies(fr.Meta().Languages, ext) {
 				continue
 			}
-			findings = append(findings, fr.MatchFile(ctx, ft)...)
+			w.findings = append(w.findings, fr.MatchFile(ctx, ft)...)
 		}
 
-		allNodes = append(allNodes, nodes...)
-		allEdges = append(allEdges, edges...)
+		w.nodes = append(w.nodes, nodes...)
+		w.edges = append(w.edges, edges...)
 		return nil
 	})
 	if walkErr != nil {
 		return nil, fmt.Errorf("walk: %w", walkErr)
 	}
+	return w, nil
+}
 
-	gt := GraphTarget{Nodes: allNodes, Edges: allEdges}
+// matchGraphRules runs the GraphScope rules over the full extracted set.
+func (a *Analyzer) matchGraphRules(ctx context.Context, graphRules []GraphRule, nodes []model.Node, edges []model.Edge) []Finding {
+	gt := GraphTarget{Nodes: nodes, Edges: edges}
+	var findings []Finding
 	for _, gr := range graphRules {
 		findings = append(findings, gr.MatchGraph(ctx, gt)...)
 	}
-
-	if err := a.persist(ctx, rules, findings); err != nil {
-		return nil, err
-	}
-	// A full Analyze runs every rule, so all deterministic findings for the
-	// scanned files are in scope to prune (ruleScope nil = no restriction).
-	if err := a.pruneResolved(ctx, scannedURIs, findings, nil); err != nil {
-		return nil, err
-	}
-
-	return &Result{
-		FilesScanned: filesScanned,
-		// Count only rules actually executed here; LLM rules are dispatched
-		// separately via LLMService and are neither FileRule nor GraphRule.
-		RulesRun: len(fileRules) + len(graphRules),
-		Findings: findings,
-		Duration: a.now().Sub(start),
-	}, nil
+	return findings
 }
 
 // persist upserts rule nodes (so VIOLATES edges resolve), finding nodes,

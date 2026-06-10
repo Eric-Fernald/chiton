@@ -9,12 +9,13 @@ transports, and troubleshooting.
 
 ## Prerequisites
 
-Build or install the `chiton` binary first (see the README):
+Build the `chiton` binary first (see the README). The repository is private
+and the license proprietary, so building requires repository access:
 
 ```sh
-go build -o chiton ./cmd/chiton
-# or install onto your PATH:
-go install github.com/Eric-Fernald/chiton/cmd/chiton@latest
+git clone https://github.com/Eric-Fernald/chiton.git
+cd chiton
+make build              # or: go build ./cmd/chiton
 ```
 
 `chiton install` records the absolute path of the running `chiton` binary as the
@@ -122,7 +123,7 @@ written into any assistant config.
 | Transport | Flag | Default | Use |
 |---|---|---|---|
 | stdio | `--stdio` | off | Assistant-launched MCP server. This is what every installer records. |
-| HTTP / SSE | `--http <addr>` | `:7474` | Shared daemon across sessions / debugging (default transport when neither `--stdio` nor `--unix` is given). |
+| HTTP / SSE | `--http <addr>` | `127.0.0.1:7474` | Shared daemon across sessions / debugging (default transport when neither `--stdio` nor `--unix` is given). |
 | Unix socket | `--unix <path>` | *(empty)* | Low-latency shared daemon over a Unix domain socket (Linux/macOS). |
 
 Other `serve` flags:

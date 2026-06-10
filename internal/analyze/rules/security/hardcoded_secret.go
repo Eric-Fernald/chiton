@@ -45,6 +45,11 @@ var secretPatterns = []struct {
 }
 
 func (HardcodedSecret) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
+	// Test files routinely carry fixture keys (this repo's own analyzer tests
+	// included); a critical there is pure noise.
+	if analyze.IsTestSource(t.URI) {
+		return nil
+	}
 	var out []analyze.Finding
 	sc := bufio.NewScanner(bytes.NewReader(t.Content))
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)

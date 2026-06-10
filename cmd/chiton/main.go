@@ -4,15 +4,20 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"math/rand"
+	"net"
+	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -42,7 +47,17 @@ import (
 )
 
 func main() {
-	if err := rootCmd().Execute(); err != nil {
+	// Cancel the root context on Ctrl-C / SIGTERM so long-running commands can
+	// close the BadgerDB store cleanly instead of being hard-killed mid-write.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	// After the first signal cancels ctx, stop the relay so a SECOND Ctrl-C
+	// falls through to the default handler and force-kills the process.
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+	if err := rootCmd().ExecuteContext(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -206,7 +221,7 @@ func findingsExplainCmd() *cobra.Command {
 			if len(exp.Related) > 0 {
 				fmt.Fprintf(out, "\n%d related finding(s) on the same target:\n", len(exp.Related))
 				for _, r := range exp.Related {
-					fmt.Fprintf(out, "  [%s] %s â€” %s\n", r.Severity, r.RuleID, r.Message)
+					fmt.Fprintf(out, "  [%s] %s - %s\n", r.Severity, r.RuleID, r.Message)
 				}
 			}
 			return nil
@@ -293,14 +308,14 @@ After init, run "chiton build ." to populate the graph.`,
 
 			if !encrypt {
 				fmt.Fprintln(out, "init: note: encryption disabled (--encrypt=false); graph will be stored in plaintext")
-				fmt.Fprintf(out, "init: done â€” %d file(s) created, %d skipped\n", created, skipped)
+				fmt.Fprintf(out, "init: done - %d file(s) created, %d skipped\n", created, skipped)
 				fmt.Fprintf(out, "init: next step: chiton build .\n")
 				return nil
 			}
 
 			keyfilePath := chitoncrypto.ResolveKeyfilePath(chitonDir)
 			if _, err := os.Stat(keyfilePath); err == nil {
-				fmt.Fprintf(out, "init: skip    %s (keyfile already present â€” reuse passphrase to open)\n", keyfilePath)
+				fmt.Fprintf(out, "init: skip    %s (keyfile already present - reuse passphrase to open)\n", keyfilePath)
 			} else {
 				passphrase, err := chitoncrypto.GetPassphrase("Choose a chiton passphrase (used to encrypt the graph):", true)
 				if err != nil {
@@ -323,7 +338,7 @@ After init, run "chiton build ." to populate the graph.`,
 				created++
 			}
 
-			fmt.Fprintf(out, "init: done â€” %d file(s) created, %d skipped\n", created, skipped)
+			fmt.Fprintf(out, "init: done - %d file(s) created, %d skipped\n", created, skipped)
 			fmt.Fprintf(out, "init: next step: chiton build .\n")
 			return nil
 		},
@@ -361,7 +376,7 @@ func buildCmd() *cobra.Command {
 
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "build: scanning %s\n", args[0])
-			fmt.Fprintf(out, "build: graph â†’ %s\n", cfg.GraphPath)
+			fmt.Fprintf(out, "build: graph -> %s\n", cfg.GraphPath)
 
 			gs, err := openGraphStore(cfg.GraphPath, false)
 			if err != nil {
@@ -377,8 +392,14 @@ func buildCmd() *cobra.Command {
 
 			start := time.Now()
 			var scanned, skipped, totalNodes, totalEdges int
+			ctx := cmd.Context()
 
 			walkErr := filepath.WalkDir(args[0], func(path string, d fs.DirEntry, err error) error {
+				// Stop promptly on Ctrl-C (root context cancelled) so the
+				// deferred store close and the cache save below still run.
+				if cerr := ctx.Err(); cerr != nil {
+					return cerr
+				}
 				if err != nil {
 					// A traversal error (e.g. a permission-denied subdirectory)
 					// shouldn't abort the whole build and discard cache progress;
@@ -408,16 +429,16 @@ func buildCmd() *cobra.Command {
 					return nil
 				}
 
-				nodes, edges, err := ex.ExtractFile(cmd.Context(), path)
+				nodes, edges, err := ex.ExtractFile(ctx, path)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "chiton: skip %s: %v\n", path, err)
 					return nil
 				}
 
-				if err := gs.UpsertNodes(cmd.Context(), nodes); err != nil {
+				if err := gs.UpsertNodes(ctx, nodes); err != nil {
 					return fmt.Errorf("upsert nodes for %s: %w", path, err)
 				}
-				if err := gs.UpsertEdges(cmd.Context(), edges); err != nil {
+				if err := gs.UpsertEdges(ctx, edges); err != nil {
 					return fmt.Errorf("upsert edges for %s: %w", path, err)
 				}
 
@@ -436,7 +457,7 @@ func buildCmd() *cobra.Command {
 				return fmt.Errorf("save cache: %w", saveErr)
 			}
 
-			fmt.Fprintf(out, "build: done â€” %d files scanned, %d skipped (unchanged), %d nodes, %d edges [%s]\n",
+			fmt.Fprintf(out, "build: done - %d files scanned, %d skipped (unchanged), %d nodes, %d edges [%s]\n",
 				scanned, skipped, totalNodes, totalEdges, time.Since(start).Round(time.Millisecond))
 			return nil
 		},
@@ -554,14 +575,14 @@ func queryCmd() *cobra.Command {
 				if to == "" {
 					to = e.Dst[:8]
 				}
-				fmt.Fprintf(out, "  %-15s  %s â†’ %s\n", e.Kind, from, to)
+				fmt.Fprintf(out, "  %-15s  %s -> %s\n", e.Kind, from, to)
 			}
 
 			return nil
 		},
 	}
 
-	cmd.Flags().IntVar(&depth, "depth", 2, "Hop depth (1â€“5)")
+	cmd.Flags().IntVar(&depth, "depth", 2, "Hop depth (1-5)")
 	cmd.Flags().StringSliceVar(&edgeKinds, "edge-kinds", nil, "Filter to these edge types, e.g. CALLS,IMPORTS")
 	cmd.Flags().StringVar(&file, "file", "", "Source file hint to disambiguate label matches (substring of source_uri)")
 	cmd.Flags().StringVar(&sourcePrefix, "source-prefix", "", "Only return neighbors whose source_uri contains this substring")
@@ -739,7 +760,7 @@ block are present in this workspace. Writes nothing.`,
 				} else if rep.Detected {
 					status = "detected (not registered)"
 				}
-				fmt.Fprintf(out, "%s â€” %s\n", rep.Installer, status)
+				fmt.Fprintf(out, "%s - %s\n", rep.Installer, status)
 				for _, ok := range rep.OK {
 					fmt.Fprintf(out, "  ok:    %s\n", ok)
 				}
@@ -789,7 +810,7 @@ func clusterCmd() *cobra.Command {
 		Long: `Run Leiden community detection and betweenness metrics on the graph.
 
 Results are written to a JSON sidecar file (chiton-out/cluster.json) so this
-command can run while chiton serve is active â€” no write lock on the store is
+command can run while chiton serve is active - no write lock on the store is
 needed. Restart chiton serve after clustering to load the new results.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := config.Load()
@@ -857,7 +878,7 @@ needed. Restart chiton serve after clustering to load the new results.`,
 			}
 
 			elapsed := time.Since(start).Round(time.Millisecond)
-			fmt.Fprintf(out, "cluster: done in %s â€” %d nodes in %d communities\n",
+			fmt.Fprintf(out, "cluster: done in %s - %d nodes in %d communities\n",
 				elapsed, len(nodes), len(commSet))
 			fmt.Fprintf(out, "cluster: results written to %s\n", sidecarPath)
 			fmt.Fprintln(out, "cluster: restart chiton serve to load the new community data")
@@ -890,7 +911,7 @@ needed. Restart chiton serve after clustering to load the new results.`,
 		},
 	}
 
-	cmd.Flags().Float64Var(&resolution, "resolution", 1.0, "Leiden resolution parameter Î³ (higher = smaller communities)")
+	cmd.Flags().Float64Var(&resolution, "resolution", 1.0, "Leiden resolution parameter gamma (higher = smaller communities)")
 	cmd.Flags().Int64Var(&seed, "seed", 42, "Random seed for reproducible clustering")
 	cmd.Flags().IntVar(&topN, "top", 10, "Number of god nodes to print")
 	return cmd
@@ -908,7 +929,8 @@ func serveCmd() *cobra.Command {
 		Short: "Start the MCP server",
 		Long: `Start the MCP server over one of three transports (identical tool surface):
   --stdio        assistant-launched (the assistant starts/stops the process)
-  --http :7474   HTTP + SSE — a shared daemon across sessions, or for debugging
+  --http <addr>  HTTP + SSE — a shared daemon across sessions, or for debugging
+                 (default 127.0.0.1:7474; non-loopback binds print a warning)
   --unix <path>  a Unix domain socket — low-latency shared daemon (Linux/macOS)
 
 By default the store opens read-only so 'chiton build', 'embed', and 'cluster'
@@ -954,14 +976,39 @@ records in the MCP config so the server uses the same store as 'chiton build'.`,
 			case unixPath != "":
 				return serveUnix(cmd, mcpsdk.NewSSEServer(s), unixPath)
 			default:
+				// The MCP server has no authentication: anything that can reach
+				// the port can read the whole graph. Warn loudly (don't block)
+				// when the bind address is not loopback-only.
+				if host, _, err := net.SplitHostPort(addr); err == nil {
+					if host == "" || host == "0.0.0.0" || host == "::" {
+						fmt.Fprintf(cmd.ErrOrStderr(),
+							"serve: WARNING: --http %s listens on ALL network interfaces. The MCP server has NO authentication, so the entire graph (code, meetings, emails, PII) will be reachable by anyone on the network. Bind to loopback instead, e.g. --http 127.0.0.1:7474.\n", addr)
+					}
+				}
+				sse := mcpsdk.NewSSEServer(s)
 				fmt.Fprintf(cmd.OutOrStdout(), "serve: listening on %s (SSE)\n", addr)
-				return mcpsdk.NewSSEServer(s).Start(addr)
+				errCh := make(chan error, 1)
+				go func() { errCh <- sse.Start(addr) }()
+				select {
+				case <-cmd.Context().Done():
+					// Ctrl-C: drain SSE sessions and stop the HTTP server so
+					// the deferred store Close() runs.
+					shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					_ = sse.Shutdown(shutdownCtx)
+					return nil
+				case err := <-errCh:
+					if err != nil && !errors.Is(err, http.ErrServerClosed) {
+						return err
+					}
+					return nil
+				}
 			}
 		},
 	}
 
 	cmd.Flags().BoolVar(&stdio, "stdio", false, "serve over stdio (for MCP assistants)")
-	cmd.Flags().StringVar(&addr, "http", ":7474", "HTTP/SSE listen address (shared daemon / debug)")
+	cmd.Flags().StringVar(&addr, "http", "127.0.0.1:7474", "HTTP/SSE listen address (loopback by default; shared daemon / debug)")
 	cmd.Flags().StringVar(&unixPath, "unix", "", "serve over a Unix domain socket at this path (Linux/macOS shared daemon)")
 	cmd.Flags().BoolVar(&writable, "writable", false, "open the store read-write so submit_extraction works over MCP (disables concurrent build/embed)")
 	cmd.Flags().StringVar(&graphPath, "graph", "", "Graph store path to serve (default: configured/built-in graph_path)")
@@ -1037,7 +1084,7 @@ Requires a prior 'chiton cluster' run.`,
 				return fmt.Errorf("load cluster sidecar: %w", err)
 			}
 			if clusterResults == nil {
-				return fmt.Errorf("no cluster data found â€” run 'chiton cluster' first")
+				return fmt.Errorf("no cluster data found - run 'chiton cluster' first")
 			}
 
 			gs, err := openGraphStore(cfg.GraphPath, true)
@@ -1069,7 +1116,7 @@ Requires a prior 'chiton cluster' run.`,
 			}
 
 			if !toStdout {
-				fmt.Fprintf(cmd.OutOrStdout(), "report: done â€” %d nodes, %d communities\n",
+				fmt.Fprintf(cmd.OutOrStdout(), "report: done - %d nodes, %d communities\n",
 					clusterResults.NodeCount, clusterResults.CommunityCount)
 			}
 			return nil
@@ -1220,7 +1267,7 @@ You usually don't invoke it directly.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			stage := hooks.Stage(stageRaw)
 			if !slices.Contains(hooks.Stages(), stage) {
-				return fmt.Errorf("unknown stage %q â€” supported: pre-commit, pre-push", stageRaw)
+				return fmt.Errorf("unknown stage %q - supported: pre-commit, pre-push", stageRaw)
 			}
 
 			hooksYaml := filepath.Join(dir, ".chiton", "hooks.yaml")
@@ -1288,7 +1335,7 @@ func resolveGitHooksDir(repoRoot string) (string, error) {
 	gitDir := filepath.Join(repoRoot, ".git")
 	info, err := os.Stat(gitDir)
 	if err != nil {
-		return "", fmt.Errorf("no .git in %s â€” not a git repository?", repoRoot)
+		return "", fmt.Errorf("no .git in %s - not a git repository?", repoRoot)
 	}
 	if !info.IsDir() {
 		// .git can be a file in worktree layouts: "gitdir: <path>"

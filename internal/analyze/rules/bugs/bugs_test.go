@@ -60,6 +60,32 @@ func ok() {
 	}
 }
 
+func TestDeferInLoop_IgnoresStringLiterals(t *testing.T) {
+	// "defer" inside a string literal must not match; a real defer still does.
+	src := `package x
+
+func ok() {
+	for i := 0; i < 10; i++ {
+		msg := "wrap in func() { defer f() }()"
+		println(msg)
+	}
+}
+
+func bad() {
+	for i := 0; i < 10; i++ {
+		defer println(i)
+	}
+}
+`
+	got := (DeferInLoop{}).MatchFile(context.Background(), target(t, "strlit.go", src))
+	if len(got) != 1 {
+		t.Fatalf("expected 1 finding, got %d (%+v)", len(got), got)
+	}
+	if got[0].Span == nil || got[0].Span.StartLine != 13 {
+		t.Fatalf("expected finding at line 13, got %+v", got[0].Span)
+	}
+}
+
 func TestConsoleLog(t *testing.T) {
 	src := `function debug() {
   console.log("hi"); // diagnostic

@@ -100,6 +100,11 @@ for CI and demos). Restart 'chiton serve' afterwards to load the new vectors.`,
 
 			written := 0
 			for start := 0; start < len(work); start += embedBatchSize {
+				// Stop between batches on Ctrl-C (root context cancelled) so
+				// the deferred store close runs cleanly.
+				if err := ctx.Err(); err != nil {
+					return err
+				}
 				end := start + embedBatchSize
 				if end > len(work) {
 					end = len(work)

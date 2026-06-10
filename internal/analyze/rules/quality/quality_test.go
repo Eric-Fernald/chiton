@@ -70,3 +70,26 @@ func ok() {} // XXX hack
 		t.Fatalf("expected 3 markers, got %d (%+v)", len(got), got)
 	}
 }
+
+func TestTodoComment_IgnoresStringLiterals(t *testing.T) {
+	// Markers inside string literals (e.g. a rule's own pattern list) must not
+	// match; a marker in a real comment still does.
+	src := `package x
+
+var pattern = "TODO|FIXME|XXX|HACK"
+
+// TODO: real marker
+`
+	got := (TodoComment{}).MatchFile(context.Background(), target(t, "x.go", src, nil))
+	if len(got) != 1 {
+		t.Fatalf("expected 1 marker, got %d (%+v)", len(got), got)
+	}
+	if got[0].Span == nil || got[0].Span.StartLine != 5 {
+		t.Fatalf("expected finding at line 5, got %+v", got[0].Span)
+	}
+
+	// Test sources are skipped entirely (fixtures embed markers in raw strings).
+	if got := (TodoComment{}).MatchFile(context.Background(), target(t, "x_test.go", src, nil)); len(got) != 0 {
+		t.Fatalf("expected test file to skip; got %d", len(got))
+	}
+}

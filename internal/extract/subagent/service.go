@@ -35,9 +35,6 @@ const (
 // complete, so Pending will not re-emit it.
 const extractionStatusDone = "done"
 
-// DefaultConfidenceThreshold splits INFERRED from AMBIGUOUS when none is set.
-const DefaultConfidenceThreshold = 0.5
-
 // Service emits extraction task specs and ingests their results.
 // embedder is optional; when present, Submit embeds new concept nodes inline
 // so they are immediately retrievable (otherwise the next `chiton embed` does).
@@ -49,10 +46,10 @@ type Service struct {
 }
 
 // New builds a Service. Pass embedder=nil to defer concept embedding to
-// `chiton embed`. threshold<=0 uses DefaultConfidenceThreshold.
+// `chiton embed`. threshold<=0 uses model.DefaultConfidenceThreshold.
 func New(s store.GraphStore, embedder embed.Embedder, threshold float32) *Service {
 	if threshold <= 0 {
-		threshold = DefaultConfidenceThreshold
+		threshold = model.DefaultConfidenceThreshold
 	}
 	return &Service{store: s, embedder: embedder, threshold: threshold, now: time.Now}
 }
@@ -80,7 +77,7 @@ func (s *Service) Pending(ctx context.Context, kind string, limit int) ([]TaskSp
 	}
 	var specs []TaskSpec
 	for _, n := range nodes {
-		if attrString(n, "extraction_status") == extractionStatusDone {
+		if model.AttrString(n.Attrs, "extraction_status") == extractionStatusDone {
 			continue
 		}
 		var spec TaskSpec
@@ -89,7 +86,7 @@ func (s *Service) Pending(ctx context.Context, kind string, limit int) ([]TaskSp
 			if kind != "" && kind != KindDocConcepts {
 				continue
 			}
-			text := attrString(n, "text")
+			text := model.AttrString(n.Attrs, "text")
 			if strings.TrimSpace(text) == "" {
 				continue // nothing to extract from an empty section
 			}
@@ -177,7 +174,7 @@ func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, err
 		if label == "" {
 			continue
 		}
-		prov, conf := resolveProvenance(c.Confidence, s.threshold)
+		prov, conf := model.ResolveProvenance(c.Confidence, s.threshold)
 		if prov == model.ProvAmbiguous {
 			rep.Ambiguous++
 		}
@@ -236,7 +233,7 @@ func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, err
 			}
 		}
 		kind := edgeKind(e.Kind)
-		prov, conf := resolveProvenance(e.Confidence, s.threshold)
+		prov, conf := model.ResolveProvenance(e.Confidence, s.threshold)
 		edges = append(edges, model.Edge{
 			ID:         model.NewEdgeID(fromID, toID, kind),
 			Src:        fromID,
@@ -259,7 +256,7 @@ func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, err
 			if !ok {
 				continue
 			}
-			prov, conf := resolveProvenance(c.Confidence, s.threshold)
+			prov, conf := model.ResolveProvenance(c.Confidence, s.threshold)
 			edges = append(edges, model.Edge{
 				ID:         model.NewEdgeID(r.TaskID, toID, model.EdgeDescribes),
 				Src:        r.TaskID,
@@ -290,21 +287,6 @@ func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, err
 	return rep, nil
 }
 
-// resolveProvenance maps a host-supplied confidence to a provenance tag and a
-// clamped confidence. At or above threshold → INFERRED; below → AMBIGUOUS.
-func resolveProvenance(conf, threshold float32) (model.Provenance, float32) {
-	if conf < 0 {
-		conf = 0
-	}
-	if conf > 1 {
-		conf = 1
-	}
-	if conf >= threshold {
-		return model.ProvInferred, conf
-	}
-	return model.ProvAmbiguous, conf
-}
-
 // edgeKind normalises a host-supplied edge kind to a known semantic kind,
 // defaulting to DESCRIBES for empty/unknown values.
 func edgeKind(raw string) model.EdgeKind {
@@ -326,16 +308,6 @@ func edgeKind(raw string) model.EdgeKind {
 	default:
 		return model.EdgeDescribes
 	}
-}
-
-func attrString(n model.Node, key string) string {
-	if n.Attrs == nil {
-		return ""
-	}
-	if v, ok := n.Attrs[key].(string); ok {
-		return v
-	}
-	return ""
 }
 
 // slug lowercases and replaces runs of non-alphanumerics with single hyphens,

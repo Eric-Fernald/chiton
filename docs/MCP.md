@@ -19,15 +19,15 @@ tool surface**.
 
 ```sh
 chiton serve --stdio                    # stdio transport (assistant-launched)
-chiton serve                            # HTTP/SSE on :7474 (default)
-chiton serve --http :8080               # HTTP/SSE on a custom address
+chiton serve                            # HTTP/SSE on 127.0.0.1:7474 (default)
+chiton serve --http 127.0.0.1:8080      # HTTP/SSE on a custom address
 chiton serve --unix /tmp/chiton.sock    # Unix domain socket, SSE (Linux/macOS)
 ```
 
 | Flag | Default | Description |
 |---|---|---|
 | `--stdio` | `false` | Serve over stdio (for MCP assistants). |
-| `--http` | `:7474` | HTTP/SSE listen address (shared daemon / debug). |
+| `--http` | `127.0.0.1:7474` | HTTP/SSE listen address (shared daemon / debug). Binding a non-loopback address (`0.0.0.0`, `::`, or an empty host) prints a stderr warning — the HTTP transport has no authentication. |
 | `--unix` | `""` | Serve over a Unix domain socket at this path (Linux/macOS shared daemon). |
 | `--writable` | `false` | Open the store read-write so the write tools work over MCP (disables concurrent `build`/`embed`). |
 | `--graph` | `""` | Graph store path to serve (default: configured/built-in `graph_path`). |

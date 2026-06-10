@@ -127,6 +127,29 @@ func TestDeadSymbol(t *testing.T) {
 	}
 }
 
+func TestDeadSymbol_SkipsRuntimeEntrypointsAndMethods(t *testing.T) {
+	// init/main are runtime-invoked and methods get no CALLS edges from the
+	// extractor — none should be flagged. A plain unreferenced function is.
+	initFn := sym("i", "init", "func")
+	mainFn := sym("m", "main", "func")
+	method := sym("p", "Analyzer.persist", "method")
+	dead := sym("d", "deadFn", "func")
+	for _, n := range []*model.Node{&initFn, &mainFn, &method, &dead} {
+		n.SourceURI = "file://app.go"
+	}
+
+	tg := analyze.GraphTarget{
+		Nodes: []model.Node{initFn, mainFn, method, dead},
+	}
+	got := (DeadSymbol{}).MatchGraph(context.Background(), tg)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 finding, got %d (%+v)", len(got), got)
+	}
+	if got[0].TargetNodeID != "d" {
+		t.Fatalf("expected finding on 'd', got %q", got[0].TargetNodeID)
+	}
+}
+
 func itoa(i int) string {
 	if i == 0 {
 		return "0"
