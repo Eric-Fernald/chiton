@@ -45,7 +45,7 @@ func (ErrorNotWrapped) MatchFile(_ context.Context, t analyze.FileTarget) []anal
 	line := 0
 	for sc.Scan() {
 		line++
-		text := stripGoComment(sc.Text())
+		text := stripGoLineComment(sc.Text())
 		if !errorfCallRe.MatchString(text) {
 			continue
 		}
@@ -69,5 +69,34 @@ func (ErrorNotWrapped) MatchFile(_ context.Context, t analyze.FileTarget) []anal
 var wrapVerbRe = regexp.MustCompile(`%[+#]?w`)
 
 func containsWrapVerb(s string) bool { return wrapVerbRe.MatchString(s) }
+
+// stripGoLineComment drops a // line comment but keeps string contents —
+// unlike stripGoComment, which blanks them. This rule must inspect the format
+// verbs inside the fmt.Errorf format string.
+func stripGoLineComment(s string) string {
+	var inStr byte
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if inStr != 0 {
+			if c == '\\' && i+1 < len(s) {
+				i++
+				continue
+			}
+			if c == inStr {
+				inStr = 0
+			}
+			continue
+		}
+		switch c {
+		case '"', '\'', '`':
+			inStr = c
+		case '/':
+			if i+1 < len(s) && s[i+1] == '/' {
+				return s[:i]
+			}
+		}
+	}
+	return s
+}
 
 func init() { analyze.Register(ErrorNotWrapped{}) }

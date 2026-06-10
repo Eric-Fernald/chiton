@@ -70,7 +70,8 @@ When sources conflict, prefer `EXTRACTED` facts over `INFERRED` ones.
 
 ## Requirements
 
-- **Go 1.25+** to build from source.
+- **Go 1.26+** to build from source (`go.mod` pins `toolchain go1.26.4`, which
+  any recent Go downloads automatically).
 - **Optional: [Ollama](https://ollama.com)** for local embeddings (default model
   `nomic-embed-text`, served at `http://localhost:11434`). Set
   `CHITON_EMBED_PROVIDER=hash` for a deterministic offline/CI embedder that needs

@@ -81,8 +81,8 @@ func bad() {
 	if len(got) != 1 {
 		t.Fatalf("expected 1 finding, got %d (%+v)", len(got), got)
 	}
-	if got[0].Span == nil || got[0].Span.StartLine != 13 {
-		t.Fatalf("expected finding at line 13, got %+v", got[0].Span)
+	if got[0].Span == nil || got[0].Span.StartLine != 12 {
+		t.Fatalf("expected finding at line 12, got %+v", got[0].Span)
 	}
 }
 

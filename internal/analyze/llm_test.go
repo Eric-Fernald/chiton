@@ -358,23 +358,3 @@ func TestLLMRuleFilter(t *testing.T) {
 		t.Fatalf("rule filter failed: %+v", specs)
 	}
 }
-
-func TestProvenanceFor(t *testing.T) {
-	cases := []struct {
-		conf     float32
-		wantProv model.Provenance
-		wantConf float32
-	}{
-		{0.9, model.ProvInferred, 0.9},
-		{0.5, model.ProvInferred, 0.5},
-		{0.49, model.ProvAmbiguous, 0.49},
-		{-1, model.ProvAmbiguous, 0},
-		{2, model.ProvInferred, 1},
-	}
-	for _, c := range cases {
-		p, conf := provenanceFor(c.conf, 0.5)
-		if p != c.wantProv || conf != c.wantConf {
-			t.Fatalf("provenanceFor(%v) = (%s,%v), want (%s,%v)", c.conf, p, conf, c.wantProv, c.wantConf)
-		}
-	}
-}

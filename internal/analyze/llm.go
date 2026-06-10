@@ -108,16 +108,13 @@ func NewLLMService(s store.GraphStore, reg *Registry, threshold float32, stateDi
 		reg = DefaultRegistry()
 	}
 	if threshold <= 0 {
-		threshold = DefaultConfidenceThreshold
+		threshold = model.DefaultConfidenceThreshold
 	}
 	if stateDir == "" {
 		stateDir = ".chiton"
 	}
 	return &LLMService{store: s, registry: reg, threshold: threshold, stateDir: stateDir, now: time.Now}
 }
-
-// DefaultConfidenceThreshold splits INFERRED from AMBIGUOUS when none is set.
-const DefaultConfidenceThreshold = 0.5
 
 // llmState is the on-disk completion record.
 type llmState struct {
@@ -291,7 +288,7 @@ func (s *LLMService) Submit(ctx context.Context, r LLMResult) (LLMReport, error)
 		if msg == "" {
 			continue
 		}
-		prov, conf := provenanceFor(fr.Confidence, s.threshold)
+		prov, conf := model.ResolveProvenance(fr.Confidence, s.threshold)
 		var span *model.SourceSpan
 		if fr.Line > 0 {
 			end := fr.EndLine
@@ -470,21 +467,6 @@ func (s *LLMService) saveState(st llmState) error {
 		return err
 	}
 	return os.WriteFile(s.statePath(), b, 0o644)
-}
-
-// provenanceFor maps a host-supplied confidence to a provenance tag and a
-// clamped confidence. At or above threshold → INFERRED; below → AMBIGUOUS.
-func provenanceFor(conf, threshold float32) (model.Provenance, float32) {
-	if conf < 0 {
-		conf = 0
-	}
-	if conf > 1 {
-		conf = 1
-	}
-	if conf >= threshold {
-		return model.ProvInferred, conf
-	}
-	return model.ProvAmbiguous, conf
 }
 
 // llmInstructions wraps a rule's prompt with the shared analysis contract and
