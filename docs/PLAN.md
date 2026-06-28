@@ -12,7 +12,7 @@ Concretely:
 2. Extracts structural (AST) and semantic (LLM) nodes/edges with provenance and confidence tagging.
 3. Clusters with Leiden over graph topology, augmented by an embedding layer for genuine semantic recall (the gap in Graphify).
 4. Serves the graph to AI assistants over MCP so each query returns a precise neighborhood — not a haystack of file contents the model has to grep through mentally.
-5. Continuously syncs from live sources (filesystem, git, Microsoft Teams, browser history) without ever doing a full rebuild.
+5. Continuously syncs from live sources (filesystem, git, Microsoft Teams, Slack, browser history) without ever doing a full rebuild.
 6. Uniquely links meeting decisions and speaker turns back to the code symbols they reference — the one capability no competing tool offers.
 
 **What chiton optimizes for, in order:**
@@ -68,7 +68,7 @@ The token-reduction headline is real. It is not the point.
         +---------+    +----------+   +----------+   +--------------+
         - fsnotify     - tree-sitter  - BadgerDB    - MCP (stdio+HTTP)
         - git hooks    - AST walker     (v1; Kuzu   - REST (debug)
-        - Teams Graph  - LLM subagent    pluggable  - Mermaid/HTML
+        - Teams+Slack  - LLM subagent    pluggable  - Mermaid/HTML
         - Whisper.cpp  - Whisper.cpp     via store  - GRAPH_REPORT.md
         - URL fetcher  - vision (LLM)    interface)
                                        - Vector idx
@@ -85,7 +85,7 @@ The token-reduction headline is real. It is not the point.
 | `id` | string | stable hash: `sha256(source + canonical_label)` |
 | `kind` | enum | `file`, `symbol`, `concept`, `doc_section`, `image`, `meeting`, `meeting_turn`, `decision`, `person`, `url`, `rationale` |
 | `label` | string | |
-| `source_uri` | string | `file://...`, `teams://...`, `https://...` |
+| `source_uri` | string | `file://...`, `teams://...`, `slack://...`, `https://...` |
 | `source_span` | object | `{start_line, end_line, byte_offset}` (nullable) |
 | `embedding` | `[]float32` | nullable; populated for concept/doc/meeting/symbol |
 | `attrs` | `map[string]any` | language, doc_kind, speaker, timestamp, etc. |
@@ -144,7 +144,7 @@ Default = local Ollama (`nomic-embed-text` or `bge-m3`). Optional = OpenAI/Voyag
 Two modes:
 
 - **Subagent mode (Graphify-style):** we do NOT call any LLM API. We emit a structured task spec; the host assistant (Claude Code, Copilot agent) picks it up via MCP and runs the extraction in parallel subagents. Free to us, costs the user nothing extra over their existing subscription.
-- **Daemon mode:** we call a configured LLM directly (Anthropic, OpenAI, local Ollama). Required for unattended ingestion (Teams webhooks at 2am).
+- **Daemon mode:** we call a configured LLM directly (Anthropic, OpenAI, local Ollama). Required for unattended ingestion (Teams/Slack webhooks at 2am).
 
 Both modes write to the same graph via the same internal API.
 
@@ -258,6 +258,7 @@ chiton/
 │   │   ├── fs/            fsnotify-based file watcher
 │   │   ├── git/           git hook helpers + commit walker
 │   │   ├── teams/         MS Graph webhook receiver + transcript fetcher
+│   │   ├── slack/         Slack Web API fetcher + Events API receiver
 │   │   ├── url/           URL fetcher (papers, tweets, YouTube)
 │   │   └── audio/         whisper.cpp wrapper for local transcription
 │   ├── extract/
@@ -343,6 +344,12 @@ chiton/
 |---|---|
 | `github.com/microsoftgraph/msgraph-sdk-go` | meeting transcripts + webhooks |
 
+### Slack
+
+| Package | Purpose |
+|---|---|
+| _none_ — stdlib `net/http` | Slack Web API (history/replies) + Events API receiver; no vendor SDK, the same pure-Go choice as the Gmail email source |
+
 ### Misc
 
 | Package | Purpose |
@@ -375,6 +382,9 @@ chiton/
 
 **Microsoft Graph API for Teams transcripts requires admin consent for `CallRecords.Read.All`** in many tenants.
 - *Mitigation:* for personal use, document the consent flow clearly; for enterprise, this is a real adoption barrier worth addressing in Phase 4 design.
+
+**Slack ingest requires OAuth scopes (`channels:history`, `groups:history`, `users:read`) and the bot to be invited to private channels**; workspace admins may have to approve the app before it can read history.
+- *Mitigation:* document the install/scope flow; degrade gracefully to public-channel-only when a scope is missing, and require an explicit invite (not a silent failure) for private channels.
 
 **Leiden implementation correctness.**
 - *Mitigation:* validate against igraph's reference output on the standard Karate Club + LFR benchmark graphs before shipping.
@@ -409,7 +419,7 @@ Single Go binary that:
 
 **Target test:** point Claude Code at this workspace's `Projects/Go_Projects/` folder, ask "what does fetchall depend on?", verify graph traversal beats grep on token usage.
 
-**Out of scope for Phase 0:** No embeddings, no clustering, no Teams, no Whisper. Just prove the pipeline works and the MCP integration lands.
+**Out of scope for Phase 0:** No embeddings, no clustering, no Teams, no Slack, no Whisper. Just prove the pipeline works and the MCP integration lands.
 
 ### ✅ Phase 1 — Core Graph Features
 
@@ -748,6 +758,69 @@ whisper transcription, or the Microsoft Graph API.
 the subagent `pending`/`submit` flow is the path today); tweet ingest beyond a
 best-effort HTML fetch (no X API); speaker diarization in the whisper backend;
 incremental re-linkage on transcript change (re-ingest + re-link is manual).
+
+### ✅ Phase 4.5 — Slack Integration
+
+Slack is the chat-shaped sibling of the Phase 4 meeting sources. Where Teams
+hands you a linear WebVTT transcript, Slack hands you threaded, already-structured
+JSON conversations — so Slack is the deliberate **exception** to the Phase 4
+unifying insight: it does *not* ride the WebVTT/SRT parser (there is no transcript
+to parse). Instead a thin adapter maps Slack's structured messages straight into
+the same `meeting` / `meeting_turn` / `person` node shape `meeting.ToGraph`
+emits, so everything downstream — the decision → code linkage, `search_meetings`,
+`decisions_about` — works unchanged. A Slack channel or thread becomes a
+discussion node exactly like a meeting, and a decision reached in a thread links
+back to the code symbols it references: the same unique capability, now reachable
+from Slack. No new node kinds, no new MCP tools.
+
+- ✅ **Slack ingest** (`internal/ingest/slack`): a thin `net/http` Web API
+  client (bot/user OAuth token via `CHITON_SLACK_TOKEN`) — no vendor SDK, the
+  same pure-Go choice as the Gmail email source — that pulls channel history
+  (`conversations.history`) and thread replies (`conversations.replies`, paging
+  the cursor and de-duping the parent message Slack repeats on every page)
+  behind a `ConversationSource` interface mirroring Teams' `TranscriptSource`,
+  so the ingest orchestration is unit-tested against a fake. A small adapter
+  turns each Slack message into a `meeting_turn` (speaker = resolved display
+  name, text, `ts` timestamp), the channel/thread into a `meeting` node, and
+  participants into PII-tagged `person` nodes sharing the meeting subsystem's
+  `person://` scheme — keyed on the resolved display name (falling back to the
+  Slack user ID); cross-source merge with email-address `person` nodes is out of
+  scope (different key), exactly as the email integration already notes. The
+  conversation and its turns share a stable `slack://<channel>[/<thread-ts>]`
+  URI (keyed on the channel id alone so the dedup key never shifts between runs),
+  so a re-ingest replaces it atomically — the same pattern the AST extractors
+  and the meeting parser use. The author cache is mutex-guarded so the receiver
+  can share one client across concurrent handlers. CLI:
+  `chiton slack fetch --channel <id> [--thread <ts>]`.
+- ✅ **Slack Events API receiver** (`internal/ingest/slack`): a pure-`net/http`
+  receiver that performs the Slack `url_verification` challenge handshake (echo
+  the `challenge` field) — the direct analogue of the Microsoft Graph
+  subscription `validationToken` handshake — and dispatches `message` events to
+  auto-ingest new messages. Every request is authenticated by verifying the
+  `X-Slack-Signature` HMAC-SHA256 over `v0:{timestamp}:{body}` with the app
+  signing secret, constant-time compared (`hmac.Equal`) and bounded by a
+  ±5-minute `X-Slack-Request-Timestamp` replay window. Unlike the Teams webhook
+  (whose `clientState` is genuinely optional), a Slack app always has a signing
+  secret, so an unset one **fails closed**: every request is rejected and the
+  CLI refuses to start without one. CLI: `chiton slack serve-events`.
+- ✅ **Meeting → code linkage, reused as-is**: because Slack conversations land
+  as `meeting`/`meeting_turn`/`person` nodes, the Phase 4 `LinkService`
+  (`pending_meeting_links` / `submit_meeting_links`) ties Slack-thread decisions
+  back to code with the same `DECIDED_IN` / `DISCUSSED_IN` / `ACTION_FOR` /
+  `RATIONALE_FOR` edges, tagged `INFERRED` (or `AMBIGUOUS` below the confidence
+  threshold). `search_meetings` and `decisions_about` already serve
+  Slack-sourced discussions (participant names hidden unless `include_pii`).
+
+**Deferred:** daemon-mode (chiton calling an LLM itself for unattended Slack
+linkage — the subagent `pending`/`submit` flow is the path, as with Teams);
+Slack Huddle audio transcripts (route through the Phase 4 whisper backend once
+the recording is exposed); full-workspace backfill in one pass (channel-scoped
+fetch today, paced by Slack's tier rate limits); reaction/emoji and file-share
+ingest (text messages only); Socket Mode as an alternative to a public Events
+API request URL; and cross-source person identity — Slack persons key on display
+name, email persons on address, meeting persons on speaker label, so the same
+human is not auto-merged across sources (would need a shared identity/alias
+layer, also called out under Phase 6 email).
 
 ### ✅ Phase 5 — Polish & Distribution
 
@@ -1160,7 +1233,7 @@ Solo, evenings/weekends, with Claude Code as pair programmer.
 | Grep + `read_file` | impossible | n/a (data not in repo) |
 | Pure RAG | partial | 4k-10k, often hallucinates |
 | `CLAUDE.md` | manual entry | tiny but rarely written |
-| Graphify | not supported | no Teams/email/browser ingest |
+| Graphify | not supported | no Teams/Slack/email/browser ingest |
 | **chiton (Phase 4)** | **native** | **800-2500, with citations** |
 
 This is the ONLY approach that can answer this class of question, full stop. Not a speedup — a capability the others lack.
@@ -1703,7 +1776,7 @@ chiton reads source code, documentation, browser history (if enabled), and meeti
 
 - **Encryption at rest (Phase 1.5):** the Kuzu graph store, sqlite-vec index, content cache, and `audit.jsonl` are all written through an AES-256-GCM (or chacha20-poly1305 fallback) wrapper keyed from an argon2id KDF over a user passphrase. Salt + KDF parameters live next to `.chiton/schema_version`. The passphrase is mlock'd in daemon memory, optionally cached in the OS keychain (Windows Credential Manager / macOS Keychain / libsecret). `chiton export` archives are encrypted with the same or a recipient-specific passphrase. `chiton init --encrypt=false` is supported but not the default. This addresses the laptop-theft, backup-leakage, and stolen-`.chiton/` threats listed above.
 - **Secret scrubbing pass** (gitleaks-rule-based) runs before any node text is sent to a remote LLM or remote embedding provider. Scrubbed nodes are tagged `scrubbed=true` in attrs and the original content stays local-only.
-- **Per-source allowlist:** each ingest source (repo, folder, Teams meeting series) is registered in `.chiton/sources.yaml` with explicit `allow_remote_llm` and `allow_remote_embed` booleans. Default both `false`. Daemon-mode LLM calls are blocked at the call site if the source isn't allowlisted.
+- **Per-source allowlist:** each ingest source (repo, folder, Teams meeting series, Slack channel) is registered in `.chiton/sources.yaml` with explicit `allow_remote_llm` and `allow_remote_embed` booleans. Default both `false`. Daemon-mode LLM calls are blocked at the call site if the source isn't allowlisted.
 - **Cross-project query scoping:** queries default to the current working directory's repo. `--scope all` is required to span repos and emits a warning the first time per session.
 - **MCP rate limits:** per-tool token caps (default 8k tokens per call), per-session call caps, and a `graph_summary --scope=all` requires an explicit confirmation from the user via the host assistant's elicitation flow.
 - **Prompt-injection isolation:** ingested content is never concatenated into the daemon's own LLM system prompts. Extraction prompts use structured tool schemas, not free-form "here is the file, return JSON." The schema enforces the output shape regardless of injection attempts.
@@ -1946,7 +2019,7 @@ The honest summary: **chiton is the only entry that combines on-device, embedded
 **What you actually get:**
 
 - **Better answers, not just cheaper ones.** Typed edges (`CALLS`, `IMPORTS`, `DECIDED_IN`, `RATIONALE_FOR`) beat raw file dumps because the model stops spending attention reconstructing structure. Token reduction (5–15× vs naive dumping, 2–4× vs grep+read) is real but secondary.
-- **The capability nobody else has.** Meeting decisions linked back to the code symbols they reference. Your assistant can answer *"why does this function look like this?"* with the Teams turn from three weeks ago that decided it.
+- **The capability nobody else has.** Meeting decisions linked back to the code symbols they reference. Your assistant can answer *"why does this function look like this?"* with the Teams or Slack thread from three weeks ago that decided it.
 - **Scale that holds up.** Real graph store (BadgerDB in v1, Kuzu pluggable behind the same interface), incremental Leiden clustering, hybrid vector+graph retrieval. Designed for 1M+ nodes across code + docs + meetings simultaneously — the regime where Graphify-class tools fall over.
 - **On-device, single binary, zero telemetry.** Your source and your meeting transcripts never leave the machine. AES-256-GCM at rest with argon2id-derived keys when you want it.
 - **Honest install story.** One MCP server, one optional rules file per assistant (`chiton install` handles Claude Code, Copilot, Cursor). No invasive `PreToolUse` hooks, no per-assistant lock-in.
