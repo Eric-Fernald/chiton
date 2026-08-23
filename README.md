@@ -15,15 +15,6 @@ at par, and it is only dramatically cheaper than dumping whole files (see
 context: the model gets exactly what's relevant instead of a haystack of files
 to grep through.
 
-> **Status:** actively developed, single-user and on-device first. Phases 0–6
-> are implemented — core graph, rule engine, install layer, semantic layer, LLM
-> rules + diff analysis, live sync, broad multi-assistant installers,
-> meeting/transcript ingestion with decision-to-code linkage, Slack conversation
-> ingestion (Phase 4.5), the Phase 5 polish layer (interactive HTML + Mermaid
-> export, cross-repo graph merging, a Unix-socket transport, and an honest
-> cross-corpus benchmark), the static dashboard (Phase 5.5), and browser-history
-> + email ingestion. See [docs/PLAN.md](docs/PLAN.md) for the full roadmap.
-
 ---
 
 ## Why a graph instead of grep?
