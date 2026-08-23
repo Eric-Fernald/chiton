@@ -102,3 +102,28 @@ func TestGenerateHTMLEscapesScriptClose(t *testing.T) {
 		t.Error("malicious label appears verbatim in output — not escaped")
 	}
 }
+
+func TestGeneratedPagesCarryACSP(t *testing.T) {
+	// Both exported pages inline the whole graph and load one remote script.
+	// The CSP is what stops an exported file from phoning that data home, so
+	// neither page may ship without it.
+	const want = "connect-src 'none'"
+
+	var visual bytes.Buffer
+	nodes := []model.Node{sym("a", "A"), sym("b", "B")}
+	edges := []model.Edge{{ID: "e1", Src: "a", Dst: "b", Kind: model.EdgeCalls}}
+	if err := GenerateHTML(&visual, nodes, edges, nil, DefaultVisual); err != nil {
+		t.Fatalf("visualize html: %v", err)
+	}
+	if !strings.Contains(visual.String(), want) {
+		t.Errorf("chiton visualize output has no %q directive", want)
+	}
+
+	var dash bytes.Buffer
+	if err := GenerateDashboard(&dash, DashboardData{Nodes: nodes, Edges: edges}); err != nil {
+		t.Fatalf("dashboard html: %v", err)
+	}
+	if !strings.Contains(dash.String(), want) {
+		t.Errorf("chiton dashboard output has no %q directive", want)
+	}
+}

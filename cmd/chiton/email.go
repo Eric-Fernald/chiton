@@ -19,7 +19,8 @@ nodes for the participants. Replies link to the message they answer.
 
   chiton email ingest <file|dir>   parse local .eml / .mbox files
   chiton email gmail               fetch via the Gmail API (CHITON_GMAIL_TOKEN)
-  chiton email outlook             fetch via Microsoft Graph (CHITON_OUTLOOK_*)`,
+  chiton email outlook             fetch via Microsoft Graph (CHITON_OUTLOOK_*)
+                                   — needs a -tags msgraph build`,
 	}
 	cmd.AddCommand(emailIngestCmd(), emailGmailCmd(), emailOutlookCmd())
 	return cmd
@@ -103,7 +104,11 @@ func emailOutlookCmd() *cobra.Command {
 Authentication is app-only (client credentials). Set:
   CHITON_OUTLOOK_TENANT_ID, CHITON_OUTLOOK_CLIENT_ID,
   CHITON_OUTLOOK_CLIENT_SECRET, CHITON_OUTLOOK_USER_ID (the mailbox to read)
-The app needs the Mail.Read application permission (admin-consented).`,
+The app needs the Mail.Read application permission (admin-consented).
+
+Build requirement: this command needs a binary built with -tags msgraph
+(make build-msgraph). Released binaries omit the Microsoft Graph SDK because it
+adds ~117 MB. 'chiton email ingest' and 'chiton email gmail' are unaffected.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			sinceT, err := parseSince(since)
 			if err != nil {

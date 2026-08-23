@@ -199,9 +199,33 @@ func TestClaudeCode_InstallUninstallRoundTrip(t *testing.T) {
 	}
 
 	// Verify each expected artifact exists.
-	for _, rel := range []string{".mcp.json", "CLAUDE.md", filepath.Join(".claude", "skills", "chiton", "SKILL.md")} {
+	want := []string{".mcp.json", "CLAUDE.md"}
+	for _, skill := range claudeSkills {
+		want = append(want, filepath.Join(".claude", "skills", skill.Dir, "SKILL.md"))
+	}
+	for _, rel := range want {
 		if _, err := os.Stat(filepath.Join(dir, rel)); err != nil {
 			t.Errorf("expected %s after install: %v", rel, err)
+		}
+	}
+
+	// Every installed skill must carry YAML frontmatter with a description, or
+	// the assistant will not load it as a skill at all.
+	for _, skill := range claudeSkills {
+		body, err := os.ReadFile(claudeSkillPath(dir, skill.Dir))
+		if err != nil {
+			t.Fatalf("read %s skill: %v", skill.Dir, err)
+		}
+		if !strings.HasPrefix(string(body), "---\n") {
+			t.Errorf("%s skill does not start with YAML frontmatter", skill.Dir)
+		}
+		if !strings.Contains(string(body), "\ndescription:") {
+			t.Errorf("%s skill frontmatter has no description", skill.Dir)
+		}
+		// The directory name supplies the skill name in both the standalone and
+		// the plugin layout, so an explicit name: would break one of them.
+		if strings.Contains(string(body), "\nname:") {
+			t.Errorf("%s skill pins an explicit name:, which collides with the plugin namespace", skill.Dir)
 		}
 	}
 
@@ -230,8 +254,10 @@ func TestClaudeCode_InstallUninstallRoundTrip(t *testing.T) {
 			t.Errorf("expected %s removed after uninstall (file is chiton-only); got err=%v", rel, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(dir, ".claude", "skills", "chiton")); !os.IsNotExist(err) {
-		t.Errorf("expected skill dir removed after uninstall; got err=%v", err)
+	for _, skill := range claudeSkills {
+		if _, err := os.Stat(filepath.Join(dir, ".claude", "skills", skill.Dir)); !os.IsNotExist(err) {
+			t.Errorf("expected %s skill dir removed after uninstall; got err=%v", skill.Dir, err)
+		}
 	}
 }
 

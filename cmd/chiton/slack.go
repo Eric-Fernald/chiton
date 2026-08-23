@@ -98,6 +98,7 @@ a tunnel/reverse proxy; Slack requires a public HTTPS Request URL.`,
 				// that rejects every (unauthenticatable) request.
 				return fmt.Errorf("a Slack signing secret is required: set CHITON_SLACK_SIGNING_SECRET or pass --signing-secret")
 			}
+			warnIfNonLoopback(cmd.ErrOrStderr(), addr, "the Slack events receiver")
 			src, err := slack.NewWebClientFromEnv()
 			if err != nil {
 				return err
@@ -158,7 +159,7 @@ a tunnel/reverse proxy; Slack requires a public HTTPS Request URL.`,
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&addr, "addr", ":8445", "HTTP listen address")
+	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8445", "HTTP listen address (loopback by default; put a tunnel or reverse proxy in front)")
 	cmd.Flags().StringVar(&signingSecret, "signing-secret", "", "Slack app signing secret (or CHITON_SLACK_SIGNING_SECRET)")
 	return cmd
 }

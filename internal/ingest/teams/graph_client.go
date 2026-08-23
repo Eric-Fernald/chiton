@@ -1,3 +1,7 @@
+//go:build msgraph
+
+// The Microsoft Graph client. Excluded from the default build — see
+// graph_stub.go for why, and for the msgraph-free counterpart.
 package teams
 
 import (

@@ -1,3 +1,7 @@
+//go:build msgraph
+
+// The Outlook/Microsoft Graph mail source. Excluded from the default build —
+// see outlook_stub.go for why, and for the msgraph-free counterpart.
 package email
 
 import (
