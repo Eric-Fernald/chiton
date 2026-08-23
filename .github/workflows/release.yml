@@ -41,7 +41,7 @@ jobs:
       CGO_ENABLED: '0'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # actions/checkout defaults to a depth-1 fetch with no tags, which
           # would make the Makefile's `git describe --tags` fall back to a bare
