@@ -51,7 +51,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           # go.mod carries `go 1.25.5` + `toolchain go1.26.4`; let GOTOOLCHAIN
           # stay at its default (auto) and do not pin a go-version here.
