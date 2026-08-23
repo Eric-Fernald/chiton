@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/fsnotify/fsnotify"
 )
@@ -45,6 +46,24 @@ type Watcher struct {
 	w       *fsnotify.Watcher
 	enqueue func(path string)
 	opts    Options
+
+	// mu guards dirs, which is our own record of the directories we asked
+	// fsnotify to watch.
+	//
+	// We deliberately do NOT use fsnotify's WatchList() to decide whether a
+	// removed path was a directory. On Linux, fsnotify drops a watch from that
+	// list while it drains the kernel's event buffer — IN_DELETE_SELF and
+	// IN_IGNORED for the removed directory are processed synchronously, before
+	// the parent's Remove event is handed to us on the Events channel. By the
+	// time we see "root/pkg was removed", fsnotify has already forgotten it was
+	// a watched directory, so a WatchList() check reports false and the removal
+	// is silently treated as a file event: OnDirRemove never fires and the
+	// consumer never prunes the subtree.
+	//
+	// Our own set is only mutated by us, so the answer does not depend on how
+	// far fsnotify has got through its buffer.
+	mu   sync.Mutex
+	dirs map[string]bool
 }
 
 // New creates a Watcher rooted at root. enqueue is called (from Run's goroutine)
@@ -55,7 +74,7 @@ func New(root string, enqueue func(path string), opts Options) (*Watcher, error)
 	if err != nil {
 		return nil, err
 	}
-	watcher := &Watcher{root: root, w: w, enqueue: enqueue, opts: opts}
+	watcher := &Watcher{root: root, w: w, enqueue: enqueue, opts: opts, dirs: map[string]bool{}}
 	if err := watcher.addTree(root); err != nil {
 		_ = w.Close()
 		return nil, err
@@ -63,8 +82,33 @@ func New(root string, enqueue func(path string), opts Options) (*Watcher, error)
 	return watcher, nil
 }
 
-// Watched returns the number of directories currently watched (test hook).
-func (w *Watcher) Watched() int { return len(w.w.WatchList()) }
+// Watched returns the number of directories currently watched.
+func (w *Watcher) Watched() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return len(w.dirs)
+}
+
+// markWatched records that we added a watch for dir.
+func (w *Watcher) markWatched(dir string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.dirs[dir] = true
+}
+
+// watchedUnder returns dir plus every watched descendant directory.
+func (w *Watcher) watchedUnder(dir string) []string {
+	prefix := dir + string(filepath.Separator)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	var out []string
+	for watched := range w.dirs {
+		if watched == dir || strings.HasPrefix(watched, prefix) {
+			out = append(out, watched)
+		}
+	}
+	return out
+}
 
 // Run processes events until ctx is cancelled, then returns ctx.Err().
 func (w *Watcher) Run(ctx context.Context) error {
@@ -107,9 +151,11 @@ func (w *Watcher) handle(ev fsnotify.Event) {
 		}
 	}
 
-	// A removed/renamed directory yields no per-child events. We detect the
-	// directory case via our watch list (os.Stat fails once it is gone), drop
-	// its subtree watches, and let the consumer prune what it indexed under it.
+	// A removed/renamed directory yields no per-child events. os.Stat cannot
+	// tell us it was a directory — it is already gone — so we ask our own
+	// watched-directory set, which is authoritative here precisely because
+	// fsnotify's may already have been pruned (see Watcher.dirs). Then drop the
+	// subtree watches and let the consumer prune what it indexed underneath.
 	if ev.Op&(fsnotify.Remove|fsnotify.Rename) != 0 && w.isWatchedDir(path) {
 		w.removeSubtreeWatches(path)
 		if w.opts.OnDirRemove != nil {
@@ -136,9 +182,13 @@ func (w *Watcher) handle(ev fsnotify.Event) {
 // WatchRootOnly mode it watches just dir itself and does not descend.
 func (w *Watcher) addTree(dir string) error {
 	if w.opts.WatchRootOnly {
-		if err := w.w.Add(dir); err != nil && w.opts.OnError != nil {
-			w.opts.OnError(err)
+		if err := w.w.Add(dir); err != nil {
+			if w.opts.OnError != nil {
+				w.opts.OnError(err)
+			}
+			return nil
 		}
+		w.markWatched(dir)
 		return nil
 	}
 	return filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
@@ -155,9 +205,13 @@ func (w *Watcher) addTree(dir string) error {
 		if dir != path && w.ignoredDir(path) {
 			return filepath.SkipDir
 		}
-		if err := w.w.Add(path); err != nil && w.opts.OnError != nil {
-			w.opts.OnError(err)
+		if err := w.w.Add(path); err != nil {
+			if w.opts.OnError != nil {
+				w.opts.OnError(err)
+			}
+			return nil
 		}
+		w.markWatched(path)
 		return nil
 	})
 }
@@ -182,22 +236,31 @@ func (w *Watcher) enqueueExisting(dir string) {
 	})
 }
 
-// isWatchedDir reports whether path is currently one of our watched directories
-// (only directories are ever watched, so membership in the watch list means it
-// was a directory).
+// isWatchedDir reports whether path is one of the directories we are watching
+// (only directories are ever watched, so membership means it was a directory).
+//
+// This consults our own set rather than fsnotify's — see the note on
+// Watcher.dirs for why that distinction is load-bearing.
 func (w *Watcher) isWatchedDir(path string) bool {
-	return slices.Contains(w.w.WatchList(), path)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.dirs[path]
 }
 
 // removeSubtreeWatches drops the watch on dir and on every descendant directory,
-// best-effort. fsnotify does not reliably auto-remove watches for a directory
-// that was renamed/deleted out from under it.
+// best-effort. On Linux the kernel has usually already invalidated these watches
+// by the time we get here, so fsnotify's Remove returns ErrNonExistentWatch —
+// that is expected and ignored. Forgetting them on our side is the part that
+// matters.
 func (w *Watcher) removeSubtreeWatches(dir string) {
-	prefix := dir + string(filepath.Separator)
-	for _, watched := range w.w.WatchList() {
-		if watched == dir || strings.HasPrefix(watched, prefix) {
-			_ = w.w.Remove(watched)
-		}
+	stale := w.watchedUnder(dir)
+	for _, watched := range stale {
+		_ = w.w.Remove(watched)
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, watched := range stale {
+		delete(w.dirs, watched)
 	}
 }
 

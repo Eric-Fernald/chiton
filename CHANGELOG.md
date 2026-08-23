@@ -117,6 +117,23 @@ dated section.
   empty graph. `CHITON_PROJECT_DIR` (set by the plugin) now anchors both the
   `.chitonrc` lookup and relative `graph_path` resolution.
 
+- **Live sync now prunes removed directories on Linux.** `fswatch` decided
+  whether a removed path had been a directory by consulting fsnotify's
+  `WatchList()`. On Linux fsnotify drops a deleted directory's watch from that
+  list *while draining the kernel's event buffer* — `IN_DELETE_SELF` and
+  `IN_IGNORED` are processed before the parent's `Remove` event reaches the
+  Events channel — so by the time the watcher handled the event, the path was
+  already gone from the list. The removal was misread as a file event,
+  `OnDirRemove` never fired, and `chiton sync watch` left every node under the
+  deleted directory in the graph. The watcher now tracks the directories it
+  watches itself, which is unaffected by fsnotify's internal timing. Windows
+  was never affected, which is why this only surfaced in CI.
+
+- **`CHITON_EMBED_DIM` is no longer silently ignored.** `embed.dim` is the one
+  setting with no default, so it never entered viper's key set and `Unmarshal`
+  skipped it — the variable parsed fine and then did nothing. It is now bound
+  explicitly, and a value in `.chitonrc` still works as before.
+
 ### Security
 
 - **`chiton teams serve-webhook` now fails closed.** Two changes, both

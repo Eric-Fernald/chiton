@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 type collector struct {
@@ -165,7 +167,7 @@ func TestWatchDirRemove(t *testing.T) {
 
 	// Confirm the subdir is actually watched before removing it.
 	if !waitFor(func() bool {
-		return slices.Contains(w.w.WatchList(), sub)
+		return w.isWatchedDir(sub)
 	}, 3*time.Second) {
 		t.Fatal("subdir was never watched")
 	}
@@ -200,5 +202,102 @@ func TestWatchRejectsNonAccepted(t *testing.T) {
 	}
 	if c.has(txt) {
 		t.Errorf("watcher should reject non-.go file %s", txt)
+	}
+}
+
+// TestDirRemoveWhenWatchAlreadyDropped pins the ordering that made
+// TestWatchDirRemove fail on Linux while passing on Windows.
+//
+// On Linux the kernel invalidates a deleted directory's watch and fsnotify
+// forgets it (IN_DELETE_SELF / IN_IGNORED) while draining its event buffer —
+// synchronously, before the parent directory's Remove event is handed to us on
+// the Events channel. So by the time handle() runs, fsnotify's WatchList no
+// longer contains the path. Classifying the event by asking fsnotify therefore
+// misread a directory removal as a file event and never called OnDirRemove,
+// leaving the consumer's index full of paths that no longer exist.
+//
+// This test reproduces that state deterministically on every platform by
+// dropping the fsnotify watch before delivering the event.
+func TestDirRemoveWhenWatchAlreadyDropped(t *testing.T) {
+	root := t.TempDir()
+	sub := filepath.Join(root, "pkg")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	removed := map[string]bool{}
+	opts := goOpts()
+	opts.OnDirRemove = func(dir string) {
+		mu.Lock()
+		removed[dir] = true
+		mu.Unlock()
+	}
+
+	w, err := New(root, func(string) {}, opts)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+
+	if !w.isWatchedDir(sub) {
+		t.Fatalf("precondition: %s should be watched after New", sub)
+	}
+
+	// Exactly the state Linux leaves us in: gone from fsnotify, gone from disk,
+	// but the Remove event for it has not been processed yet.
+	_ = w.w.Remove(sub)
+	if err := os.RemoveAll(sub); err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(w.w.WatchList(), sub) {
+		t.Fatalf("precondition: %s should already be gone from fsnotify's watch list", sub)
+	}
+
+	w.handle(fsnotify.Event{Name: sub, Op: fsnotify.Remove})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !removed[sub] {
+		t.Errorf("OnDirRemove was not called for %s; the directory removal was misread as a file event", sub)
+	}
+}
+
+// TestDirRemoveForgetsSubtree checks the bookkeeping half: once a directory is
+// gone, neither it nor its descendants may still count as watched, or a later
+// event on a recreated path would be misclassified.
+func TestDirRemoveForgetsSubtree(t *testing.T) {
+	root := t.TempDir()
+	sub := filepath.Join(root, "pkg")
+	nested := filepath.Join(sub, "inner")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	w, err := New(root, func(string) {}, goOpts())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+
+	for _, d := range []string{root, sub, nested} {
+		if !w.isWatchedDir(d) {
+			t.Fatalf("precondition: %s should be watched after New", d)
+		}
+	}
+
+	if err := os.RemoveAll(sub); err != nil {
+		t.Fatal(err)
+	}
+	w.handle(fsnotify.Event{Name: sub, Op: fsnotify.Remove})
+
+	if w.isWatchedDir(sub) {
+		t.Errorf("%s is still recorded as watched after its removal", sub)
+	}
+	if w.isWatchedDir(nested) {
+		t.Errorf("descendant %s is still recorded as watched after its parent was removed", nested)
+	}
+	if !w.isWatchedDir(root) {
+		t.Errorf("root %s should still be watched", root)
 	}
 }

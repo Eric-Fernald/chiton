@@ -72,14 +72,18 @@ jobs:
         # -count=1 disables the test cache, so a green run always means the
         # tests really executed.
         #
-        # Known flake candidates, for whoever is reading a red run: the fsnotify
-        # wrapper in internal/ingest/fswatch (kqueue on macOS coalesces and
-        # orders events differently from inotify on Linux),
+        # Timing-sensitive tests, for whoever is reading a red run:
         # internal/ingest/browser/watch_test.go (a 250 ms "nothing happened yet"
-        # negative timing assertion), and TestCoalesce in internal/jobs (asserts
+        # negative timing assertion) and TestCoalesce in internal/jobs (asserts
         # exactly one run behind a 30 ms debounce). Do NOT paper over these with
-        # a retry wrapper — investigate instead; a retry would also hide real
-        # regressions in the watcher.
+        # a retry wrapper — investigate instead.
+        #
+        # The first red run here was internal/ingest/fswatch, and it was NOT a
+        # flake: fsnotify drops a deleted directory's watch while draining the
+        # kernel buffer, so on Linux the watcher had already forgotten the path
+        # was a directory by the time it handled the Remove event, and never
+        # fired OnDirRemove. Fixed by tracking watched directories ourselves.
+        # Treat a failure in that package as a real bug until proven otherwise.
         #
         # macOS ships a 256 fd soft limit. BadgerDB opens many fds per store,
         # a dozen-plus packages open one, and the kqueue backend spends an fd
