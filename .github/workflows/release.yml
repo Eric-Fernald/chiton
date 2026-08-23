@@ -101,7 +101,7 @@ jobs:
       # full commit SHA is a good follow-up; do it by copying the SHA off the
       # release you actually intend to run, never from memory.
       - name: Publish the GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
