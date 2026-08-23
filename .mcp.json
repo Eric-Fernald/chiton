@@ -1,13 +1,10 @@
 {
   "mcpServers": {
     "chiton": {
-      "command": "C:\\Programming Repos\\chiton\\chiton\\chiton.exe",
-      "args": [
-        "serve",
-        "--stdio"
-      ],
+      "command": "chiton",
+      "args": ["serve", "--stdio"],
       "env": {
-        "CHITON_GRAPH_PATH": "C:\\Programming Repos\\chiton\\chiton\\chiton-out\\graph.kuzu"
+        "CHITON_PROJECT_DIR": "${CLAUDE_PROJECT_DIR}"
       }
     }
   }

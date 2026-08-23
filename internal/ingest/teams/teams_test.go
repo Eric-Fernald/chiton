@@ -92,6 +92,31 @@ func TestWebhookValidationHandshake(t *testing.T) {
 	}
 }
 
+func TestWebhookWithoutClientStateFailsClosed(t *testing.T) {
+	var got []ChangeItem
+	h := NewWebhookHandler("", func(_ context.Context, c ChangeItem) error {
+		got = append(got, c)
+		return nil
+	}, nil)
+
+	// A notification that carries no clientState — exactly what a forged
+	// callback would look like — must not be dispatched when we have no secret
+	// to compare it against.
+	body := `{"value":[
+	  {"subscriptionId":"sub1","changeType":"created","clientState":"",
+	   "resource":"communications/onlineMeetings('MEET1')/transcripts('TID1')"},
+	  {"subscriptionId":"sub2","changeType":"created","clientState":"anything",
+	   "resource":"communications/onlineMeetings('MEET2')/transcripts('TID2')"}
+	]}`
+	req := httptest.NewRequest(http.MethodPost, "/hook", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if len(got) != 0 {
+		t.Fatalf("dispatched %d changes with no configured clientState; want 0 (fail closed)", len(got))
+	}
+}
+
 func TestWebhookDispatchesValidNotifications(t *testing.T) {
 	var got []ChangeItem
 	h := NewWebhookHandler("s3cr3t", func(_ context.Context, c ChangeItem) error {

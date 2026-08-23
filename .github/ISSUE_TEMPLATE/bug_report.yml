@@ -1,0 +1,123 @@
+name: Bug report
+description: Something in chiton behaves incorrectly
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Please do **not** report security vulnerabilities here. Those go through
+        a private GitHub Security Advisory — see `docs/SECURITY.md`, section 7.
+
+
+        Graph output can contain source, transcripts, or email text. Redact
+        anything sensitive before pasting it.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: >-
+        The exact commands, in order. If a specific repository or file shape
+        triggers it, a minimal example helps enormously.
+      placeholder: |
+        1. chiton build .
+        2. chiton analyze internal/foo
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: version
+    attributes:
+      label: Output of `chiton version`
+      description: The full output, not just the version string.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - macOS (Apple silicon)
+        - macOS (Intel)
+        - Windows
+        - Other / several
+    validations:
+      required: true
+
+  - type: dropdown
+    id: msgraph
+    attributes:
+      label: Was the binary built with `-tags msgraph`?
+      description: >-
+        Microsoft Graph support (`chiton teams *`, `chiton email outlook`) is
+        behind a build tag and is excluded from every release artifact. If those
+        commands report "rebuild with -tags msgraph", the answer is No.
+      options:
+        - "No — default build or a release artifact"
+        - "Yes — built with make build-msgraph"
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: How was chiton installed?
+      options:
+        - Claude Code plugin (chiton-marketplace)
+        - scripts/install-chiton.sh or scripts/install-chiton.ps1
+        - "chiton install (registered the MCP server with an assistant)"
+        - Built from source (make build / go install)
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which area is affected?
+      description: Best guess is fine.
+      options:
+        - Graph build / extraction (chiton build)
+        - Live sync / watchers (chiton sync, hooks)
+        - Rule engine / findings (chiton analyze)
+        - Semantic layer (chiton embed, chiton search, concepts)
+        - MCP server (chiton serve) or an MCP tool
+        - Meetings, URLs, browser history, email, Slack, Teams
+        - Installers, plugin packaging, skills
+        - Other / unsure
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or error output
+      description: >-
+        Anything useful from stderr. `--log-level debug` where the command
+        supports it.
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before filing
+      options:
+        - label: I searched the existing issues and this is not a duplicate.
+          required: true
+        - label: This is not a security vulnerability (those go to a private advisory).
+          required: true

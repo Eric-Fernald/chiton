@@ -48,8 +48,9 @@ concurrent `build`/`embed` cannot run):
 - `add_url`
 
 When the server is read-only (or otherwise missing the backing service), these
-tools return a plain-text message instead of writing, e.g. `add_url` reports
-`add_url unavailable — start 'chiton serve --writable' to enable URL ingest.`
+tools fail instead of writing. `add_url` refuses before it fetches anything,
+with `add-url: store is read-only — restart 'chiton serve --writable' or use the
+'chiton add-url' CLI`.
 The CLI alternatives are the other write path: `chiton extract submit`,
 `chiton analyze submit`, `chiton meeting submit`, `chiton add-url`.
 
@@ -63,6 +64,23 @@ than an error:
   embed' then restart 'chiton serve'.`
 - `god_nodes` requires a prior `chiton cluster`; without cluster data it replies
   `no cluster data available — run 'chiton cluster' then restart chiton serve`.
+
+### Tool index
+
+Nineteen tools, all registered in `New()` and all documented below:
+
+| Group | Tools |
+|---|---|
+| Graph | `get_node`, `get_node_neighborhood`, `query_graph`, `shortest_path`, `god_nodes`, `graph_summary` |
+| Semantic | `semantic_search` |
+| Findings | `list_findings`, `explain_finding`, `diff_findings` |
+| Meetings | `search_meetings`, `decisions_about` |
+| Subagent tasks | `pending_extractions`, `pending_analyses`, `pending_meeting_links` |
+| Write | `submit_extraction`, `submit_analysis`, `submit_meeting_links`, `add_url` |
+
+The CLI-only ingest commands (`chiton slack`, `chiton teams`, `chiton browser`,
+`chiton email`, `chiton meeting`) add **no** tools of their own — what they write
+is served by the tools above.
 
 ---
 
@@ -96,7 +114,7 @@ A **lean edge** (`leanEdge`) — `from`/`to` are node **labels**, not IDs:
 ### Node kinds
 
 `file`, `symbol`, `concept`, `doc_section`, `image`, `meeting`, `meeting_turn`,
-`decision`, `person`, `url`, `rationale`, `rule`, `finding`.
+`decision`, `person`, `url`, `email`, `rationale`, `rule`, `finding`.
 
 ### Edge kinds
 
@@ -112,6 +130,18 @@ A **lean edge** (`leanEdge`) — `from`/`to` are node **labels**, not IDs:
 
 `EXTRACTED` (confidence 1.0, ground truth) · `INFERRED` (LLM hints) ·
 `AMBIGUOUS` (below the confidence threshold; hidden by default).
+
+### PII gating is per-tool, not global
+
+Names of meeting speakers, Slack authors, and email participants all land on
+`person` nodes carrying `attrs.pii = true`. **Only `search_meetings` and
+`decisions_about` honour that tag**, suppressing names unless `include_pii` is
+passed. The generic graph tools — `get_node`, `query_graph`,
+`get_node_neighborhood`, `shortest_path`, `semantic_search`, `graph_summary`,
+`god_nodes` — return `person` nodes (and `url` nodes, including ingested browser
+history) ungated. A broad `query_graph` can therefore surface a name that
+`search_meetings` would have withheld; the gate is a default for the meeting
+tools' output shape, not an access control over the store.
 
 > **Note:** the schema's `Min`/`Max` annotations are advisory — mcp-go does not
 > enforce them at dispatch, so the server clamps integer inputs to their
@@ -532,6 +562,13 @@ decisions and the code symbols they touch. Use this for "what meetings discussed
 X?" / "when did we last talk about the retry policy?". **Participant names are
 PII and hidden unless `include_pii` is set.**
 
+A `meeting` here is any ingested conversation, not only a call transcript.
+`chiton slack fetch` ingests a Slack channel or thread as the same subgraph
+(`meeting` + `meeting_turn` + `person`) under a `slack://<channel>[/<thread-ts>]`
+`source_uri`, and Slack authors become the same PII-tagged `person` nodes as
+transcript speakers — so a result may be a chat conversation, distinguishable by
+its `source_uri` scheme.
+
 | Parameter | Type | Required / default | Description |
 |---|---|---|---|
 | `query` | string | optional | Text to match against meeting title, transcript, and participants (case-insensitive). Empty = all meetings. |
@@ -577,7 +614,12 @@ Return the decisions made about a topic or code symbol, each with its rationale,
 the meeting it was decided in, and the code it governs. This is the
 meeting→code link: answer "why is this function like this?" with the meeting
 that decided it. Requires meetings ingested and linked (`chiton meeting ingest`
-plus the meeting-linkage subagent flow).
+or `chiton slack fetch`, plus the meeting-linkage subagent flow).
+
+The `meeting` named in each hit may be a Slack channel or thread as readily as a
+call — Slack conversations are linked through the identical flow, so a decision
+can be traced back to the thread it was made in. Assignee names remain PII and
+are hidden unless `include_pii` is set.
 
 | Parameter | Type | Required / default | Description |
 |---|---|---|---|
@@ -887,8 +929,9 @@ a URL replaces it. **Requires a writable store (`chiton serve --writable`).**
 }
 ```
 
-When unavailable (read-only store): `add_url unavailable — start 'chiton serve
---writable' to enable URL ingest.`
+When the store is read-only the tool returns an error before making any
+request: `add-url: store is read-only — restart 'chiton serve --writable' or use
+the 'chiton add-url' CLI`.
 
 ---
 

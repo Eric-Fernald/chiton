@@ -1,0 +1,21 @@
+{
+  "name": "chiton",
+  "displayName": "chiton",
+  "description": "On-device knowledge graph for your codebase. Answers architecture and navigation questions from typed graph edges (CALLS, IMPORTS, CONTAINS, VIOLATES) instead of grep, and links code back to the meetings and decisions that shaped it.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Eric Fernald",
+    "url": "https://github.com/Eric-Fernald"
+  },
+  "homepage": "https://github.com/Eric-Fernald/chiton",
+  "repository": "https://github.com/Eric-Fernald/chiton",
+  "keywords": [
+    "knowledge-graph",
+    "code-intelligence",
+    "code-navigation",
+    "architecture",
+    "static-analysis",
+    "on-device",
+    "mcp"
+  ]
+}

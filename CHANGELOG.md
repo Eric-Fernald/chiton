@@ -1,0 +1,142 @@
+# Changelog
+
+All notable changes to chiton are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+**There are no released versions yet.** No git tag has been cut, so there is no
+`1.0.0` and no release history — everything below sits under `Unreleased`.
+Until a tag exists, `make` derives the version from
+`git describe --tags --always --dirty` and `chiton version` falls back to Go
+module and VCS metadata. The first tagged release will move these entries into a
+dated section.
+
+## [Unreleased]
+
+### Added
+
+- **Claude Code plugin packaging.** The repository root doubles as a plugin:
+  `.claude-plugin/plugin.json` (`chiton`, version `0.1.0`) and
+  `.claude-plugin/marketplace.json` (`chiton-marketplace`, single plugin sourced
+  from `./`). Both pass `claude plugin validate --strict`. Load it from a working
+  tree with `claude --plugin-dir .`.
+- **Three plugin skills**, namespaced `/chiton:graph`,
+  `/chiton:subagent-tasks`, and `/chiton:setup`, living at
+  `skills/{graph,subagent-tasks,setup}/SKILL.md`. `setup` is new: it walks a
+  first-run workspace through locating or installing the binary, building the
+  graph, and confirming the MCP server answers.
+- **`skills/` is now the single source of truth for assistant-facing markdown.**
+  A new root-level `embed.go` embeds each `SKILL.md` into the `chiton` package,
+  and `internal/install/manifests` re-exports it, so the plugin and
+  `chiton install` ship byte-identical text and cannot drift.
+- **`chiton install` writes a second Claude Code skill.** Alongside
+  `.claude/skills/chiton/SKILL.md` it now writes
+  `.claude/skills/chiton-subagent-tasks/SKILL.md`; `chiton uninstall` and
+  `chiton doctor` cover both. Skill frontmatter deliberately carries no `name:`
+  — the directory name supplies it in both the plugin and the installed layout.
+- **`bin/chiton` and `bin/chiton.cmd` PATH shims.** The plugin puts `bin/` on the
+  assistant's PATH, and the shim resolves the real binary in order: `$CHITON_BIN`,
+  then `chiton` / `chiton.exe` on PATH (skipping itself), then
+  `$CLAUDE_PLUGIN_DATA/bin`, then `$HOME/.chiton/bin` — with install instructions
+  on failure instead of a bare "not found".
+- **`scripts/install-chiton.sh` and `scripts/install-chiton.ps1`.** They download
+  the release asset for the host OS/arch, verify its SHA-256 against the
+  release's `checksums.txt`, and stop on any mismatch. Nothing downloaded is
+  executed by the scripts. Install location defaults to
+  `$CLAUDE_PLUGIN_DATA/bin` under the plugin, otherwise `~/.chiton/bin`.
+  Because the repository is private, assets are fetched through the REST API —
+  either via an authenticated `gh`, or by per-asset API URL with a
+  `GITHUB_TOKEN`. The `releases/download/` browser URL is deliberately not used:
+  it is session-authenticated and returns 404 for a token.
+- **`CHITON_PROJECT_DIR`.** When set, `internal/config` looks up `.chitonrc` in
+  that directory and resolves a relative `graph_path` against it instead of
+  against the process working directory. Unset, behaviour is unchanged. The
+  plugin's MCP config sets it to `${CLAUDE_PROJECT_DIR}`.
+- **New Makefile targets:** `build-msgraph`, `fmt`, `fmt-check`, `check-msgraph`,
+  and `checksums`. `make release` now also writes `dist/checksums.txt`, which the
+  install scripts require.
+- **`.gitattributes`.** The tree is normalised LF-only, with CRLF kept for
+  `*.cmd` / `*.bat` / `*.ps1` and explicit LF pins for `bin/chiton` and
+  `scripts/*.sh` so the shim and installer survive being committed from Windows.
+- **`SECURITY.md`, `CONTRIBUTING.md`, and this changelog** at the repository
+  root. `SECURITY.md` is the private-reporting entry point GitHub surfaces; the
+  threat model stays in `docs/SECURITY.md`.
+- Tests for the new surfaces: `internal/config/config_test.go`,
+  `cmd/chiton/netwarn_test.go`, a Teams webhook fail-closed test, and
+  `internal/ingest/email/outlook_msgraph_test.go`.
+
+### Changed
+
+- **Microsoft Graph is now behind the `msgraph` build tag, and the default build
+  excludes it.** The Graph SDK links request builders for every top-level Graph
+  resource and kiota registers its serialization types through interface tables,
+  so the linker cannot strip the parts chiton never calls — about 117 MB of
+  binary for two API calls. Excluding it took the stripped binary from
+  **142.0 MB to 24.6 MB (-82.6%)**.
+  - Affected commands: `chiton teams fetch`, `chiton teams serve-webhook`, and
+    `chiton email outlook`. They still appear in `--help` and still parse their
+    flags, but fail at runtime with a message telling you to rebuild with
+    `-tags msgraph` (`make build-msgraph`).
+  - `chiton email ingest` and `chiton email gmail` are pure Go and unaffected.
+  - **Release artifacts are deliberately built without the tag.** If you rely on
+    Teams or Outlook ingest, build your own binary with `make build-msgraph`.
+  - `make check-msgraph` keeps the tagged path compiling and passing, since the
+    default `make check` never compiles those files.
+- **`make check` is now `fmt-check + vet + test`** (previously `vet + test`), so
+  a non-gofmt-clean tree fails the pre-merge gate.
+- **The root `.mcp.json` is now the plugin's MCP config, not a developer's.** It
+  launches `chiton serve --stdio` by bare name — so the binary must be on PATH —
+  and passes `CHITON_PROJECT_DIR=${CLAUDE_PROJECT_DIR}`. It previously hard-coded
+  an absolute Windows path to `chiton.exe` and a `CHITON_GRAPH_PATH`. Anyone
+  developing chiton itself should register their own build with
+  `claude mcp add` at local scope rather than editing this file.
+- **The always-on rules block written into `CLAUDE.md` / `AGENTS.md` and friends
+  was rewritten.** It now names `semantic_search`, `get_node`, `diff_findings`,
+  `search_meetings`, and `decisions_about`, explains `EXTRACTED` vs `INFERRED` vs
+  `AMBIGUOUS` provenance, states that graph content (docs, transcripts, emails,
+  page titles) is untrusted data rather than instructions, and mentions that the
+  `pending_*` / `submit_*` flows need a writable server.
+- `internal/install/manifests/SKILL.md` was removed; the package now re-exports
+  the embedded content from `skills/` instead of holding its own copy.
+- The wildcard-bind warning used by `chiton serve --http` moved into a shared
+  `warnIfNonLoopback` helper (`cmd/chiton/netwarn.go`) so every listener warns
+  the same way. It recognises an empty host and the unspecified IPv4/IPv6
+  addresses, and leaves named hosts alone rather than resolving them at startup.
+- Help text for `chiton teams` and `chiton email outlook` now states the
+  `-tags msgraph` build requirement up front.
+- The Outlook test whose subject takes a Microsoft Graph type moved behind the
+  `msgraph` tag, so the default test binary no longer links the Graph SDK.
+
+### Fixed
+
+- **An assistant-launched MCP server no longer risks reading a different store
+  than `chiton build` wrote.** MCP servers are not reliably started in the
+  workspace root, and the default `graph_path` is relative, so a server started
+  elsewhere would resolve it against its own working directory and answer from an
+  empty graph. `CHITON_PROJECT_DIR` (set by the plugin) now anchors both the
+  `.chitonrc` lookup and relative `graph_path` resolution.
+
+### Security
+
+- **`chiton teams serve-webhook` now fails closed.** Two changes, both
+  behaviour-visible:
+  - The command **refuses to start** without a subscription `clientState`
+    (`CHITON_TEAMS_CLIENT_STATE` or `--client-state`), rather than starting a
+    receiver that cannot authenticate anything.
+  - The handler itself now **rejects every notification** when no `clientState`
+    is configured. It previously accepted them all — an unauthenticated receiver
+    that trusted any caller, so any host that could reach the port could inject
+    forged meeting content into the graph.
+
+  If you were running the webhook receiver without `CHITON_TEAMS_CLIENT_STATE`
+  set, it will now exit with an error until you configure the shared secret you
+  registered with the Graph subscription.
+- **Webhook and events listeners now default to loopback.** `chiton teams
+  serve-webhook` defaults to `127.0.0.1:8444` and `chiton slack serve-events` to
+  `127.0.0.1:8445`; both previously defaulted to `:8444` / `:8445`, which binds
+  **every** network interface. Both commands now also print a warning when the
+  configured address is a wildcard. Neither receiver is meant to face the
+  internet directly — put a tunnel or reverse proxy in front. If you depended on
+  the old wide bind, pass `--addr 0.0.0.0:<port>` explicitly and heed the
+  warning.

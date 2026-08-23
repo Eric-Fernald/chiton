@@ -37,3 +37,14 @@ CLAUDE.md
 .claude/
 .claude/settings.local.json
 Chiton_Innovation_Demo_Speaker_Notes.md
+
+# `make build` on POSIX writes an extensionless binary to the repo root.
+# Anchored with a leading slash so it never matches the plugin shim in bin/.
+/chiton
+
+# `make release` cross-compiles here.
+dist/
+
+# `.chiton/` needs no entry here: `chiton init` writes its own allow-list
+# .gitignore that tracks hooks.yaml and sources.yaml and ignores everything
+# else, including the keyfile and the per-machine baselines.

@@ -25,7 +25,11 @@ Authentication is app-only (client credentials). Set:
   CHITON_TEAMS_TENANT_ID, CHITON_TEAMS_CLIENT_ID, CHITON_TEAMS_CLIENT_SECRET,
   CHITON_TEAMS_USER_ID  (the meeting organizer whose meetings to read)
 The app needs the OnlineMeetingTranscript.Read.All application permission
-(admin-consented) and an application access policy for the organizer.`,
+(admin-consented) and an application access policy for the organizer.
+
+Build requirement: these commands need a binary built with -tags msgraph
+(make build-msgraph). Released binaries omit the Microsoft Graph SDK because it
+adds ~117 MB. Without the tag, the commands exist but fail with a clear error.`,
 	}
 	cmd.AddCommand(teamsFetchCmd(), teamsWebhookCmd())
 	return cmd
@@ -86,6 +90,12 @@ public URL for the subscription itself.`,
 			if clientState == "" {
 				clientState = os.Getenv("CHITON_TEAMS_CLIENT_STATE")
 			}
+			if clientState == "" {
+				// Fail fast rather than starting a receiver that cannot
+				// authenticate anything. Matches `slack serve-events`.
+				return fmt.Errorf("a Graph subscription clientState is required: set CHITON_TEAMS_CLIENT_STATE or pass --client-state")
+			}
+			warnIfNonLoopback(cmd.ErrOrStderr(), addr, "the Teams webhook receiver")
 			src, err := teams.NewGraphSourceFromEnv()
 			if err != nil {
 				return err
@@ -140,7 +150,7 @@ public URL for the subscription itself.`,
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&addr, "addr", ":8444", "HTTP listen address")
+	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8444", "HTTP listen address (loopback by default; put a tunnel or reverse proxy in front)")
 	cmd.Flags().StringVar(&clientState, "client-state", "", "shared secret to validate notifications (or CHITON_TEAMS_CLIENT_STATE)")
 	return cmd
 }

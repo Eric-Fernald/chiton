@@ -12,10 +12,33 @@ import (
 //
 // Per-repo layout:
 //
-//	.mcp.json                          ← MCP server registration
-//	CLAUDE.md                          ← always-on rules block
-//	.claude/skills/chiton/SKILL.md     ← /chiton slash-command reference
+//	.mcp.json                                        ← MCP server registration
+//	CLAUDE.md                                        ← always-on rules block
+//	.claude/skills/chiton/SKILL.md                   ← graph-query skill
+//	.claude/skills/chiton-subagent-tasks/SKILL.md    ← subagent task flows
+//
+// This is the standalone path. Users who install the chiton plugin instead get
+// the same skills from the plugin's skills/ directory, namespaced as
+// /chiton:graph and /chiton:subagent-tasks; the markdown is byte-identical
+// because both read the same embedded files.
 type ClaudeCode struct{}
+
+// claudeSkills are the skills written under .claude/skills/<dir>/SKILL.md.
+// The directory name becomes the skill's invocation name, which is why the
+// markdown itself carries no `name:` in its frontmatter — the same file has to
+// work here and inside the plugin's own namespace.
+var claudeSkills = []struct {
+	Dir      string
+	Markdown string
+}{
+	{Dir: "chiton", Markdown: manifests.SkillMarkdown},
+	{Dir: "chiton-subagent-tasks", Markdown: manifests.SubagentTasksSkillMarkdown},
+}
+
+// claudeSkillPath is the on-disk location of one installed skill.
+func claudeSkillPath(dir, skill string) string {
+	return filepath.Join(dir, ".claude", "skills", skill, "SKILL.md")
+}
 
 func (ClaudeCode) Name() string        { return "claude-code" }
 func (ClaudeCode) Description() string { return "Anthropic Claude Code (CLI + IDE extension)" }
@@ -58,14 +81,16 @@ func (c ClaudeCode) Install(opts Options) (Report, error) {
 	}
 	rep.Wrote = append(rep.Wrote, rulesPath)
 
-	skillPath := filepath.Join(opts.Dir, ".claude", "skills", "chiton", "SKILL.md")
-	if err := os.MkdirAll(filepath.Dir(skillPath), 0o755); err != nil {
-		return rep, fmt.Errorf("mkdir %s: %w", filepath.Dir(skillPath), err)
+	for _, skill := range claudeSkills {
+		skillPath := claudeSkillPath(opts.Dir, skill.Dir)
+		if err := os.MkdirAll(filepath.Dir(skillPath), 0o755); err != nil {
+			return rep, fmt.Errorf("mkdir %s: %w", filepath.Dir(skillPath), err)
+		}
+		if err := os.WriteFile(skillPath, []byte(skill.Markdown), 0o644); err != nil {
+			return rep, fmt.Errorf("write %s: %w", skillPath, err)
+		}
+		rep.Wrote = append(rep.Wrote, skillPath)
 	}
-	if err := os.WriteFile(skillPath, []byte(manifests.SkillMarkdown), 0o644); err != nil {
-		return rep, fmt.Errorf("write %s: %w", skillPath, err)
-	}
-	rep.Wrote = append(rep.Wrote, skillPath)
 
 	if opts.WithHooks {
 		rep.Notes = append(rep.Notes, "PreToolUse hooks not yet implemented; rerun without --with-hooks to silence this note")
@@ -100,14 +125,16 @@ func (c ClaudeCode) Uninstall(opts Options) (Report, error) {
 		rep.Skipped = append(rep.Skipped, rulesPath)
 	}
 
-	skillDir := filepath.Join(opts.Dir, ".claude", "skills", "chiton")
-	if _, err := os.Stat(skillDir); err == nil {
-		if err := os.RemoveAll(skillDir); err != nil {
-			return rep, fmt.Errorf("remove %s: %w", skillDir, err)
+	for _, skill := range claudeSkills {
+		skillDir := filepath.Join(opts.Dir, ".claude", "skills", skill.Dir)
+		if _, err := os.Stat(skillDir); err == nil {
+			if err := os.RemoveAll(skillDir); err != nil {
+				return rep, fmt.Errorf("remove %s: %w", skillDir, err)
+			}
+			rep.Wrote = append(rep.Wrote, skillDir)
+		} else {
+			rep.Skipped = append(rep.Skipped, skillDir)
 		}
-		rep.Wrote = append(rep.Wrote, skillDir)
-	} else {
-		rep.Skipped = append(rep.Skipped, skillDir)
 	}
 	return rep, nil
 }
@@ -135,11 +162,13 @@ func (c ClaudeCode) Doctor(opts Options) (DoctorReport, error) {
 		rep.Issues = append(rep.Issues, rulesPath+": no chiton rules block")
 	}
 
-	skillPath := filepath.Join(opts.Dir, ".claude", "skills", "chiton", "SKILL.md")
-	if _, err := os.Stat(skillPath); err == nil {
-		rep.OK = append(rep.OK, skillPath+": skill installed")
-	} else {
-		rep.Issues = append(rep.Issues, skillPath+": skill not installed")
+	for _, skill := range claudeSkills {
+		skillPath := claudeSkillPath(opts.Dir, skill.Dir)
+		if _, err := os.Stat(skillPath); err == nil {
+			rep.OK = append(rep.OK, skillPath+": skill installed")
+		} else {
+			rep.Issues = append(rep.Issues, skillPath+": skill not installed")
+		}
 	}
 
 	rep.Registered = hasMCP && hasRules

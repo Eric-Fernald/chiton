@@ -9,7 +9,6 @@ import (
 	"io"
 	"io/fs"
 	"math/rand"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -250,6 +249,14 @@ pre-push:
 `
 
 const chitonSourcesYAML = `# Source allowlist for remote providers.
+#
+# NOT YET ENFORCED. This file is scaffolding for a planned per-source egress
+# policy; nothing in chiton reads it today, so setting a key here does not
+# restrict anything. Control egress with the switches that do work:
+# CHITON_EMBED_PROVIDER=hash for a fully offline embedder, and simply not
+# running the ingest commands that reach a network (add-url, slack, teams,
+# email gmail/outlook). See docs/SECURITY.md.
+#
 # Set allow_remote_llm or allow_remote_embed to true only for sources
 # you explicitly trust to leave the device.
 sources: []
@@ -979,12 +986,8 @@ records in the MCP config so the server uses the same store as 'chiton build'.`,
 				// The MCP server has no authentication: anything that can reach
 				// the port can read the whole graph. Warn loudly (don't block)
 				// when the bind address is not loopback-only.
-				if host, _, err := net.SplitHostPort(addr); err == nil {
-					if host == "" || host == "0.0.0.0" || host == "::" {
-						fmt.Fprintf(cmd.ErrOrStderr(),
-							"serve: WARNING: --http %s listens on ALL network interfaces. The MCP server has NO authentication, so the entire graph (code, meetings, emails, PII) will be reachable by anyone on the network. Bind to loopback instead, e.g. --http 127.0.0.1:7474.\n", addr)
-					}
-				}
+				warnIfNonLoopback(cmd.ErrOrStderr(),
+					addr, "the MCP server, which has NO authentication — the entire graph (code, meetings, emails, PII) would be readable by anyone on the network")
 				sse := mcpsdk.NewSSEServer(s)
 				fmt.Fprintf(cmd.OutOrStdout(), "serve: listening on %s (SSE)\n", addr)
 				errCh := make(chan error, 1)

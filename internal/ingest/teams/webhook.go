@@ -44,9 +44,11 @@ func NewWebhookHandler(clientState string, onChange func(ctx context.Context, c 
 		log = func(string, ...any) {}
 	}
 	if clientState == "" {
-		// Surface the misconfiguration rather than silently authenticating no one:
-		// with no clientState every notification (including forged ones) is accepted.
-		log("teams webhook: WARNING — clientState is empty; notifications are NOT authenticated")
+		// Fail closed. An empty clientState means nothing can be authenticated,
+		// so every notification is rejected rather than every notification being
+		// trusted. The caller is expected to refuse to start in this state; this
+		// is the library-level backstop for callers that do not.
+		log("teams webhook: WARNING — clientState is empty; every notification will be rejected")
 	}
 	return &WebhookHandler{clientState: clientState, onChange: onChange, log: log}
 }
@@ -99,11 +101,13 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
-// validState constant-time-compares the notification's clientState to ours. An
-// empty configured clientState disables the check (not recommended).
+// validState constant-time-compares the notification's clientState to ours.
+// With no configured clientState there is nothing to compare against, so the
+// notification is rejected: an unauthenticated receiver that accepts anything
+// would let any host on the network inject meeting content into the graph.
 func (h *WebhookHandler) validState(got string) bool {
 	if h.clientState == "" {
-		return true
+		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(got), []byte(h.clientState)) == 1
 }

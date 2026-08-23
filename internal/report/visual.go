@@ -293,6 +293,13 @@ const htmlTemplate = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Same defence-in-depth CSP as the dashboard: the graph data is already
+     HTML-safe and the DOM is never built from innerHTML, so this is a second
+     layer. It pins the only allowed remote script to the vis-network CDN,
+     forbids object/base-uri, and blocks network egress so an exported page can
+     never phone the inlined graph home. 'unsafe-inline' is required because
+     the page's script and styles are inline. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src https://unpkg.com 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; object-src 'none'">
 <title>__TITLE__</title>
 <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
 <style>
