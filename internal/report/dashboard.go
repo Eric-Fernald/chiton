@@ -345,9 +345,22 @@ const dashboardTemplate = `<!DOCTYPE html>
     nodesDS = new vis.DataSet(nodes);
     var edgesDS = new vis.DataSet(edges);
     network = new vis.Network(document.getElementById("graph"), { nodes:nodesDS, edges:edgesDS }, {
-      physics:{ stabilization:{ iterations:200 }, barnesHut:{ gravitationalConstant:-8000, springLength:120 } },
+      physics:{
+        solver:"barnesHut",
+        // Weaker repulsion + stronger central gravity keeps sparse components
+        // in frame; 200 iterations never converged, so the layout used to go
+        // live mid-flight and jitter. Freeze below once it settles.
+        barnesHut:{ gravitationalConstant:-3000, centralGravity:0.6, springLength:110,
+                    springConstant:0.05, damping:0.6, avoidOverlap:0.15 },
+        maxVelocity:30, minVelocity:0.75,
+        stabilization:{ enabled:true, iterations:1500, updateInterval:50, fit:true }
+      },
       interaction:{ hover:true, tooltipDelay:120 },
       nodes:{ font:{ color:"#e6e6e6", size:12 } }
+    });
+    network.once("stabilizationIterationsDone", function () {
+      network.setOptions({ physics:false });
+      network.fit();
     });
 
     var kinds = {};

@@ -21,9 +21,21 @@
 
 name: Release
 
+# Manual only: pushing a tag no longer publishes anything. Create and push the
+# tag first, then dispatch this workflow with that tag:
+#
+#     gh workflow run release.yml -f tag=v1.2.3
+#
+# The tag is an explicit input rather than the dispatched ref because on a
+# workflow_dispatch GITHUB_REF_NAME is whatever ref you launched from, and the
+# asset names (a contract with the installers) must be the tag verbatim.
 on:
-  push:
-    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to release (e.g. v1.2.3)'
+        required: true
+        type: string
 
 # Creating the release and uploading its assets is the only write this workflow
 # needs.
@@ -39,10 +51,26 @@ jobs:
       # Scoped to this job only. The release artifacts are static, pure-Go
       # cross-compiles; the CI workflow must keep cgo enabled for its race leg.
       CGO_ENABLED: '0'
+      # The tag drives both the checkout and every asset name; read it from the
+      # dispatch input, never from GITHUB_REF_NAME.
+      TAG: ${{ inputs.tag }}
     steps:
+      - name: Validate the tag
+        # The old trigger filtered on tags: ['v*']; keep that shape enforced now
+        # that a human types it, so a typo cannot publish assets the installers
+        # will never resolve.
+        run: |
+          case "$TAG" in
+            v*) echo "releasing $TAG" ;;
+            *) echo "::error::tag must start with 'v' (got '$TAG')"; exit 1 ;;
+          esac
+
       - name: Checkout
         uses: actions/checkout@v7
         with:
+          # Build the tag that was asked for, not the ref the dispatch came
+          # from. Checkout fails outright if the tag does not exist.
+          ref: ${{ inputs.tag }}
           # actions/checkout defaults to a depth-1 fetch with no tags, which
           # would make the Makefile's `git describe --tags` fall back to a bare
           # SHA and name every asset something the installers cannot resolve.
@@ -61,8 +89,8 @@ jobs:
 
       - name: Build release artifacts
         run: |
-          echo "building ${GITHUB_REF_NAME}"
-          make release VERSION="${GITHUB_REF_NAME}"
+          echo "building ${TAG}"
+          make release VERSION="${TAG}"
 
       - name: Verify the artifact set the installers expect
         # Mirrors what scripts/install-chiton.{sh,ps1} do at install time: the
@@ -71,11 +99,11 @@ jobs:
         run: |
           status=0
           for asset in \
-            "chiton-${GITHUB_REF_NAME}-linux-amd64" \
-            "chiton-${GITHUB_REF_NAME}-linux-arm64" \
-            "chiton-${GITHUB_REF_NAME}-darwin-amd64" \
-            "chiton-${GITHUB_REF_NAME}-darwin-arm64" \
-            "chiton-${GITHUB_REF_NAME}-windows-amd64.exe"; do
+            "chiton-${TAG}-linux-amd64" \
+            "chiton-${TAG}-linux-arm64" \
+            "chiton-${TAG}-darwin-amd64" \
+            "chiton-${TAG}-darwin-arm64" \
+            "chiton-${TAG}-windows-amd64.exe"; do
             if [ ! -f "dist/$asset" ]; then
               echo "::error::missing release artifact dist/$asset"
               status=1
@@ -103,8 +131,8 @@ jobs:
       - name: Publish the GitHub release
         uses: softprops/action-gh-release@v3
         with:
-          name: ${{ github.ref_name }}
-          tag_name: ${{ github.ref_name }}
+          name: ${{ inputs.tag }}
+          tag_name: ${{ inputs.tag }}
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |

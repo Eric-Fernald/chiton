@@ -314,6 +314,7 @@ const htmlTemplate = `<!DOCTYPE html>
   #panel .stats { color: #9aa0aa; margin-bottom: 8px; }
   #search { width: 100%; box-sizing: border-box; padding: 5px 7px; border-radius: 5px;
     border: 1px solid #2a2e36; background: #0e1013; color: #e6e6e6; }
+  #physics-toggle { display: block; margin-top: 8px; color: #9aa0aa; }
   #legend { margin-top: 8px; line-height: 1.6; }
   #legend span.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; }
   #detail { margin-top: 8px; color: #9aa0aa; min-height: 1.4em; word-break: break-all; }
@@ -325,6 +326,7 @@ const htmlTemplate = `<!DOCTYPE html>
   <h1>__TITLE__</h1>
   <div class="stats">__NODE_COUNT__ nodes · __EDGE_COUNT__ edges</div>
   <input id="search" type="text" placeholder="Search node label… (Enter to focus)">
+  <label id="physics-toggle"><input id="physics" type="checkbox"> physics (unfreeze to rearrange)</label>
   <div id="legend"></div>
   <div id="detail">Click a node for details.</div>
 </div>
@@ -369,9 +371,38 @@ const htmlTemplate = `<!DOCTYPE html>
   var edgesDS = new vis.DataSet(edges);
   var container = document.getElementById("graph");
   var network = new vis.Network(container, { nodes: nodesDS, edges: edgesDS }, {
-    physics: { stabilization: { iterations: 200 }, barnesHut: { gravitationalConstant: -8000, springLength: 120 } },
+    physics: {
+      solver: "barnesHut",
+      barnesHut: {
+        // -8000 overpowered central gravity, so low-degree nodes were pushed to
+        // an equilibrium far outside the viewport ("floating off into space").
+        gravitationalConstant: -3000,
+        centralGravity: 0.6,
+        springLength: 110,
+        springConstant: 0.05,
+        damping: 0.6,
+        avoidOverlap: 0.15
+      },
+      maxVelocity: 30,
+      minVelocity: 0.75,
+      // 200 iterations never converged at this size, so the layout was still
+      // mid-flight when it went live and kept jittering.
+      stabilization: { enabled: true, iterations: 1500, updateInterval: 50, fit: true }
+    },
     interaction: { hover: true, tooltipDelay: 120 },
     nodes: { font: { color: "#e6e6e6", size: 12 } }
+  });
+
+  // vis integrates forever by default: every hover, drag or click re-heats the
+  // solver and the whole graph drifts. Freeze once stabilized; the checkbox
+  // re-heats it deliberately when you do want to rearrange nodes.
+  var physicsBox = document.getElementById("physics");
+  network.once("stabilizationIterationsDone", function () {
+    network.setOptions({ physics: false });
+    network.fit();
+  });
+  physicsBox.addEventListener("change", function () {
+    network.setOptions({ physics: physicsBox.checked });
   });
 
   // Legend: kinds present in this graph.

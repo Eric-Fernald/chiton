@@ -1,6 +1,12 @@
 # CI — the pre-merge gate. Mirrors `make check` (gofmt + vet + test) plus the
 # tag-gated Microsoft Graph path, a race leg, and the shipped-shim file modes.
 #
+# Manual only: workflow_dispatch is the sole trigger, so nothing runs on push or
+# on a pull request. Start a run from the Actions tab (pick the branch or tag in
+# the ref selector) or with:
+#
+#     gh workflow run ci.yml --ref <branch-or-tag>
+#
 # Deliberate omissions, each one load-bearing:
 #
 #   * GOTOOLCHAIN is never set. go.mod declares `go 1.25.5` + `toolchain
@@ -23,16 +29,16 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # Every run is now deliberate, so never cancel one in flight; a second
+  # dispatch on the same ref queues behind the first instead.
+  cancel-in-progress: false
 
 jobs:
   test:
