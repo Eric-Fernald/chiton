@@ -51,6 +51,26 @@ func TestProjectDirAnchorsRelativeGraphPath(t *testing.T) {
 	}
 }
 
+// A launcher that fails to substitute ${CLAUDE_PROJECT_DIR} passes the template
+// through verbatim. Anchoring to it would resolve graph_path under a directory
+// that cannot exist, so the placeholder must read as unset.
+func TestUnexpandedProjectDirTemplateIsIgnored(t *testing.T) {
+	isolate(t)
+	t.Setenv(ProjectDirEnv, "${CLAUDE_PROJECT_DIR}")
+
+	if got := ProjectDir(); got != "." {
+		t.Errorf("ProjectDir() = %q, want %q for an unexpanded template", got, ".")
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got, want := cfg.GraphPath, "./chiton-out/graph.kuzu"; got != want {
+		t.Errorf("GraphPath = %q, want the cwd-relative default %q", got, want)
+	}
+}
+
 func TestProjectDirReadsChitonrcThere(t *testing.T) {
 	isolate(t)
 	project := t.TempDir()

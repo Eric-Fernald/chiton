@@ -21,8 +21,14 @@ const ProjectDirEnv = "CHITON_PROJECT_DIR"
 // ProjectDir returns the anchoring directory: $CHITON_PROJECT_DIR when set,
 // otherwise "." (the process working directory), preserving the historical
 // behaviour for CLI use.
+//
+// A value still carrying a "${...}" template is treated as unset: the launcher
+// passed the placeholder through without substituting it (Claude Code does this
+// with ${CLAUDE_PROJECT_DIR} when the variable is undefined), and anchoring to a
+// literal "${CLAUDE_PROJECT_DIR}" directory only turns a working store path into
+// one that cannot be opened.
 func ProjectDir() string {
-	if dir := strings.TrimSpace(os.Getenv(ProjectDirEnv)); dir != "" {
+	if dir := strings.TrimSpace(os.Getenv(ProjectDirEnv)); dir != "" && !strings.Contains(dir, "${") {
 		return dir
 	}
 	return "."
