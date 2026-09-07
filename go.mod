@@ -1,6 +1,6 @@
 module github.com/Eric-Fernald/chiton
 
-go 1.25.5
+go 1.26.0
 
 toolchain go1.26.4
 
@@ -11,16 +11,16 @@ require (
 	github.com/ggerganov/whisper.cpp/bindings/go v0.0.0-20260604142758-99613cb720b6
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/mark3labs/mcp-go v0.58.0
-	github.com/microsoft/kiota-abstractions-go v1.10.0
-	github.com/microsoftgraph/msgraph-sdk-go v1.101.0
+	github.com/microsoft/kiota-abstractions-go v1.10.1
+	github.com/microsoftgraph/msgraph-sdk-go v1.102.0
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
-	golang.org/x/crypto v0.55.0
+	golang.org/x/crypto v0.56.0
 	golang.org/x/net v0.58.0
 	golang.org/x/term v0.45.0
 	gopkg.in/yaml.v3 v3.0.1
-	modernc.org/sqlite v1.57.0
+	modernc.org/sqlite v1.58.0
 )
 
 require (
@@ -69,7 +69,7 @@ require (
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	google.golang.org/protobuf v1.36.7 // indirect
-	modernc.org/libc v1.74.4 // indirect
+	modernc.org/libc v1.75.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
-	modernc.org/memory v1.11.0 // indirect
+	modernc.org/memory v1.12.1 // indirect
 )
