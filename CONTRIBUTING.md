@@ -332,3 +332,4 @@ Docs are part of the change, not a follow-up. If you add a CLI command, an MCP
 tool, a node kind, or a rule category, update `README.md`, `docs/MCP.md`, and the
 relevant file under `skills/` in the same change. Record user-visible changes in
 [CHANGELOG.md](CHANGELOG.md) under `## [Unreleased]`.
+
