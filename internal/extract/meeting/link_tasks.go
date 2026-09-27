@@ -1,8 +1,7 @@
 package meeting
 
-// linkSchema pins the JSON shape the host assistant returns for one meeting.
-// It is embedded in every task spec so an ingested transcript can never smuggle
-// instructions into a chiton prompt — there is no free-form chiton prompt.
+// linkSchema pins the JSON shape the host returns for one meeting; with no free-form chiton prompt, an
+// ingested transcript has nowhere to smuggle instructions.
 const linkSchema = `{
   "task_id": "<echo the meeting id>",
   "decisions": [
@@ -15,9 +14,8 @@ const linkSchema = `{
   "discussed": ["code symbol label that was discussed but not the subject of a decision"]
 }`
 
-// linkInstructions is the contract for the meeting→code linkage task. It frames
-// the transcript strictly as data (the prompt-injection guard the security plan
-// requires) and tells the assistant to ground references in real symbol labels.
+// linkInstructions frames the transcript strictly as data (the prompt-injection guard) and tells the
+// assistant to ground references in real symbol labels.
 const linkInstructions = `The "input" is a meeting transcript ("Speaker: text" lines). Find the concrete
 DECISIONS made ("we decided to…", "let's go with…", "we'll change…") and, for
 each, the code it concerns. Map each decision's "references" to the exact code

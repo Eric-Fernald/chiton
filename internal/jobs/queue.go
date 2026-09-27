@@ -1,27 +1,5 @@
-// Package jobs provides a small in-process, debouncing, coalescing worker
-// queue keyed by string. It is the background job runner the live-sync engine
-// (Phase 3) uses for re-extraction work.
-//
-// Design note — why not asynq: the plan's Phase 3 lists asynq for background
-// re-extraction, but asynq requires a Redis server. A network service
-// contradicts chiton's single-binary, on-device, zero-runtime-dependency
-// principle — the same reasoning that put pure-Go BadgerDB ahead of CGo Kuzu
-// and a pure-Go flat vector index ahead of sqlite-vec. So the v1 job runner is
-// this pure-Go Queue; an asynq/Redis-backed distributed runner remains a
-// pluggable future backend, exactly like the Kuzu store stub. The Queue's
-// surface (Enqueue / Drain / Stop) is deliberately small so swapping in a
-// distributed backend later is a contained change.
-//
-// Semantics:
-//   - Keys are coalesced: enqueuing the same key repeatedly within the debounce
-//     window collapses into a single run. Editors that write a file several
-//     times in quick succession therefore trigger one re-extraction, not many.
-//   - A key already running is never run concurrently with itself. If it is
-//     re-enqueued while in flight, it is scheduled to run once more after the
-//     current run finishes (so the final on-disk state is always processed).
-//   - Distinct keys run concurrently up to Workers.
-//   - Drain() processes all outstanding (debounced + queued) work before
-//     returning; Stop() abandons it. Both then wait for in-flight handlers.
+// Package jobs is an in-process (no Redis) debouncing, coalescing worker queue keyed by string. A key
+// never runs concurrently with itself; re-enqueued mid-run, it runs once more so the final state is seen.
 package jobs
 
 import (
@@ -30,10 +8,8 @@ import (
 	"time"
 )
 
-// Handler processes one coalesced key. It is called from a worker goroutine;
-// distinct keys may run concurrently, so a Handler must be safe for concurrent
-// use across different keys (the queue guarantees a single key never runs
-// concurrently with itself).
+// Handler processes one coalesced key. Distinct keys may run concurrently, so it must be safe across
+// keys; the queue guarantees a single key never runs concurrently with itself.
 type Handler func(ctx context.Context, key string) error
 
 // Options configures a Queue. Zero values fall back to sane defaults.
@@ -64,9 +40,7 @@ type Queue struct {
 	onError  func(string, error)
 	onDone   func(string, error)
 
-	// ctx is the queue's own lifetime context, created in New so Enqueue is
-	// safe even before Start (no nil-context panic). It is cancelled only by
-	// Stop/Drain (or, via Start, by an external parent context).
+	// ctx is created in New so Enqueue is safe before Start; only Stop/Drain (or Start's parent) cancel it.
 	ctx    context.Context
 	cancel context.CancelFunc
 
@@ -106,15 +80,13 @@ func New(handler Handler, opts Options) *Queue {
 	return q
 }
 
-// Start launches the dispatch loop. If the parent ctx is cancelled the queue is
-// hard-stopped (pending and queued work dropped), equivalent to Stop. Handlers
-// receive the queue's own context, which stays live through a graceful Drain.
+// Start launches the dispatch loop. Cancelling ctx hard-stops the queue like Stop; handlers receive the
+// queue's own context, which stays live through a graceful Drain.
 func (q *Queue) Start(ctx context.Context) {
 	q.wg.Add(1)
 	go q.dispatch()
-	// Bridge an external cancel to a hard stop. If ctx has no cancel (e.g.
-	// context.Background), ctx.Done() is nil and this goroutine simply waits on
-	// the queue's own context, exiting cleanly when Stop/Drain cancels it.
+	// Bridge an external cancel to a hard stop; for an uncancellable ctx this exits when Stop/Drain
+	// cancels q.ctx.
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -144,26 +116,22 @@ func (q *Queue) Enqueue(key string) {
 			q.wg.Done()
 			delete(q.timers, key)
 		} else {
-			// Already fired/firing: its callback will dispatch the key. Arming a
-			// new timer here would double-dispatch (and double-Done the
-			// WaitGroup). The handler reads current on-disk state, and the
-			// running/requeue bookkeeping coalesces any further change.
+			// Already fired: its callback dispatches the key, and re-arming would double-dispatch
+			// (and double-Done the WaitGroup). running/requeue coalesces any later change.
 			return
 		}
 	}
 	q.armLocked(key)
 }
 
-// armLocked starts a debounce timer for key. Caller must hold q.mu. Each arm is
-// balanced by exactly one wg.Done: either the callback's defer, or a Stop()
-// that returns true in Enqueue/Stop/Drain.
+// armLocked starts a debounce timer for key; the caller holds q.mu. Each arm is balanced by exactly
+// one wg.Done: the callback's defer, or a timer Stop() that returns true.
 func (q *Queue) armLocked(key string) {
 	q.wg.Add(1)
 	q.timers[key] = time.AfterFunc(q.debounce, func() {
 		defer q.wg.Done()
-		// Send to ready BEFORE removing the timer entry, so a Drain idle-check
-		// that observes the entry gone is guaranteed to also see the key queued
-		// (no lost work in the fire-during-drain window).
+		// Queue the key BEFORE deleting the timer entry, so a Drain idle-check that sees the entry gone
+		// also sees the key queued.
 		select {
 		case q.ready <- key:
 		case <-q.ctx.Done():
@@ -201,9 +169,8 @@ func (q *Queue) drainLoop() {
 		default:
 		}
 		q.mu.Lock()
-		// Re-feed keys re-enqueued while their handler ran (the requeue markers
-		// run() leaves behind during drain). Skip any still in flight — their own
-		// run() keeps the marker set for a later pass.
+		// Re-feed keys re-enqueued while their handler ran, skipping any still in flight (their run()
+		// keeps the marker for a later pass).
 		var requeued []string
 		for k := range q.requeue {
 			if q.running[k] {
@@ -232,9 +199,8 @@ func (q *Queue) drainLoop() {
 	}
 }
 
-// launch acquires a worker slot and runs key in a fresh goroutine — unless the
-// key is already in flight, in which case it defers the work instead of starting
-// a second handler (preserving the single-key-serialization invariant).
+// launch acquires a worker slot and runs key in a fresh goroutine, unless the key is already in flight,
+// in which case it is requeued rather than run twice concurrently.
 func (q *Queue) launch(key string) {
 	select {
 	case q.workers <- struct{}{}:
@@ -243,11 +209,8 @@ func (q *Queue) launch(key string) {
 	}
 	q.mu.Lock()
 	if q.running[key] {
-		// A handler for this key is already running. The timer-fires-then-Enqueue
-		// re-arm race can land the same key in `ready` twice; running it now would
-		// break the documented "never concurrent with itself" guarantee. Mark it to
-		// run once more after the in-flight handler finishes (run() consumes
-		// requeue) and release the slot we just took.
+		// The timer-fires-then-Enqueue race can land a key in ready twice. Requeue it (run() consumes
+		// the marker) and release the slot, keeping the key serialized.
 		q.requeue[key] = true
 		q.mu.Unlock()
 		<-q.workers
@@ -282,10 +245,8 @@ func (q *Queue) run(key string) {
 		// Normal path: consume the marker and re-arm via Enqueue below.
 		delete(q.requeue, key)
 	}
-	// While draining (Drain set stopped), leave the marker in place: drainLoop
-	// re-feeds it so the key's final on-disk state is still processed rather than
-	// dropped. Stop() also sets stopped but cancels the context, so its leftover
-	// markers are simply never flushed (Stop abandons outstanding work by design).
+	// Once stopped, keep the marker: drainLoop re-feeds it so the final state is processed, while
+	// after Stop the context is cancelled and leftover markers are simply never flushed.
 	q.mu.Unlock()
 
 	if again && !stopped {
@@ -293,9 +254,8 @@ func (q *Queue) run(key string) {
 	}
 }
 
-// Drain stops accepting new work, processes everything already enqueued
-// (including timers that have not yet fired), waits for all handlers to finish,
-// then shuts down. Safe to call once; a second call is a no-op.
+// Drain stops accepting new work, processes everything already enqueued (including unfired timers),
+// and waits for all handlers before shutting down. A second call is a no-op.
 func (q *Queue) Drain() {
 	q.mu.Lock()
 	if q.stopped {

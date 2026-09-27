@@ -1,19 +1,9 @@
-// Package url ingests external web sources — papers (PDF), articles (HTML),
-// plaintext/markdown, and (via yt-dlp) YouTube transcripts — into chiton's
-// graph as a `url` node with `doc_section` children. The doc_section children
-// share the doc-extraction shape, so the existing pending_extractions /
-// submit_extraction subagent flow extracts concepts from an ingested URL for
-// free; no URL-specific LLM path is needed.
-//
-// Fetching is isolated behind the fetcher interface so the node-building logic
-// is testable without network access and so YouTube/social handling can be
-// swapped without touching callers.
+// Package url ingests web sources (PDF, HTML, text/markdown, YouTube transcripts via yt-dlp) as a `url` node
+// with `doc_section` children, which the existing pending_extractions flow extracts concepts from.
 package url
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strings"
@@ -21,6 +11,7 @@ import (
 
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
+	"github.com/Eric-Fernald/chiton/internal/ingest/chunk"
 )
 
 // defaultSectionBytes caps the text per doc_section so each downstream
@@ -43,9 +34,8 @@ type Ingester struct {
 func New(s store.GraphStore) *Ingester {
 	client := &http.Client{
 		Timeout: 30 * time.Second,
-		// Block redirects to private/loopback/link-local hosts: add_url is
-		// reachable over MCP, so a hostile page could otherwise redirect into the
-		// internal network (SSRF, e.g. cloud metadata at 169.254.169.254).
+		// Block redirects to private/loopback/link-local hosts: add_url is reachable over MCP, so a hostile
+		// page could otherwise redirect into the internal network (e.g. cloud metadata at 169.254.169.254).
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return fmt.Errorf("stopped after 10 redirects")
@@ -81,16 +71,14 @@ type Report struct {
 	NodesUpserted int    `json:"nodes_upserted"`
 }
 
-// Add fetches a URL (or local file), extracts its readable text, and upserts a
-// url node plus doc_section children. It is idempotent: the url node and its
-// sections share the URL as source_uri, so a re-add first removes the prior
-// version (DeleteBySourceURI) and replaces it.
+// Add fetches a URL (or local file) and upserts a url node plus doc_section children. It is idempotent:
+// all share the URL as source_uri, so a re-add deletes the prior version first.
 func (ing *Ingester) Add(ctx context.Context, rawURL string, opts AddOptions) (Report, error) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
 		return Report{}, fmt.Errorf("add-url: empty URL")
 	}
-	if ro, ok := ing.store.(store.ReadOnlyAware); ok && ro.ReadOnly() {
+	if store.IsReadOnly(ing.store) {
 		return Report{}, fmt.Errorf("add-url: store is read-only — restart 'chiton serve --writable' or use the 'chiton add-url' CLI")
 	}
 
@@ -122,7 +110,7 @@ func (ing *Ingester) Add(ctx context.Context, rawURL string, opts AddOptions) (R
 	}
 
 	now := ing.now()
-	sum := sha256.Sum256([]byte(text))
+	contentSHA := model.ContentSHA([]byte(text))
 	kind := opts.Kind
 	if kind == "" {
 		kind = inferKind(fr, rawURL)
@@ -134,7 +122,7 @@ func (ing *Ingester) Add(ctx context.Context, rawURL string, opts AddOptions) (R
 		"content_type": fr.contentType,
 		"kind":         kind,
 		"fetched_at":   now.UTC().Format(time.RFC3339),
-		"content_sha":  hex.EncodeToString(sum[:]),
+		"content_sha":  contentSHA,
 		"text_bytes":   len(text),
 	}
 	if opts.Author != "" {
@@ -152,7 +140,7 @@ func (ing *Ingester) Add(ctx context.Context, rawURL string, opts AddOptions) (R
 		Attrs:         urlAttrs,
 		Provenance:    model.ProvExtracted,
 		Confidence:    1.0,
-		ContentSHA256: hex.EncodeToString(sum[:]),
+		ContentSHA256: contentSHA,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}}
@@ -163,7 +151,7 @@ func (ing *Ingester) Add(ctx context.Context, rawURL string, opts AddOptions) (R
 		limit = defaultSectionBytes
 	}
 	chunks := chunkText(text, limit, maxSections)
-	for i, chunk := range chunks {
+	for i, sec := range chunks {
 		secLabel := title
 		if len(chunks) > 1 {
 			secLabel = fmt.Sprintf("%s §%d", title, i+1)
@@ -175,7 +163,7 @@ func (ing *Ingester) Add(ctx context.Context, rawURL string, opts AddOptions) (R
 			Label:     secLabel,
 			SourceURI: uri,
 			Attrs: map[string]any{
-				"text":  chunk,
+				"text":  sec,
 				"index": i,
 			},
 			Provenance: model.ProvExtracted,
@@ -214,38 +202,11 @@ func (ing *Ingester) Add(ctx context.Context, rawURL string, opts AddOptions) (R
 	}, nil
 }
 
-// chunkText splits text into chunks of at most size bytes, preferring blank-line
-// (paragraph) boundaries, capped at maxChunks (the final chunk absorbs the
-// remainder once the cap is hit).
+// chunkText splits text into chunks of at most size bytes at paragraph boundaries; once maxChunks is
+// reached, the final chunk absorbs the remainder.
 func chunkText(text string, size, maxChunks int) []string {
 	if size <= 0 {
 		size = defaultSectionBytes
 	}
-	if len(text) <= size {
-		return []string{text}
-	}
-	paras := strings.Split(text, "\n\n")
-	var chunks []string
-	var cur strings.Builder
-	// atCap reports that we have produced all but the final chunk; once true we
-	// stop flushing and let the remaining paragraphs accumulate into the last
-	// chunk, so the result never exceeds maxChunks.
-	atCap := func() bool { return maxChunks > 0 && len(chunks) >= maxChunks-1 }
-	for _, p := range paras {
-		if cur.Len() > 0 && cur.Len()+len(p)+2 > size && !atCap() {
-			chunks = append(chunks, strings.TrimSpace(cur.String()))
-			cur.Reset()
-		}
-		if cur.Len() > 0 {
-			cur.WriteString("\n\n")
-		}
-		cur.WriteString(p)
-	}
-	if rest := strings.TrimSpace(cur.String()); rest != "" {
-		chunks = append(chunks, rest)
-	}
-	if len(chunks) == 0 {
-		return []string{text}
-	}
-	return chunks
+	return chunk.Paragraphs(text, size, maxChunks)
 }

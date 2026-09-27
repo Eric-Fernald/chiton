@@ -1,29 +1,19 @@
-// Package manifests carries the markdown templates shared across installers.
-//
-// The skill markdown itself lives in the repository's top-level skills/
-// directory — the same files the Claude Code plugin ships — and is embedded by
-// the root chiton package. This package re-exports it so installers have one
-// import to reach for, and so the plugin and `chiton install` can never teach
-// an assistant two different things.
+// Package manifests re-exports the skill markdown embedded from the repo's skills/ directory, so the plugin
+// and `chiton install` can never teach an assistant two different things.
 package manifests
 
 import "github.com/Eric-Fernald/chiton"
 
-// SkillMarkdown is the canonical chiton graph-query skill.
-//
-// Only the Claude Code installer writes skills — every other assistant gets
-// just RulesPrompt appended to its rules file, because none of them has an
-// equivalent skills directory.
+// SkillMarkdown is the canonical chiton graph-query skill. Only the Claude Code installer writes skills;
+// other assistants just get RulesPrompt, having no equivalent skills directory.
 var SkillMarkdown = chiton.GraphSkillMarkdown
 
 // SubagentTasksSkillMarkdown documents the extraction / LLM-rule /
 // meeting-linkage subagent flows. Claude Code only, same as SkillMarkdown.
 var SubagentTasksSkillMarkdown = chiton.SubagentTasksSkillMarkdown
 
-// RulesPrompt is the short always-on instruction appended to rules files
-// (CLAUDE.md, AGENTS.md, .github/copilot-instructions.md, etc.). It tells the
-// assistant when to call chiton instead of grepping. Kept short to limit the
-// per-turn token cost.
+// RulesPrompt is the always-on instruction appended to rules files (CLAUDE.md, AGENTS.md, ...), telling the
+// assistant when to call chiton instead of grepping; kept short because it costs tokens every turn.
 const RulesPrompt = `# chiton — knowledge graph context
 
 This workspace has a chiton MCP server registered. Before using grep or file

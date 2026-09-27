@@ -6,17 +6,8 @@ import (
 	"net"
 )
 
-// warnIfNonLoopback prints a loud warning when addr would expose a listener
-// beyond the local machine. It never blocks: binding wide is sometimes what the
-// user wants (behind a firewall, inside a container), but it should never happen
-// silently.
-//
-// what completes the sentence "…listens on ALL network interfaces, exposing
-// <what>", so pass a noun phrase.
-//
-// Only literal wildcard hosts are treated as wide. A named host is left alone
-// rather than resolved: a DNS lookup at startup would be both slow and
-// misleading (the name may resolve differently later).
+// warnIfNonLoopback warns (never blocks) when addr is a literal wildcard bind; named hosts aren't resolved.
+// what is a noun phrase completing "…listens on ALL network interfaces, exposing <what>".
 func warnIfNonLoopback(w io.Writer, addr, what string) {
 	if !isWildcardAddr(addr) {
 		return

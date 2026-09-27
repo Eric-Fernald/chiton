@@ -1,15 +1,5 @@
-// Package meeting ingests meeting transcripts — the formats Microsoft Teams,
-// Zoom, and whisper.cpp all export — into chiton's knowledge graph and links
-// the decisions made in them back to the code symbols they reference.
-//
-// Transcript parsing is pure-Go and dependency-free: a meeting downloaded as a
-// .vtt from Teams, a .srt produced by whisper.cpp, or a hand-written
-// "Speaker: text" notes file all flow through the same Parse path into a
-// normalized Transcript. The upstream sources (internal/ingest/teams for the
-// Microsoft Graph transcript API, internal/ingest/audio for whisper
-// transcription) produce these files; this package is where they converge into
-// graph nodes (ToGraph) and where the meeting→code linkage subagent flow lives
-// (LinkService).
+// Package meeting parses meeting transcripts (WebVTT, SRT, plain "Speaker: text") into graph nodes
+// (ToGraph) and links the decisions made in them back to code symbols (LinkService).
 package meeting
 
 import (
@@ -20,9 +10,8 @@ import (
 	"time"
 )
 
-// Turn is one speaker turn in a transcript. Start/End are offsets from the
-// meeting start; they are zero when the source format carries no timing (a
-// plain notes file). Speaker is "" when the line had no attribution.
+// Turn is one speaker turn. Start/End are offsets from the meeting start, zero when the format carries no
+// timing (a plain notes file); Speaker is "" when the line had no attribution.
 type Turn struct {
 	Speaker string
 	Start   time.Duration
@@ -42,6 +31,20 @@ type Transcript struct {
 	Turns []Turn
 }
 
+// Text renders the transcript as one "Speaker: text" line per turn (just the text when unattributed).
+func (t *Transcript) Text() string {
+	var b strings.Builder
+	for _, turn := range t.Turns {
+		if turn.Speaker != "" {
+			b.WriteString(turn.Speaker)
+			b.WriteString(": ")
+		}
+		b.WriteString(turn.Text)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
 // Format identifies a transcript serialization.
 type Format string
 
@@ -51,14 +54,12 @@ const (
 	FormatPlain Format = "plain"
 )
 
-// utf8BOM is the UTF-8 byte-order-mark prefix that Windows-authored and some
-// Teams-exported transcripts carry. Declared as explicit bytes (not a literal)
-// so the source file itself stays BOM-free.
+// utf8BOM prefixes Windows-authored and some Teams-exported transcripts. Declared as explicit bytes (not a
+// literal) so the source file itself stays BOM-free.
 var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 
-// proseLeadIn is the set of common line-leading words that share the
-// "Word: text" shape with a speaker label but are prose, not names. They are
-// rejected by splitSpeaker so a notes file does not sprout phantom speakers.
+// proseLeadIn holds line-leading words that share the "Word: text" shape with a speaker label but are prose;
+// splitSpeaker rejects them so a notes file does not sprout phantom speakers.
 var proseLeadIn = map[string]bool{
 	"note": true, "notes": true, "todo": true, "fixme": true, "warning": true,
 	"action": true, "actions": true, "decision": true, "decisions": true,
@@ -67,10 +68,8 @@ var proseLeadIn = map[string]bool{
 	"topic": true, "subject": true, "date": true, "time": true, "location": true,
 }
 
-// DetectFormat sniffs the transcript format from its content (and, as a weak
-// tiebreaker, a filename hint). The WEBVTT magic header is authoritative; an
-// SRT is recognised by its "N\n HH:MM:SS,mmm --> HH:MM:SS,mmm" cue shape;
-// everything else is treated as a plain "Speaker: text" transcript.
+// DetectFormat sniffs the format from content (WEBVTT header, else an SRT index + "-->" cue), falling back
+// to the filename extension, then plain "Speaker: text".
 func DetectFormat(name string, data []byte) Format {
 	trimmed := bytes.TrimLeft(bytes.TrimPrefix(data, utf8BOM), " \t\r\n")
 	if bytes.HasPrefix(trimmed, []byte("WEBVTT")) {
@@ -184,9 +183,8 @@ func parseVTT(data []byte) []Turn {
 
 // --- SRT ---
 
-// parseSRT parses SubRip cues. Speaker attribution, when present, is a leading
-// "Name: " on the cue text (whisper.cpp emits unattributed SRT; some tools add
-// speaker prefixes).
+// parseSRT parses SubRip cues. Speaker attribution, when present, is a leading "Name: " on the cue text
+// (whisper.cpp emits unattributed SRT).
 func parseSRT(data []byte) []Turn {
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
@@ -234,9 +232,8 @@ func parseSRT(data []byte) []Turn {
 
 // --- plain "Speaker: text" ---
 
-// parsePlain parses a free-form transcript where each turn is "Speaker: text",
-// optionally prefixed by a [timestamp]. Lines without a "Speaker:" prefix are
-// appended to the current turn as continuations.
+// parsePlain parses "Speaker: text" turns, optionally prefixed by a [timestamp]; lines without a speaker
+// prefix continue the current turn.
 func parsePlain(data []byte) []Turn {
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
@@ -265,9 +262,8 @@ func parsePlain(data []byte) []Turn {
 
 // --- shared helpers ---
 
-// coalesce merges consecutive turns that share a speaker (common in VTT/SRT
-// where one utterance spans several timed cues), extending the End and joining
-// the text. Turns with no speaker are never merged into a speaker's turn.
+// coalesce merges consecutive same-speaker turns (one utterance often spans several VTT/SRT cues),
+// extending End and joining text. Unattributed turns are never merged.
 func coalesce(turns []Turn) []Turn {
 	if len(turns) == 0 {
 		return turns
@@ -286,10 +282,8 @@ func coalesce(turns []Turn) []Turn {
 	return out
 }
 
-// splitSpeaker extracts a leading "Name: " speaker label from a line. It only
-// treats the prefix as a speaker when the name is short and plausibly a name
-// (no sentence-ending punctuation), so a normal sentence containing a colon
-// ("Note: the following") is not misread as a speaker named "Note".
+// splitSpeaker extracts a leading "Name: " label, only when the prefix is short and plausibly a name, so a
+// sentence containing a colon ("Note: the following") does not invent a speaker.
 func splitSpeaker(s string) (speaker, text string) {
 	s = strings.TrimSpace(s)
 	idx := strings.Index(s, ":")
@@ -318,9 +312,8 @@ func splitSpeaker(s string) (speaker, text string) {
 	return name, rest
 }
 
-// stripVTTTags removes inline VTT/SRT markup: <v Name> voice spans (the name is
-// hoisted to the front as "Name: " so splitSpeaker can pick it up), <c> class
-// spans, <i>/<b> styling, and <00:00:00.000> inline timestamps.
+// stripVTTTags removes inline VTT/SRT tags (<c>, <i>, <b>, <00:00:00.000>); a <v Name> voice span's name
+// is hoisted to the front as "Name: " so splitSpeaker picks it up.
 func stripVTTTags(s string) string {
 	if !strings.Contains(s, "<") {
 		return s
@@ -354,9 +347,8 @@ func stripVTTTags(s string) string {
 	return out
 }
 
-// voiceName returns the speaker from a "v Name" voice-span tag, e.g. <v Alice>
-// or <v.loud Jane Doe>. The name is everything after the first space; any
-// classes (".loud") attach to the leading "v" token before that space.
+// voiceName returns the speaker from a voice-span tag like <v Alice> or <v.loud Jane Doe>: everything
+// after the first space (classes such as ".loud" attach to the leading "v").
 func voiceName(tag string) (string, bool) {
 	tag = strings.TrimSpace(tag)
 	if tag != "v" && !strings.HasPrefix(tag, "v ") && !strings.HasPrefix(tag, "v.") {
@@ -444,9 +436,8 @@ func parseTimecode(s string) (time.Duration, bool) {
 	return d, true
 }
 
-// stripLeadingTimestamp removes a leading "[HH:MM:SS]" / "(MM:SS)" / "HH:MM:SS"
-// timestamp from a plain-transcript line, returning the parsed offset and the
-// remainder. Returns (0, line) when there is no recognisable timestamp.
+// stripLeadingTimestamp removes a leading "[HH:MM:SS]" / "(MM:SS)" / "HH:MM:SS" timestamp, returning the
+// offset and the remainder, or (0, line) when there is none.
 func stripLeadingTimestamp(s string) (time.Duration, string) {
 	s = strings.TrimSpace(s)
 	if s == "" {

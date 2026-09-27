@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,7 +9,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Eric-Fernald/chiton/internal/config"
 	"github.com/Eric-Fernald/chiton/internal/extract/meeting"
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
 	"github.com/Eric-Fernald/chiton/internal/ingest/audio"
@@ -53,14 +50,7 @@ func ingestTranscript(ctx context.Context, gs store.GraphStore, tr *meeting.Tran
 	if _, err := gs.DeleteBySourceURI(ctx, tr.SourceURI); err != nil {
 		return 0, fmt.Errorf("replace prior meeting: %w", err)
 	}
-	nodes, edges := meeting.ToGraph(tr, time.Now())
-	if err := gs.UpsertNodes(ctx, nodes); err != nil {
-		return 0, fmt.Errorf("upsert meeting nodes: %w", err)
-	}
-	if err := gs.UpsertEdges(ctx, edges); err != nil {
-		return 0, fmt.Errorf("upsert meeting edges: %w", err)
-	}
-	return len(nodes), nil
+	return meeting.Upsert(ctx, gs, tr, time.Now(), "meeting")
 }
 
 func meetingIngestCmd() *cobra.Command {
@@ -69,13 +59,9 @@ func meetingIngestCmd() *cobra.Command {
 		Short: "Parse transcript files (.vtt/.srt/.txt) into meeting nodes",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load()
+			_, gs, err := loadStore(false)
 			if err != nil {
 				return err
-			}
-			gs, err := openGraphStore(cfg.GraphPath, false)
-			if err != nil {
-				return fmt.Errorf("open store: %w", err)
 			}
 			defer gs.Close()
 
@@ -137,7 +123,7 @@ backend instead of the shell-out.`,
 			fmt.Fprintf(out, "transcribe: %d turns from %s\n", len(tr.Turns), audioPath)
 
 			if outFile != "" {
-				if err := os.WriteFile(outFile, []byte(transcriptToText(tr)), 0o644); err != nil {
+				if err := os.WriteFile(outFile, []byte(tr.Text()), 0o644); err != nil {
 					return fmt.Errorf("write %s: %w", outFile, err)
 				}
 				fmt.Fprintf(out, "transcribe: wrote transcript to %s\n", outFile)
@@ -146,13 +132,9 @@ backend instead of the shell-out.`,
 				return nil
 			}
 
-			cfg, err := config.Load()
+			_, gs, err := loadStore(false)
 			if err != nil {
 				return err
-			}
-			gs, err := openGraphStore(cfg.GraphPath, false)
-			if err != nil {
-				return fmt.Errorf("open store: %w", err)
 			}
 			defer gs.Close()
 			n, err := ingestTranscript(cmd.Context(), gs, tr)
@@ -179,13 +161,9 @@ func meetingPendingCmd() *cobra.Command {
 		Use:   "pending",
 		Short: "Emit meeting→code linkage task specs as JSON",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := config.Load()
+			cfg, gs, err := loadStore(true)
 			if err != nil {
 				return err
-			}
-			gs, err := openGraphStore(cfg.GraphPath, true)
-			if err != nil {
-				return fmt.Errorf("open store: %w", err)
 			}
 			defer gs.Close()
 
@@ -194,19 +172,8 @@ func meetingPendingCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			b, err := json.MarshalIndent(specs, "", "  ")
-			if err != nil {
-				return err
-			}
-			if outFile != "" {
-				if err := os.WriteFile(outFile, b, 0o644); err != nil {
-					return fmt.Errorf("write %s: %w", outFile, err)
-				}
-				fmt.Fprintf(cmd.OutOrStdout(), "meeting: %d pending linkage task(s) written to %s\n", len(specs), outFile)
-				return nil
-			}
-			fmt.Fprintln(cmd.OutOrStdout(), string(b))
-			return nil
+			return emitSpecs(cmd.OutOrStdout(), specs, outFile,
+				fmt.Sprintf("meeting: %d pending linkage task(s)", len(specs)))
 		},
 	}
 	cmd.Flags().StringVar(&outFile, "out", "", "write specs to this file instead of stdout")
@@ -224,17 +191,13 @@ func meetingSubmitCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("read %s: %w", args[0], err)
 			}
-			results, err := parseLinkResults(data)
+			results, err := parseOneOrMany[meeting.LinkResult](data, "a LinkResult")
 			if err != nil {
 				return err
 			}
-			cfg, err := config.Load()
+			cfg, gs, err := loadStore(false)
 			if err != nil {
 				return err
-			}
-			gs, err := openGraphStore(cfg.GraphPath, false)
-			if err != nil {
-				return fmt.Errorf("open store: %w", err)
 			}
 			defer gs.Close()
 
@@ -276,13 +239,9 @@ local file and ingest its readable text as a url node with doc_section children,
 so the existing 'chiton extract' / pending_extractions flow extracts its concepts.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load()
+			_, gs, err := loadStore(false)
 			if err != nil {
 				return err
-			}
-			gs, err := openGraphStore(cfg.GraphPath, false)
-			if err != nil {
-				return fmt.Errorf("open store: %w", err)
 			}
 			defer gs.Close()
 
@@ -305,33 +264,4 @@ so the existing 'chiton extract' / pending_extractions flow extracts its concept
 	cmd.Flags().StringVar(&author, "author", "", "author to record on the node")
 	cmd.Flags().StringVar(&contributor, "contributor", "", "who added it, recorded on the node")
 	return cmd
-}
-
-// transcriptToText renders a transcript to "Speaker: text" lines.
-func transcriptToText(tr *meeting.Transcript) string {
-	var b bytes.Buffer
-	for _, t := range tr.Turns {
-		if t.Speaker != "" {
-			b.WriteString(t.Speaker)
-			b.WriteString(": ")
-		}
-		b.WriteString(t.Text)
-		b.WriteByte('\n')
-	}
-	return b.String()
-}
-
-// parseLinkResults accepts either a single LinkResult object or an array, after
-// stripping a leading UTF-8 BOM (common on Windows-authored files).
-func parseLinkResults(data []byte) ([]meeting.LinkResult, error) {
-	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
-	var arr []meeting.LinkResult
-	if err := json.Unmarshal(data, &arr); err == nil {
-		return arr, nil
-	}
-	var single meeting.LinkResult
-	if err := json.Unmarshal(data, &single); err != nil {
-		return nil, fmt.Errorf("parse results: expected a LinkResult object or array: %w", err)
-	}
-	return []meeting.LinkResult{single}, nil
 }

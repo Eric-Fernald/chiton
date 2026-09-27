@@ -1,9 +1,5 @@
-// Package install registers chiton with AI assistants.
-//
-// Each supported assistant has its own Installer implementation, which knows
-// how to write that assistant's MCP config and rules/skill files. The package
-// keeps platform-specific quirks isolated; the dispatcher just iterates over
-// the configured Installers.
+// Package install registers chiton with AI assistants: each Installer writes one assistant's MCP config
+// and rules/skill files, keeping platform quirks out of the dispatcher.
 package install
 
 import (
@@ -11,34 +7,31 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
+
+	"github.com/Eric-Fernald/chiton/internal/install/manifests"
 )
 
 // Options is the bundle of inputs every installer receives.
 type Options struct {
-	// Dir is the workspace directory the installer should write into.
-	// Per-repo files (.mcp.json, CLAUDE.md, .vscode/mcp.json, ...) are
-	// resolved relative to this directory.
+	// Dir is the workspace directory; per-repo files (.mcp.json, CLAUDE.md, ...) resolve against it.
 	Dir string
 
 	// Exe is the absolute path to the chiton binary that the assistant should
 	// launch as its MCP server.
 	Exe string
 
-	// UserScope, when true, asks the installer to write into the user-global
-	// config location instead of the per-repo one (e.g. ~/.claude/ instead of
-	// .claude/). Not every installer supports user-scope; those that don't
-	// return ErrUserScopeUnsupported.
+	// UserScope targets the user-global config (e.g. ~/.cursor/ instead of .cursor/); installers
+	// without a user-global location return ErrUserScopeUnsupported.
 	UserScope bool
 
 	// WithHooks, when true, opts in to the assistant's PreToolUse / equivalent
 	// hook integration. Off by default because hooks are platform-fragile.
 	WithHooks bool
 
-	// GraphPath is the path the installer should record in the MCP config so
-	// `chiton serve` uses the same store as `chiton build`. Optional; when
-	// empty the installer falls back to chiton's default.
+	// GraphPath is recorded in the MCP config so `chiton serve` uses the same store as `chiton build`;
+	// empty falls back to chiton's default.
 	GraphPath string
 }
 
@@ -75,9 +68,8 @@ type Installer interface {
 	// (or has been) used in this workspace. Used by auto-detect.
 	Detect(dir string) bool
 
-	// Install writes the assistant's config and rules files. Implementations
-	// must be idempotent: running twice in a row should yield the same files
-	// without duplicating content.
+	// Install writes the assistant's config and rules files. It must be idempotent: a second run yields
+	// the same files without duplicating content.
 	Install(opts Options) (Report, error)
 
 	// Uninstall reverses Install. Removes only entries chiton owns, never the
@@ -95,19 +87,16 @@ var registered []Installer
 
 // Register adds an installer to the global list. Panics on duplicate name.
 func Register(i Installer) {
-	for _, existing := range registered {
-		if existing.Name() == i.Name() {
-			panic(fmt.Sprintf("install: duplicate installer name %q", i.Name()))
-		}
+	if Lookup(i.Name()) != nil {
+		panic(fmt.Sprintf("install: duplicate installer name %q", i.Name()))
 	}
 	registered = append(registered, i)
 }
 
 // Available returns every registered installer, ordered by Name.
 func Available() []Installer {
-	out := make([]Installer, len(registered))
-	copy(out, registered)
-	sort.Slice(out, func(i, j int) bool { return out[i].Name() < out[j].Name() })
+	out := slices.Clone(registered)
+	slices.SortFunc(out, func(a, b Installer) int { return strings.Compare(a.Name(), b.Name()) })
 	return out
 }
 
@@ -121,13 +110,8 @@ func Lookup(name string) Installer {
 	return nil
 }
 
-// Resolve turns the --assistant flag value into a list of installers to act
-// on. Supports:
-//   - explicit name ("claude-code")
-//   - comma-separated list ("claude-code,cursor")
-//   - "all" — every registered installer
-//   - "auto" or "" — every installer whose Detect() returns true, falling
-//     back to every installer if none match
+// Resolve turns the --assistant value into installers: a name, a comma-separated list, "all", or
+// "auto"/"" for every installer whose Detect matches (an error when none do).
 func Resolve(name, dir string) ([]Installer, error) {
 	switch name {
 	case "", "auto":
@@ -145,7 +129,7 @@ func Resolve(name, dir string) ([]Installer, error) {
 		return Available(), nil
 	}
 	var out []Installer
-	for _, part := range strings.Split(name, ",") {
+	for part := range strings.SplitSeq(name, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
@@ -162,9 +146,8 @@ func Resolve(name, dir string) ([]Installer, error) {
 	return out, nil
 }
 
-// ResolveExe returns the chiton executable path the installer should record.
-// Prefers a value from Options.Exe, otherwise falls back to the current
-// executable.
+// ResolveExe returns the chiton executable path to record: provided if set, else the current
+// executable with symlinks resolved.
 func ResolveExe(provided string) (string, error) {
 	if provided != "" {
 		return provided, nil
@@ -180,4 +163,95 @@ func ResolveExe(provided string) (string, error) {
 		return exe, nil
 	}
 	return resolved, nil
+}
+
+// record files path under Wrote when changed, else under Skipped.
+func (r *Report) record(path string, changed bool) {
+	if changed {
+		r.Wrote = append(r.Wrote, path)
+	} else {
+		r.Skipped = append(r.Skipped, path)
+	}
+}
+
+// writeServer upserts entry as the chiton server in t's config at path and records it, noting when an
+// existing chiton entry was refreshed.
+func (r *Report) writeServer(t serverTable, path string, entry any) error {
+	created, preexisted, err := t.write(path, entry)
+	if err != nil {
+		return err
+	}
+	r.Wrote = append(r.Wrote, path)
+	if !created && preexisted {
+		r.Notes = append(r.Notes, fmt.Sprintf("%s: refreshed existing chiton entry", path))
+	}
+	return nil
+}
+
+// removeServer removes the chiton server from t's config at path and records whether anything changed.
+func (r *Report) removeServer(t serverTable, path string) error {
+	changed, err := t.remove(path)
+	if err != nil {
+		return err
+	}
+	r.record(path, changed)
+	return nil
+}
+
+// upsertRules writes the shared chiton rules block into path.
+func (r *Report) upsertRules(path string) error {
+	if _, _, err := UpsertRulesBlock(path, manifests.RulesPrompt); err != nil {
+		return err
+	}
+	r.Wrote = append(r.Wrote, path)
+	return nil
+}
+
+// removeRules strips the chiton rules block from path.
+func (r *Report) removeRules(path string) error {
+	changed, err := RemoveRulesBlock(path)
+	if err != nil {
+		return err
+	}
+	r.record(path, changed)
+	return nil
+}
+
+// removeIfExists deletes path with remove when it exists.
+func (r *Report) removeIfExists(path string, remove func(string) error) error {
+	if _, err := os.Stat(path); err != nil {
+		r.Skipped = append(r.Skipped, path)
+		return nil
+	}
+	if err := remove(path); err != nil {
+		return fmt.Errorf("remove %s: %w", path, err)
+	}
+	r.Wrote = append(r.Wrote, path)
+	return nil
+}
+
+// check runs probe on path, files the outcome under OK or Issues, and reports whether it passed.
+func (d *DoctorReport) check(path string, probe func(string) (bool, error), okMsg, missingMsg string) bool {
+	ok, err := probe(path)
+	switch {
+	case err != nil:
+		d.Issues = append(d.Issues, fmt.Sprintf("%s: %v", path, err))
+		return false
+	case ok:
+		d.OK = append(d.OK, path+okMsg)
+	default:
+		d.Issues = append(d.Issues, path+missingMsg)
+	}
+	return ok
+}
+
+// checkMCP checks that the MCP config at path registers chiton.
+func (d *DoctorReport) checkMCP(path string, probe func(string) (bool, error)) bool {
+	return d.check(path, probe, ": chiton server registered",
+		": no chiton entry (run `chiton install --assistant "+d.Installer+"`)")
+}
+
+// checkRules checks that the rules file at path carries the chiton block.
+func (d *DoctorReport) checkRules(path string) bool {
+	return d.check(path, RulesFileHasChiton, ": chiton rules block present", ": no chiton rules block")
 }

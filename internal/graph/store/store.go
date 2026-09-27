@@ -25,13 +25,8 @@ type Embedding struct {
 	Vec    []float32 `json:"vec"`
 }
 
-// EmbeddingStore is an optional capability a GraphStore may implement to
-// persist node embeddings. It is kept separate from GraphStore so backends
-// without vector support (e.g. the Kuzu stub) and test fakes are unaffected;
-// callers type-assert and degrade gracefully when it is absent.
-//
-// Embeddings are stored in their own keyspace, out of the node JSON, so graph
-// traversals (Neighbors, AllNodes, SearchNodes) stay lean.
+// EmbeddingStore is an optional GraphStore capability that persists node embeddings outside the node JSON,
+// keeping traversals lean; callers type-assert and degrade gracefully when it is absent.
 type EmbeddingStore interface {
 	// UpsertEmbeddings inserts or replaces embeddings by node ID.
 	UpsertEmbeddings(ctx context.Context, embs []Embedding) error
@@ -40,27 +35,35 @@ type EmbeddingStore interface {
 	AllEmbeddings(ctx context.Context) ([]Embedding, error)
 }
 
-// NodeDeleter is an optional capability for batch node deletion by ID. It does
-// point lookups keyed by ID rather than the full-scan DeleteBySourceURI, so
-// callers that already hold the IDs (e.g. pruning resolved findings) can delete
-// K nodes in O(K) instead of O(K·N). Callers type-assert and fall back to
-// DeleteBySourceURI when a backend does not implement it.
+// NodeDeleter is an optional capability for deleting nodes by ID with point lookups, O(K) instead of
+// DeleteBySourceURI's full scan; callers type-assert and fall back to DeleteBySourceURI without it.
 type NodeDeleter interface {
 	// DeleteByIDs deletes the given nodes plus their embeddings and adjacent
 	// edges. Missing IDs are skipped. Returns the number actually deleted.
 	DeleteByIDs(ctx context.Context, ids []string) (int, error)
 }
 
-// ReadOnlyAware is an optional capability letting callers detect a read-only
-// store and fail writes early with an actionable message instead of surfacing a
-// raw backend error.
+// ReadOnlyAware is an optional capability letting callers detect a read-only store and fail writes early
+// with an actionable message instead of a raw backend error.
 type ReadOnlyAware interface {
 	ReadOnly() bool
 }
 
-// GraphStore is the central abstraction over the underlying graph database.
-// All packages depend on this interface, never on a concrete implementation,
-// so the backing store (Kuzu, Badger, etc.) can be swapped without touching callers.
+// NodeScanner is an optional capability: a filtered AllNodes that skips decoding non-matching nodes.
+// Callers use the NodesMatching helper, which falls back to AllNodes without it.
+type NodeScanner interface {
+	// NodesMatching returns the nodes f matches, in AllNodes order.
+	NodesMatching(ctx context.Context, f NodeFilter) ([]model.Node, error)
+}
+
+// EmbeddingIDLister is an optional EmbeddingStore capability listing embedded node IDs without decoding
+// vectors; callers use the EmbeddingIDs helper.
+type EmbeddingIDLister interface {
+	EmbeddingIDs(ctx context.Context) ([]string, error)
+}
+
+// GraphStore is the central abstraction over the graph database; packages depend on it, never on a
+// concrete backend, so the store can be swapped without touching callers.
 type GraphStore interface {
 	// UpsertNodes inserts or updates nodes by ID. Implementations must be
 	// idempotent and batch-friendly (callers may pass thousands at once).

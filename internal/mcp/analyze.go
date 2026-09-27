@@ -26,10 +26,8 @@ func diffFindingsTool() mcplib.Tool {
 	)
 }
 
-// resolveBaselineRef turns a user-supplied ref into the form LoadBaseline
-// expects: "" and "latest" pass through, otherwise a git ref (HEAD, a branch, a
-// short SHA) is resolved to its full SHA when git is available, falling back to
-// the literal value (which may already be a full SHA) when it is not.
+// resolveBaselineRef resolves a git ref (HEAD, branch, short SHA) to the full SHA LoadBaseline keys
+// on; "" and "latest" pass through, and the literal ref is kept when git can't resolve it.
 func resolveBaselineRef(ref string) string {
 	if ref == "" || ref == "latest" {
 		return ref
@@ -107,13 +105,8 @@ func pendingAnalysesHandler(svc *analyze.LLMService) mcpsdk.ToolHandlerFunc {
 			return mcplib.NewToolResultText("LLM analysis unavailable — the server was started without a graph store."), nil
 		}
 		specs, err := svc.Pending(ctx, req.GetString("path", "."), req.GetString("rule", ""), req.GetInt("limit", 20))
-		if err != nil {
-			return mcplib.NewToolResultErrorFromErr("pending analyses failed", err), nil
-		}
-		if len(specs) == 0 {
-			return mcplib.NewToolResultText("no pending analyses — every file is already analysed for the selected LLM rule(s)."), nil
-		}
-		return jsonResult(specs)
+		return pendingResult(specs, err, "pending_analyses",
+			"no pending analyses — every file is already analysed for the selected LLM rule(s).")
 	}
 }
 
@@ -156,14 +149,6 @@ func submitAnalysisHandler(svc *analyze.LLMService) mcpsdk.ToolHandlerFunc {
 		if svc == nil {
 			return mcplib.NewToolResultText("LLM analysis unavailable — the server was started without a graph store."), nil
 		}
-		var result analyze.LLMResult
-		if err := req.BindArguments(&result); err != nil {
-			return mcplib.NewToolResultErrorFromErr("invalid submit_analysis arguments", err), nil
-		}
-		rep, err := svc.Submit(ctx, result)
-		if err != nil {
-			return mcplib.NewToolResultErrorFromErr("submit analysis failed", err), nil
-		}
-		return jsonResult(rep)
+		return bindAndSubmit(ctx, req, "submit_analysis", svc.Submit)
 	}
 }

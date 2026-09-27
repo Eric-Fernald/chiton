@@ -1,8 +1,6 @@
 package architecture
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 	"strings"
@@ -33,12 +31,8 @@ var pyWildcardRe = regexp.MustCompile(`^from\s+[.\w]+\s+import\s+\*\s*$`)
 
 func (WildcardImport) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := strings.TrimSpace(stripPyComment(sc.Text()))
+	for line, raw := range analyze.Lines(t.Content) {
+		text := strings.TrimSpace(stripArchLineComment("py", raw))
 		if pyWildcardRe.MatchString(text) {
 			out = append(out, analyze.Finding{
 				RuleID:       "architecture/wildcard-import",
@@ -53,18 +47,6 @@ func (WildcardImport) MatchFile(_ context.Context, t analyze.FileTarget) []analy
 		}
 	}
 	return out
-}
-
-// stripPyComment drops a trailing `#` comment, ignoring `#` inside a quoted
-// string on the same line (cheap heuristic: balanced quotes before the marker).
-func stripPyComment(s string) string {
-	if idx := strings.Index(s, "#"); idx >= 0 {
-		before := s[:idx]
-		if strings.Count(before, `"`)%2 == 0 && strings.Count(before, "'")%2 == 0 {
-			return before
-		}
-	}
-	return s
 }
 
 func init() { analyze.Register(WildcardImport{}) }

@@ -17,10 +17,8 @@ import (
 // pathological/hostile messages).
 const maxMIMEDepth = 10
 
-// extractBody renders an RFC 5322 message body to plain text: it decodes the
-// transfer encoding, walks multipart containers preferring text/plain, and
-// strips HTML when only an HTML alternative is present. charset handling is
-// best-effort UTF-8 (the overwhelmingly common case for modern mail).
+// extractBody renders a message body to plain text, preferring text/plain parts and falling back to stripped
+// HTML. Charset handling is best-effort UTF-8.
 func extractBody(header mail.Header, body io.Reader) string {
 	raw, _ := io.ReadAll(body)
 	plain, htmlText := collectParts(header.Get("Content-Type"), header.Get("Content-Transfer-Encoding"), raw, 0)
@@ -30,9 +28,8 @@ func extractBody(header mail.Header, body io.Reader) string {
 	return strings.TrimSpace(strings.Join(htmlText, "\n\n"))
 }
 
-// collectParts decodes one MIME entity, recursing into multipart containers, and
-// returns the text/plain bodies and the (HTML-stripped) text/html bodies it
-// found, each in document order.
+// collectParts decodes one MIME entity, recursing into multipart containers, and returns its text/plain and
+// HTML-stripped text/html bodies in document order.
 func collectParts(contentType, cte string, raw []byte, depth int) (plain, htmlText []string) {
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err != nil || mediaType == "" {
@@ -73,17 +70,16 @@ func collectParts(contentType, cte string, raw []byte, depth int) (plain, htmlTe
 	return plain, htmlText
 }
 
-// decodeTransferEncoding decodes a Content-Transfer-Encoding'd body. Unknown or
-// identity encodings (7bit/8bit/binary) pass through unchanged; a decode error
-// falls back to the raw bytes rather than dropping content.
+// decodeTransferEncoding decodes base64/quoted-printable bodies; other encodings pass through, and a decode
+// error falls back to the raw bytes rather than dropping content.
 func decodeTransferEncoding(raw []byte, cte string) []byte {
 	switch strings.ToLower(strings.TrimSpace(cte)) {
 	case "base64":
-		clean := stripWhitespace(raw)
-		if dec, err := base64.StdEncoding.DecodeString(string(clean)); err == nil {
+		clean := string(stripWhitespace(raw))
+		if dec, err := base64.StdEncoding.DecodeString(clean); err == nil {
 			return dec
 		}
-		if dec, err := base64.RawStdEncoding.DecodeString(string(clean)); err == nil {
+		if dec, err := base64.RawStdEncoding.DecodeString(clean); err == nil {
 			return dec
 		}
 		return raw
@@ -109,9 +105,8 @@ func stripWhitespace(b []byte) []byte {
 	return out
 }
 
-// htmlToText extracts visible text from an HTML document, dropping <script> and
-// <style> content and collapsing runs of whitespace. Mirrors the URL ingester's
-// guarantee that script content never leaks into extracted text.
+// htmlToText extracts visible text from HTML, collapsing whitespace; <script>/<style> content never leaks
+// into the output.
 func htmlToText(s string) string {
 	z := html.NewTokenizer(strings.NewReader(s))
 	var b strings.Builder
@@ -145,9 +140,8 @@ func isSkippedTag(name []byte) bool {
 	return false
 }
 
-// decodeHeaderWord decodes RFC 2047 encoded-words (=?utf-8?B?...?=) in a header
-// value such as a Subject or a display name, returning the input unchanged when
-// it contains no encoded words or fails to decode.
+// decodeHeaderWord decodes RFC 2047 encoded-words (=?utf-8?B?...?=) in a header value, returning s unchanged
+// on failure.
 func decodeHeaderWord(s string) string {
 	dec := new(mime.WordDecoder)
 	if out, err := dec.DecodeHeader(s); err == nil {

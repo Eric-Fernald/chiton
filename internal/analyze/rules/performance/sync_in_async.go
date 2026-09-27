@@ -1,8 +1,6 @@
 package performance
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 	"strings"
@@ -11,9 +9,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// SyncInAsync flags blocking I/O calls inside Python `async def` functions —
-// `requests.get`, `time.sleep`, `open(...).read()`, etc. — that defeat the
-// whole point of asyncio.
+// SyncInAsync flags blocking calls (requests.get/post/put/delete, time.sleep, urlopen) inside a
+// Python `async def`, where they stall the event loop.
 type SyncInAsync struct{}
 
 func (SyncInAsync) Meta() analyze.Meta {
@@ -38,13 +35,8 @@ var (
 
 func (SyncInAsync) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
 	asyncIndent := -1
-	for sc.Scan() {
-		line++
-		text := sc.Text()
+	for line, text := range analyze.Lines(t.Content) {
 		trimmed := strings.TrimSpace(text)
 		if trimmed == "" {
 			continue
@@ -59,9 +51,6 @@ func (SyncInAsync) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.
 		}
 		if indent <= asyncIndent {
 			asyncIndent = -1
-			if asyncDefRe.MatchString(text) {
-				asyncIndent = indent
-			}
 			continue
 		}
 		if syncCallRe.MatchString(text) {

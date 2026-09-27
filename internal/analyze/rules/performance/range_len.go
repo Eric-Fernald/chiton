@@ -1,7 +1,6 @@
 package performance
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"regexp"
@@ -10,10 +9,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// RangeLen flags the Python `for i in range(len(x))` idiom, which is almost
-// always better written with `enumerate(x)` (or direct iteration). Only the
-// single-argument `range(len(...))` form is matched so genuine index-arithmetic
-// loops like `range(len(x) - 1)` are left alone.
+// RangeLen flags Python `for i in range(len(x))`; only the single-argument form matches, so
+// index-arithmetic loops like `range(len(x) - 1)` are left alone.
 type RangeLen struct{}
 
 func (RangeLen) Meta() analyze.Meta {
@@ -29,24 +26,18 @@ func (RangeLen) Meta() analyze.Meta {
 	}
 }
 
-// Matches `for <var> in range(len(<expr>))` where the range() call has exactly
-// one argument (the len(...) call), i.e. the close-paren of len is immediately
-// followed by the close-paren of range, with no extra args.
+// `for <var> in range(len(<expr>))` where len(...) is range's only argument.
 var rangeLenRe = regexp.MustCompile(`\bfor\s+\w+\s+in\s+range\s*\(\s*len\s*\([^()]*\)\s*\)`)
 
 func (RangeLen) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	const ruleID = "performance/range-len"
+	// Exact prefilter: masking writes only 'x', so a masked `range` is a raw one too.
+	if !bytes.Contains(t.Content, []byte("range")) {
+		return nil
+	}
 	var out []analyze.Finding
-	// Mask Python string literals (including multi-line """/''' docstrings) and
-	// # comments across the whole file before scanning, so a `range(len(x))`
-	// mentioned inside a docstring or comment is not flagged.
-	masked := maskPyStrings(t.Content)
-	sc := bufio.NewScanner(bytes.NewReader(masked))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		stripped := sc.Text()
+	// Mask strings (multi-line docstrings included) and # comments file-wide before scanning.
+	for line, stripped := range analyze.Lines(maskPyStrings(t.Content)) {
 		if rangeLenRe.MatchString(stripped) {
 			out = append(out, analyze.Finding{
 				RuleID:       ruleID,

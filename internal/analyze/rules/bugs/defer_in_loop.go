@@ -2,7 +2,6 @@
 package bugs
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"regexp"
@@ -12,9 +11,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// DeferInLoop flags `defer` statements that appear inside a for/range loop in
-// Go. defers stack until function exit, which leaks resources when used in
-// long-running loops (file handles, mutexes, etc.).
+// DeferInLoop flags Go `defer` statements inside a for/range loop: defers stack until function exit,
+// which leaks resources (file handles, locks) in long-running loops.
 type DeferInLoop struct{}
 
 func (DeferInLoop) Meta() analyze.Meta {
@@ -36,21 +34,14 @@ var (
 )
 
 func (DeferInLoop) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
-	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-
-	type loopFrame struct {
-		startLine int
-		depth     int // brace depth at the for-line's opening brace
+	if !bytes.Contains(t.Content, []byte("defer")) {
+		return nil
 	}
-	var stack []loopFrame
+	var out []analyze.Finding
+	var loopDepths []int // brace depth at each open for-line's opening brace
 	depth := 0
-	line := 0
 
-	for sc.Scan() {
-		line++
-		text := sc.Text()
+	for line, text := range analyze.Lines(t.Content) {
 		stripped := stripGoComment(text)
 
 		// Open new loop frame if this line begins a for-statement.
@@ -58,7 +49,7 @@ func (DeferInLoop) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.
 			open := strings.Count(stripped, "{")
 			depth += open - strings.Count(stripped, "}")
 			if open > 0 {
-				stack = append(stack, loopFrame{startLine: line, depth: depth})
+				loopDepths = append(loopDepths, depth)
 			}
 			continue
 		}
@@ -67,11 +58,11 @@ func (DeferInLoop) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.
 		depth += strings.Count(stripped, "{") - strings.Count(stripped, "}")
 
 		// Pop loop frames whose depth has been exited.
-		for len(stack) > 0 && depth < stack[len(stack)-1].depth {
-			stack = stack[:len(stack)-1]
+		for len(loopDepths) > 0 && depth < loopDepths[len(loopDepths)-1] {
+			loopDepths = loopDepths[:len(loopDepths)-1]
 		}
 
-		if len(stack) == 0 {
+		if len(loopDepths) == 0 {
 			continue
 		}
 		if deferLineRe.MatchString(stripped) {
@@ -90,11 +81,15 @@ func (DeferInLoop) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.
 	return out
 }
 
-// stripGoComment is a small approximation of countLineBraces — drops the
-// content of // line comments and blanks the content of string literals so
-// keywords (and braces) inside strings never match. Block comments are not
-// tracked across lines, matching the existing extractor's behaviour.
+// stripGoComment truncates a // line comment and blanks string-literal contents, so braces and keywords
+// inside strings never match. Block comments are not tracked.
 func stripGoComment(s string) string {
+	if strings.IndexAny(s, "\"'`") < 0 {
+		if i := strings.Index(s, "//"); i >= 0 {
+			return s[:i]
+		}
+		return s
+	}
 	b := []byte(s)
 	var inStr byte
 	for i := 0; i < len(b); i++ {

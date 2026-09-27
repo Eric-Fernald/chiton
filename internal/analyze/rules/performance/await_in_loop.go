@@ -1,7 +1,6 @@
 package performance
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"regexp"
@@ -10,10 +9,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// AwaitInLoop flags an `await` expression used directly inside a for/while loop
-// body. Sequential awaits in a loop run one request at a time; when the
-// iterations are independent they should be parallelized with Promise.all.
-// The legal `for await (... of ...)` async-iteration header is NOT flagged.
+// AwaitInLoop flags an `await` expression inside a for/while loop body, which serializes the
+// iterations; the `for await (... of ...)` header itself is not flagged.
 type AwaitInLoop struct{}
 
 func (AwaitInLoop) Meta() analyze.Meta {
@@ -30,30 +27,22 @@ func (AwaitInLoop) Meta() analyze.Meta {
 }
 
 var (
-	// An await EXPRESSION: the `await` keyword (not preceded by a word char or
-	// dot, so member names ending in `await` are excluded) followed by an
-	// operand — an identifier/$, or an open paren/bracket/brace. Requiring an
-	// operand distinguishes real `await x` / `await fn(...)` from the bare
-	// prose word "await" (e.g. in a sentence) that masking can't reach when it
-	// is genuine code text rather than a literal.
+	// `await` (not a member name) followed by an operand, so a bare prose "await" that survives
+	// masking does not match.
 	awaitExprRe = regexp.MustCompile(`(?:^|[^.\w])await\s+[\w$([{]`)
 	forAwaitRe  = regexp.MustCompile(`^\s*for\s+await\b`)
 )
 
 func (AwaitInLoop) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	const ruleID = "performance/await-in-loop"
+	// Exact prefilter: masking writes only 'x', so a masked `await` is a raw one too.
+	if !bytes.Contains(t.Content, []byte("await")) {
+		return nil
+	}
 	var out []analyze.Finding
-	// Mask string and comment contents (including multi-line block comments)
-	// across the whole file before scanning, so an `await` mentioned in a log
-	// string or a /* ... */ block comment inside a loop is not flagged.
-	masked := maskPerfLiteralsComments(t.Content)
-	sc := bufio.NewScanner(bytes.NewReader(masked))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
 	var b braceLoopScanner
-	for sc.Scan() {
-		line++
-		stripped := sc.Text()
+	// Mask strings and comments file-wide (multi-line /* */ included) so an await inside them is ignored.
+	for line, stripped := range analyze.Lines(analyze.MaskedCLiterals(t, false)) {
 		isLoop := braceLoopHeaderRe.MatchString(stripped)
 		inside := b.feed(stripped, isLoop)
 		// Skip the `for await (... of ...)` async-iteration header itself.

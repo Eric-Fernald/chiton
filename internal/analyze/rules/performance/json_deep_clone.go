@@ -1,8 +1,6 @@
 package performance
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 
@@ -10,9 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// JSONDeepClone flags the `JSON.parse(JSON.stringify(x))` deep-clone idiom in
-// JS/TS. It is slow, drops functions/undefined/Dates/Maps, and throws on cyclic
-// data; structuredClone (or a purpose-built clone) is the modern replacement.
+// JSONDeepClone flags the JS/TS `JSON.parse(JSON.stringify(x))` deep clone, which is slow, drops
+// functions/undefined/Dates/Maps, and throws on cyclic data.
 type JSONDeepClone struct{}
 
 func (JSONDeepClone) Meta() analyze.Meta {
@@ -33,12 +30,8 @@ var jsonDeepCloneRe = regexp.MustCompile(`JSON\.parse\s*\(\s*JSON\.stringify\s*\
 func (JSONDeepClone) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	const ruleID = "performance/json-deep-clone"
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		stripped := stripLineComment(sc.Text())
+	for line, raw := range analyze.Lines(t.Content) {
+		stripped := analyze.StripLineComment(raw, true)
 		if jsonDeepCloneRe.MatchString(stripped) {
 			out = append(out, analyze.Finding{
 				RuleID:       ruleID,

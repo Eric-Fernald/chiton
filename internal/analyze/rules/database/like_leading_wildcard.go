@@ -1,8 +1,6 @@
 package database
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 
@@ -10,11 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// LikeLeadingWildcard flags a LIKE pattern that begins with a wildcard
-// (`LIKE '%...'`). A leading % means the database cannot use a B-tree index on
-// the column and must scan, which gets slow as the table grows. Only literal
-// leading-wildcard patterns are flagged — `LIKE 'foo%'` (prefix search, index
-// friendly) and parameterized `LIKE ?` are left alone.
+// LikeLeadingWildcard flags a literal `LIKE '%...'` pattern, which defeats B-tree indexes;
+// prefix patterns (`LIKE 'foo%'`) and parameterized `LIKE ?` are left alone.
 type LikeLeadingWildcard struct{}
 
 func (LikeLeadingWildcard) Meta() analyze.Meta {
@@ -35,12 +30,9 @@ var likeLeadingWildcardRe = regexp.MustCompile(`(?i)\bLIKE\s+(['"])%`)
 
 func (LikeLeadingWildcard) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(maskDBBlocks(t.Content, t.URI)))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := stripDBComment(sc.Text(), t.URI)
+	py := analyze.FileExt(t.URI) == "py"
+	for line, raw := range analyze.Lines(maskedDB(t, py)) {
+		text := stripDBComment(raw, py)
 		if likeLeadingWildcardRe.MatchString(text) {
 			out = append(out, analyze.Finding{
 				RuleID:       "database/like-leading-wildcard",

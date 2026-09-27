@@ -3,10 +3,12 @@ package embed
 import (
 	"context"
 	"encoding/json"
+	"hash/fnv"
 	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
@@ -45,6 +47,29 @@ func TestHashEmbedderDeterministicAndNormalized(t *testing.T) {
 	}
 	if math.Abs(sum-1.0) > 1e-5 {
 		t.Fatalf("vector not unit-normalized: sumsq=%v", sum)
+	}
+}
+
+// TestBucketAndSignMatchesFNV pins the inline FNV-1a to hash/fnv so previously stored hash embeddings stay valid.
+func TestBucketAndSignMatchesFNV(t *testing.T) {
+	for _, tok := range []string{"", "a", "retry", "backoff", "ünïcode", "日本語", "x1y2"} {
+		for _, dim := range []int{1, 7, 64, 256, 768} {
+			hb := fnv.New32a()
+			_, _ = hb.Write([]byte(tok))
+			wantBucket := int(hb.Sum32()) % dim
+			if wantBucket < 0 {
+				wantBucket += dim
+			}
+			hs := fnv.New32a()
+			_, _ = hs.Write([]byte("sign:" + tok))
+			wantSign := float32(1)
+			if hs.Sum32()&1 != 0 {
+				wantSign = -1
+			}
+			if b, s := bucketAndSign(tok, dim); b != wantBucket || s != wantSign {
+				t.Fatalf("bucketAndSign(%q, %d) = (%d, %v), want (%d, %v)", tok, dim, b, s, wantBucket, wantSign)
+			}
+		}
 	}
 }
 
@@ -133,10 +158,40 @@ func TestTextFor(t *testing.T) {
 			if got := TextFor(c.node); got != c.want {
 				t.Fatalf("TextFor = %q, want %q", got, c.want)
 			}
-			if Embeddable(c.node) != (c.want != "") {
-				t.Fatalf("Embeddable mismatch for %q", c.name)
-			}
 		})
+	}
+}
+
+// shortEmbedder drops the last vector of every response.
+type shortEmbedder struct{ Embedder }
+
+func (s shortEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+	v, err := s.Embedder.Embed(ctx, texts)
+	return v[:len(v)-1], err
+}
+
+func TestNodeEmbeddingsPairsEmbeddableNodes(t *testing.T) {
+	ctx := context.Background()
+	nodes := []model.Node{
+		{ID: "s", Kind: model.KindSymbol, Label: "Retry"},
+		{ID: "f", Kind: model.KindFile, Label: "main.go"}, // not embeddable: skipped
+		{ID: "c", Kind: model.KindConcept, Label: "Idempotency"},
+	}
+	h := NewHashEmbedder(16)
+	embs, exact, err := NodeEmbeddings(ctx, h, nodes)
+	if err != nil || !exact || len(embs) != 2 || embs[0].NodeID != "s" || embs[1].NodeID != "c" {
+		t.Fatalf("got %+v exact=%v err=%v", embs, exact, err)
+	}
+	if want, _ := h.Embed(ctx, []string{"Idempotency"}); !slices.Equal(embs[1].Vec, want[0]) {
+		t.Fatal("vector not paired with its node's text")
+	}
+
+	// A short response is truncated and flagged; no embeddable node means no Embed call at all.
+	if embs, exact, err := NodeEmbeddings(ctx, shortEmbedder{h}, nodes); err != nil || exact || len(embs) != 1 || embs[0].NodeID != "s" {
+		t.Fatalf("short: got %+v exact=%v err=%v", embs, exact, err)
+	}
+	if embs, exact, err := NodeEmbeddings(ctx, shortEmbedder{h}, nodes[1:2]); err != nil || !exact || embs != nil {
+		t.Fatalf("none embeddable: got %+v exact=%v err=%v", embs, exact, err)
 	}
 }
 

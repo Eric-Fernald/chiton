@@ -7,10 +7,8 @@ import (
 	"fmt"
 )
 
-// Envelope is the on-disk layout for an encrypted file written by EncryptBytes:
-// a 1-byte version, a 12-byte GCM nonce, then GCM-sealed ciphertext (which
-// includes the auth tag). The version byte lets us evolve the format without
-// breaking existing files.
+// envelopeVersion leads EncryptBytes' on-disk layout: version (1 byte) | GCM nonce (12) |
+// ciphertext+tag. It lets the format evolve without breaking existing files.
 const envelopeVersion byte = 1
 
 const (
@@ -18,20 +16,15 @@ const (
 	headerLen   = 1 + gcmNonceLen
 )
 
-// EncryptBytes seals plaintext with AES-256-GCM under key (must be 32 bytes).
-// The returned bytes are version | nonce | ciphertext+tag and are safe to
-// write directly to a file.
+// EncryptBytes seals plaintext with AES-256-GCM under key (must be 32 bytes), returning
+// version | nonce | ciphertext+tag, ready to write to a file.
 func EncryptBytes(key, plaintext []byte) ([]byte, error) {
 	if len(key) != 32 {
 		return nil, fmt.Errorf("crypto: key length is %d, want 32", len(key))
 	}
-	block, err := aes.NewCipher(key)
+	gcm, err := newGCM(key)
 	if err != nil {
-		return nil, fmt.Errorf("aes.NewCipher: %w", err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("cipher.NewGCM: %w", err)
+		return nil, err
 	}
 	nonce := make([]byte, gcmNonceLen)
 	if _, err := rand.Read(nonce); err != nil {
@@ -56,13 +49,9 @@ func DecryptBytes(key, ciphertext []byte) ([]byte, error) {
 	if ciphertext[0] != envelopeVersion {
 		return nil, fmt.Errorf("crypto: unsupported envelope version %d", ciphertext[0])
 	}
-	block, err := aes.NewCipher(key)
+	gcm, err := newGCM(key)
 	if err != nil {
-		return nil, fmt.Errorf("aes.NewCipher: %w", err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("cipher.NewGCM: %w", err)
+		return nil, err
 	}
 	nonce := ciphertext[1:headerLen]
 	sealed := ciphertext[headerLen:]
@@ -71,4 +60,16 @@ func DecryptBytes(key, ciphertext []byte) ([]byte, error) {
 		return nil, fmt.Errorf("gcm.Open: %w", err)
 	}
 	return plain, nil
+}
+
+func newGCM(key []byte) (cipher.AEAD, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("aes.NewCipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("cipher.NewGCM: %w", err)
+	}
+	return gcm, nil
 }

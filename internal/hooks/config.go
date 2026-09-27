@@ -1,9 +1,5 @@
-// Package hooks installs and runs chiton's git pre-commit and pre-push hooks.
-//
-// The hooks.yaml file is committed to the repo so the whole team agrees on
-// what severity triggers a block. The Go-side hook runner reads that file,
-// invokes the analyzer, and exits non-zero when any finding crosses the
-// configured threshold.
+// Package hooks installs chiton's git hooks and runs the gating ones, which block when a finding crosses
+// the severity threshold in the committed .chiton/hooks.yaml.
 package hooks
 
 import (
@@ -92,29 +88,26 @@ func Load(path string) (Config, error) {
 	if err := yaml.Unmarshal(b, &cfg); err != nil {
 		return defaults, fmt.Errorf("parse %s: %w", path, err)
 	}
-	if len(cfg.PreCommit.BlockOn) == 0 {
-		cfg.PreCommit.BlockOn = defaults.PreCommit.BlockOn
-	}
-	if cfg.PreCommit.TimeoutSeconds == 0 {
-		cfg.PreCommit.TimeoutSeconds = defaults.PreCommit.TimeoutSeconds
-	}
-	if cfg.PreCommit.DiffBaseline == "" {
-		cfg.PreCommit.DiffBaseline = defaults.PreCommit.DiffBaseline
-	}
-	if len(cfg.PrePush.BlockOn) == 0 {
-		cfg.PrePush.BlockOn = defaults.PrePush.BlockOn
-	}
-	if cfg.PrePush.TimeoutSeconds == 0 {
-		cfg.PrePush.TimeoutSeconds = defaults.PrePush.TimeoutSeconds
-	}
-	if cfg.PrePush.DiffBaseline == "" {
-		cfg.PrePush.DiffBaseline = defaults.PrePush.DiffBaseline
-	}
+	cfg.PreCommit.fillDefaults(defaults.PreCommit)
+	cfg.PrePush.fillDefaults(defaults.PrePush)
 	return cfg, nil
 }
 
-// For returns the StageConfig for the given stage, falling back to the
-// defaults' stage if name is unknown.
+// fillDefaults replaces unset BlockOn, TimeoutSeconds, and DiffBaseline with d's values. LLM is not
+// defaulted: an omitted bool is indistinguishable from false.
+func (s *StageConfig) fillDefaults(d StageConfig) {
+	if len(s.BlockOn) == 0 {
+		s.BlockOn = d.BlockOn
+	}
+	if s.TimeoutSeconds == 0 {
+		s.TimeoutSeconds = d.TimeoutSeconds
+	}
+	if s.DiffBaseline == "" {
+		s.DiffBaseline = d.DiffBaseline
+	}
+}
+
+// For returns the StageConfig for the given stage, or the zero StageConfig if the stage is unknown.
 func (c Config) For(stage Stage) StageConfig {
 	switch stage {
 	case StagePreCommit:
@@ -125,25 +118,17 @@ func (c Config) For(stage Stage) StageConfig {
 	return StageConfig{}
 }
 
-// MinBlockingSeverity returns the lowest-ranked severity in BlockOn — that's
-// the threshold the runner uses to decide which findings count.
-// Returns "" when BlockOn is empty (no severity blocks).
+// MinBlockingSeverity returns the lowest-ranked known severity in BlockOn, the runner's blocking threshold,
+// or "" when BlockOn has none.
 func (s StageConfig) MinBlockingSeverity() analyze.Severity {
-	if len(s.BlockOn) == 0 {
-		return ""
-	}
-	min := analyze.Severity("")
-	minRank := 1 << 30
+	var lowest analyze.Severity
+	lowestRank := -1
 	for _, raw := range s.BlockOn {
 		sev := analyze.Severity(raw)
 		rank := analyze.SeverityRank(sev)
-		if rank < 0 {
-			continue
-		}
-		if rank < minRank {
-			minRank = rank
-			min = sev
+		if rank >= 0 && (lowestRank < 0 || rank < lowestRank) {
+			lowest, lowestRank = sev, rank
 		}
 	}
-	return min
+	return lowest
 }

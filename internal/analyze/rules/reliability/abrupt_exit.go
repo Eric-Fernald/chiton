@@ -1,7 +1,6 @@
 package reliability
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"regexp"
@@ -11,10 +10,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// AbruptExit flags abrupt process termination from code that is not an obvious
-// entrypoint: `os.Exit(` in Go, or `process.exit(` in JS/TS. Calling these from
-// library code skips deferred cleanup (Go) and prevents callers from handling
-// the failure — exits belong in main/CLI top-level wiring, not in reusable code.
+// AbruptExit flags `os.Exit(` (Go) or `process.exit(` (JS/TS) outside an entrypoint: exiting from library
+// code skips deferred cleanup and denies callers the chance to handle the failure.
 type AbruptExit struct{}
 
 func (AbruptExit) Meta() analyze.Meta {
@@ -33,40 +30,40 @@ func (AbruptExit) Meta() analyze.Meta {
 var (
 	osExitRe      = regexp.MustCompile(`\bos\.Exit\s*\(`)
 	processExitRe = regexp.MustCompile(`\bprocess\.exit\s*\(`)
+	goMainPkgRe   = regexp.MustCompile(`(?m)^\s*package\s+main\b`)
 )
 
 func (AbruptExit) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
-	ext := langExt(t.Path)
 	if isGoTestFile(t.Path) || isJSTestFile(t.Path) {
 		return nil
 	}
-	// Entrypoints are allowed to exit. For Go, any `package main` file (not just
-	// main.go — cmd/<tool>/ files often use other names); for JS/TS, the common
-	// entry basenames, bin/ paths, and files with a shebang on line one.
-	if isEntrypointFile(t.Path, t.Content) {
-		return nil
-	}
-
+	// Entrypoints may exit: any `package main` Go file (cmd/<tool>/ files are often not main.go), and
+	// JS/TS entrypoints per isJSEntrypoint.
 	var re *regexp.Regexp
 	var masked []byte
-	switch ext {
+	switch analyze.FileExt(t.Path) {
 	case "go":
+		// Exact prefilter: masking writes only 'x' and never masks a lone byte between two letters.
+		if !bytes.Contains(t.Content, []byte("os.Exit")) {
+			return nil
+		}
+		masked = analyze.MaskedGoLiterals(t)
+		if goMainPkgRe.Match(masked) {
+			return nil
+		}
 		re = osExitRe
-		masked = maskGoLiteralsAndComments(t.Content)
 	case "js", "ts":
+		if isJSEntrypoint(t.Path, t.Content) || !bytes.Contains(t.Content, []byte("process.exit")) {
+			return nil
+		}
 		re = processExitRe
-		masked = maskLiteralsAndComments(t.Content)
+		masked = analyze.MaskedCLiterals(t, false)
 	default:
 		return nil
 	}
 
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(masked))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := sc.Text()
+	for line, text := range analyze.Lines(masked) {
 		if re.MatchString(text) {
 			out = append(out, analyze.Finding{
 				RuleID:       "reliability/abrupt-exit",
@@ -83,47 +80,29 @@ func (AbruptExit) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.F
 	return out
 }
 
+var jsTestSuffixes = []string{".test.js", ".test.ts", ".test.jsx", ".test.tsx",
+	".spec.js", ".spec.ts", ".spec.jsx", ".spec.tsx"}
+
 // isJSTestFile recognises the common JS/TS test-file naming conventions.
 func isJSTestFile(path string) bool {
-	base := basename(path)
-	for _, suf := range []string{".test.js", ".test.ts", ".test.jsx", ".test.tsx",
-		".spec.js", ".spec.ts", ".spec.jsx", ".spec.tsx"} {
-		if len(base) > len(suf) && base[len(base)-len(suf):] == suf {
+	base := analyze.PathBase(path)
+	for _, suf := range jsTestSuffixes {
+		if len(base) > len(suf) && strings.HasSuffix(base, suf) {
 			return true
 		}
 	}
 	return false
 }
 
-// isEntrypointFile recognises conventional program entrypoints where exiting is
-// expected. Go: any file whose package clause is `package main` (covers main.go
-// and arbitrarily-named files under cmd/<tool>/). JS/TS: the common entry
-// basenames (index/main/cli/server/app/start), files under a bin/ directory, and
-// files that begin with a `#!` shebang.
-func isEntrypointFile(path string, content []byte) bool {
-	switch langExt(path) {
-	case "go":
-		return hasGoMainPackage(content)
-	case "js", "ts", "jsx", "tsx", "mjs", "cjs":
-		switch jsBasenameStem(path) {
-		case "index", "main", "cli", "server", "app", "start":
-			return true
-		}
-		if isUnderBinDir(path) || hasShebang(content) {
-			return true
-		}
+// isJSEntrypoint recognises JS/TS entrypoints: common entry basenames (index/main/cli/server/app/start),
+// files under a bin/ directory, and files starting with a `#!` shebang.
+func isJSEntrypoint(path string, content []byte) bool {
+	switch jsBasenameStem(path) {
+	case "index", "main", "cli", "server", "app", "start":
+		return true
 	}
-	return false
+	return isUnderBinDir(path) || hasShebang(content)
 }
-
-// hasGoMainPackage reports whether the file's package clause is `package main`,
-// scanning the masked content so a `package main` inside a string/comment does
-// not count.
-func hasGoMainPackage(content []byte) bool {
-	return goMainPkgRe.Match(maskGoLiteralsAndComments(content))
-}
-
-var goMainPkgRe = regexp.MustCompile(`(?m)^\s*package\s+main\b`)
 
 // isUnderBinDir reports whether any path segment is exactly "bin".
 func isUnderBinDir(path string) bool {
@@ -136,27 +115,14 @@ func hasShebang(content []byte) bool {
 	return len(content) >= 2 && content[0] == '#' && content[1] == '!'
 }
 
-// jsBasenameStem returns the basename with a single trailing extension removed
-// and lowercased (e.g. "Server.js" -> "server"). It is intentionally simple:
-// only one extension is stripped, which suffices for the entry-name check.
+// jsBasenameStem returns the lowercased basename minus one trailing extension ("Server.js" -> "server");
+// stripping only one suffices for the entry-name check.
 func jsBasenameStem(path string) string {
-	base := basename(path)
-	for i := len(base) - 1; i >= 0; i-- {
-		if base[i] == '.' {
-			base = base[:i]
-			break
-		}
+	base := analyze.PathBase(path)
+	if i := strings.LastIndexByte(base, '.'); i >= 0 {
+		base = base[:i]
 	}
 	return strings.ToLower(base)
-}
-
-func basename(path string) string {
-	for i := len(path) - 1; i >= 0; i-- {
-		if path[i] == '/' || path[i] == '\\' {
-			return path[i+1:]
-		}
-	}
-	return path
 }
 
 func init() { analyze.Register(AbruptExit{}) }

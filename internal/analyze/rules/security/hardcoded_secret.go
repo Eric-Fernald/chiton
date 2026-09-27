@@ -2,8 +2,6 @@
 package security
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"fmt"
 	"regexp"
@@ -12,9 +10,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// HardcodedSecret flags lines that look like inline credentials.
-// Conservative pattern set so the rule stays low false-positive:
-// AWS access keys, generic high-entropy assignments, and obvious tokens.
+// HardcodedSecret flags lines that look like inline credentials, using only vendor-specific
+// token/key patterns so the rule stays low false-positive.
 type HardcodedSecret struct{}
 
 func (HardcodedSecret) Meta() analyze.Meta {
@@ -51,12 +48,11 @@ func (HardcodedSecret) MatchFile(_ context.Context, t analyze.FileTarget) []anal
 		return nil
 	}
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := sc.Text()
+	for line, text := range analyze.Lines(t.Content) {
+		// aws-secret-key is (?i) but still needs its literal ':' or '='.
+		if !containsAny(text, "AKIA", ":", "=", "AIza", "gh", "xox", "-----BEGIN ", "eyJ") {
+			continue
+		}
 		for _, p := range secretPatterns {
 			if p.re.MatchString(text) {
 				out = append(out, analyze.Finding{

@@ -8,11 +8,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Build metadata. The zero values are for `go build`/`go run` from source;
-// release builds inject real values via -ldflags, e.g.:
-//
-//	go build -ldflags "-X main.version=v0.5.0 \
-//	  -X main.commit=$(git rev-parse --short HEAD) -X main.date=2026-06-07" ./cmd/chiton
+// Build metadata. Zero values mean a source build; release builds inject real values via
+// -ldflags "-X main.version=... -X main.commit=... -X main.date=...".
 var (
 	version = "dev"
 	commit  = ""
@@ -46,10 +43,8 @@ func versionCmd() *cobra.Command {
 	return cmd
 }
 
-// resolveVersion prefers the ldflags-injected version. Failing that (a plain
-// `go build` or `go install`), it falls back to the module version or the VCS
-// revision Go embeds in the binary's build info, so even source builds report
-// something meaningful instead of a bare "dev".
+// resolveVersion prefers the ldflags-injected version, then the module version or VCS revision
+// from the embedded build info, so even source builds report more than a bare "dev".
 func resolveVersion() string {
 	if version != "dev" && version != "" {
 		return version

@@ -3,7 +3,7 @@ package bench
 import (
 	"fmt"
 	"io"
-	"sort"
+	"slices"
 )
 
 // ratio renders grep+read cost relative to chiton cost as a human phrase.
@@ -23,8 +23,8 @@ func medianInt(xs []int) int {
 	if len(xs) == 0 {
 		return 0
 	}
-	c := append([]int(nil), xs...)
-	sort.Ints(c)
+	c := slices.Clone(xs)
+	slices.Sort(c)
 	n := len(c)
 	if n%2 == 1 {
 		return c[n/2]
@@ -32,9 +32,8 @@ func medianInt(xs []int) int {
 	return (c[n/2-1] + c[n/2]) / 2
 }
 
-// FormatMarkdown writes a Markdown section per report: a header line with corpus
-// shape, a per-query token table, and a median summary. Suitable for pasting
-// straight into docs/BENCHMARK.md.
+// FormatMarkdown writes one Markdown section per report (corpus shape, per-query token table,
+// medians), ready to paste into docs/BENCHMARK.md.
 func FormatMarkdown(w io.Writer, reps []*Report) {
 	for _, rep := range reps {
 		fmt.Fprintf(w, "### %s\n\n", rep.Name)
@@ -42,7 +41,8 @@ func FormatMarkdown(w io.Writer, reps []*Report) {
 			rep.Files, rep.Nodes, rep.Edges, rep.CorpusTokens, rep.Depth)
 		fmt.Fprintln(w, "| Question | naive | grep+read | chiton | chiton vs grep+read |")
 		fmt.Fprintln(w, "|---|---:|---:|---:|---|")
-		var grepVals, chitonVals []int
+		grepVals := make([]int, 0, len(rep.Queries))
+		chitonVals := make([]int, 0, len(rep.Queries))
 		for _, q := range rep.Queries {
 			fmt.Fprintf(w, "| %s | %d | %d | %d | %s |\n",
 				q.Question, q.Naive, q.GrepRead, q.Chiton, ratio(q.GrepRead, q.Chiton))

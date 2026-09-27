@@ -1,13 +1,5 @@
-// Package teams ingests Microsoft Teams meeting transcripts into chiton's
-// graph. The Microsoft Graph wiring (auth + the transcripts API) lives behind
-// the TranscriptSource interface in graph_client.go; the orchestration here
-// (fetch VTT → meeting.Parse → meeting.ToGraph → upsert) and the change-
-// notification webhook receiver (webhook.go) are pure-Go and unit-testable with
-// a fake source.
-//
-// A Teams transcript downloads as WebVTT, so once fetched it flows through the
-// exact same meeting parser as a local .vtt or a whisper transcription — the
-// meeting→code linkage (DECIDED_IN/DISCUSSED_IN) then applies unchanged.
+// Package teams ingests Microsoft Teams meeting transcripts: fetched as WebVTT, they go through the same
+// meeting parser as a local .vtt, so meeting→code linkage applies unchanged.
 package teams
 
 import (
@@ -33,6 +25,16 @@ type TranscriptSource interface {
 	ListTranscripts(ctx context.Context, meetingID string) ([]TranscriptMeta, error)
 	// FetchContent returns a transcript's content as WebVTT bytes.
 	FetchContent(ctx context.Context, meetingID, transcriptID string) ([]byte, error)
+}
+
+// GraphConfig configures the Microsoft Graph transcript source (app-only auth); shared by both msgraph builds.
+type GraphConfig struct {
+	TenantID     string
+	ClientID     string
+	ClientSecret string
+	// UserID is the meeting organizer's id or UPN: transcripts are read under
+	// /users/{UserID}/onlineMeetings/... (app-only has no /me).
+	UserID string
 }
 
 // Ingester turns Teams transcripts into graph nodes via a TranscriptSource.
@@ -61,12 +63,10 @@ func MeetingTranscriptURI(meetingID, transcriptID string) string {
 	return fmt.Sprintf("teams://meeting/%s/transcript/%s", meetingID, transcriptID)
 }
 
-// IngestMeeting fetches every transcript for a meeting and upserts each as its
-// own meeting subgraph (meeting + turns + persons), keyed on a stable
-// teams:// URI so re-ingest replaces rather than duplicates. Read-only stores
-// are rejected up front.
+// IngestMeeting ingests every transcript of a meeting as its own meeting subgraph, keyed on a teams:// URI so
+// re-ingest replaces rather than duplicates.
 func (i *Ingester) IngestMeeting(ctx context.Context, meetingID string) (Report, error) {
-	if ro, ok := i.store.(store.ReadOnlyAware); ok && ro.ReadOnly() {
+	if store.IsReadOnly(i.store) {
 		return Report{}, fmt.Errorf("teams: store is read-only — restart 'chiton serve --writable' or use the 'chiton teams fetch' CLI")
 	}
 	metas, err := i.src.ListTranscripts(ctx, meetingID)
@@ -104,14 +104,11 @@ func (i *Ingester) ingestOne(ctx context.Context, m TranscriptMeta, content []by
 	if _, err := i.store.DeleteBySourceURI(ctx, uri); err != nil {
 		return 0, 0, fmt.Errorf("replace prior transcript %s: %w", uri, err)
 	}
-	ns, es := meeting.ToGraph(tr, i.now())
-	if err := i.store.UpsertNodes(ctx, ns); err != nil {
-		return 0, 0, fmt.Errorf("upsert meeting nodes: %w", err)
+	n, err := meeting.Upsert(ctx, i.store, tr, i.now(), "meeting")
+	if err != nil {
+		return 0, 0, err
 	}
-	if err := i.store.UpsertEdges(ctx, es); err != nil {
-		return 0, 0, fmt.Errorf("upsert meeting edges: %w", err)
-	}
-	return len(ns), len(tr.Turns), nil
+	return n, len(tr.Turns), nil
 }
 
 // transcriptTitle builds a human label for a Teams transcript.
@@ -123,8 +120,5 @@ func transcriptTitle(m TranscriptMeta) string {
 }
 
 func shortID(s string) string {
-	if len(s) > 12 {
-		return s[:12]
-	}
-	return s
+	return s[:min(len(s), 12)]
 }

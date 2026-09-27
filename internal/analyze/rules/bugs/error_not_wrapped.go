@@ -1,7 +1,6 @@
 package bugs
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"regexp"
@@ -10,10 +9,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// ErrorNotWrapped flags `fmt.Errorf(...)` calls that interpolate an error with
-// `%v` or `%s` and pass an `err`-named argument, instead of using `%w`. `%w`
-// wraps the error so errors.Is / errors.As can unwrap it; `%v`/`%s` flatten it
-// to a string and break the error chain.
+// ErrorNotWrapped flags `fmt.Errorf` calls that format an `err`-named argument with `%v`/`%s` instead of
+// `%w`, flattening the error to a string so errors.Is / errors.As can no longer unwrap it.
 type ErrorNotWrapped struct{}
 
 func (ErrorNotWrapped) Meta() analyze.Meta {
@@ -30,27 +27,26 @@ func (ErrorNotWrapped) Meta() analyze.Meta {
 }
 
 var (
-	// fmt.Errorf(...) whose format verbs contain a %v or %s (not %w / %+v).
 	errorfCallRe = regexp.MustCompile(`\bfmt\.Errorf\s*\(`)
-	// A %v or %s verb that is NOT %w. The trailing arg list must reference an
-	// err-named identifier so we only flag actual error interpolation.
-	errVerbRe = regexp.MustCompile(`%[+#]?[vs]`)
-	errArgRe  = regexp.MustCompile(`,\s*[\w.]*[eE]rr\b`)
+	errVerbRe    = regexp.MustCompile(`%[+#]?[vs]`)
+	// Requiring an err-named argument limits the rule to actual error interpolation.
+	errArgRe   = regexp.MustCompile(`,\s*[\w.]*[eE]rr\b`)
+	wrapVerbRe = regexp.MustCompile(`%[+#]?w`)
 )
 
 func (ErrorNotWrapped) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
+	if !bytes.Contains(t.Content, []byte("fmt.Errorf")) {
+		return nil
+	}
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := stripGoLineComment(sc.Text())
+	for line, raw := range analyze.Lines(t.Content) {
+		// String contents are kept: the format verbs live inside the format string.
+		text := analyze.StripLineComment(raw, false)
 		if !errorfCallRe.MatchString(text) {
 			continue
 		}
 		// Must format an error (err arg present) using %v/%s but no %w.
-		if errVerbRe.MatchString(text) && errArgRe.MatchString(text) && !containsWrapVerb(text) {
+		if errVerbRe.MatchString(text) && errArgRe.MatchString(text) && !wrapVerbRe.MatchString(text) {
 			out = append(out, analyze.Finding{
 				RuleID:       "bugs/error-not-wrapped",
 				Severity:     analyze.SeverityLow,
@@ -64,39 +60,6 @@ func (ErrorNotWrapped) MatchFile(_ context.Context, t analyze.FileTarget) []anal
 		}
 	}
 	return out
-}
-
-var wrapVerbRe = regexp.MustCompile(`%[+#]?w`)
-
-func containsWrapVerb(s string) bool { return wrapVerbRe.MatchString(s) }
-
-// stripGoLineComment drops a // line comment but keeps string contents —
-// unlike stripGoComment, which blanks them. This rule must inspect the format
-// verbs inside the fmt.Errorf format string.
-func stripGoLineComment(s string) string {
-	var inStr byte
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if inStr != 0 {
-			if c == '\\' && i+1 < len(s) {
-				i++
-				continue
-			}
-			if c == inStr {
-				inStr = 0
-			}
-			continue
-		}
-		switch c {
-		case '"', '\'', '`':
-			inStr = c
-		case '/':
-			if i+1 < len(s) && s[i+1] == '/' {
-				return s[:i]
-			}
-		}
-	}
-	return s
 }
 
 func init() { analyze.Register(ErrorNotWrapped{}) }

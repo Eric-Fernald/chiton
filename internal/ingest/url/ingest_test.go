@@ -3,6 +3,7 @@ package url
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,7 +72,7 @@ func TestAddHTML(t *testing.T) {
 	// The script content must not leak into extracted text.
 	for _, n := range nodes {
 		if n.Kind == model.KindDocSection {
-			if txt, _ := n.Attrs["text"].(string); contains(txt, "var x=1") {
+			if txt, _ := n.Attrs["text"].(string); strings.Contains(txt, "var x=1") {
 				t.Errorf("script content leaked into doc_section text: %q", txt)
 			}
 		}
@@ -112,10 +113,10 @@ func TestAddIdempotentReplace(t *testing.T) {
 func TestTranscriptTextDispatch(t *testing.T) {
 	vtt := "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\n<v Host>Welcome to the show.</v>\n"
 	text, _ := extractText(&fetchResult{contentType: "text/vtt", ext: "vtt", body: []byte(vtt)})
-	if !contains(text, "Host: Welcome to the show.") {
+	if !strings.Contains(text, "Host: Welcome to the show.") {
 		t.Errorf("transcript text=%q missing speaker line", text)
 	}
-	if contains(text, "WEBVTT") || contains(text, "-->") {
+	if strings.Contains(text, "WEBVTT") || strings.Contains(text, "-->") {
 		t.Errorf("transcript text leaked VTT markup: %q", text)
 	}
 }
@@ -145,17 +146,4 @@ func TestHostAllowedBlocksPrivate(t *testing.T) {
 	if err := hostAllowed("93.184.216.34"); err != nil {
 		t.Errorf("hostAllowed(public IP) = %v; want allowed", err)
 	}
-}
-
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || indexOf(s, sub) >= 0)
-}
-
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
 }

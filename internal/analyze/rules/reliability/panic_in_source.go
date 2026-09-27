@@ -1,7 +1,6 @@
 package reliability
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"regexp"
@@ -10,9 +9,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// PanicInSource flags an explicit `panic(` in non-test Go source. A panic
-// unwinds the stack and, if unrecovered, crashes the process — library code
-// should prefer returning an error so callers can decide how to handle it.
+// PanicInSource flags an explicit `panic(` in non-test Go source: unrecovered, it crashes the process, so
+// library code should return an error and let callers decide.
 type PanicInSource struct{}
 
 func (PanicInSource) Meta() analyze.Meta {
@@ -36,16 +34,14 @@ func (PanicInSource) MatchFile(_ context.Context, t analyze.FileTarget) []analyz
 	if isGoTestFile(t.Path) {
 		return nil
 	}
+	if !bytes.Contains(t.Content, []byte("panic")) {
+		return nil
+	}
 	// Per-file masking removes panic( tokens inside string literals and //, /* */
 	// (incl. multi-line) comments, so commented-out code is not flagged.
-	masked := maskGoLiteralsAndComments(t.Content)
+	masked := analyze.MaskedGoLiterals(t)
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(masked))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := sc.Text()
+	for line, text := range analyze.Lines(masked) {
 		if panicCallRe.MatchString(text) {
 			out = append(out, analyze.Finding{
 				RuleID:       "reliability/panic-in-source",

@@ -2,8 +2,6 @@
 package performance
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 	"strings"
@@ -12,9 +10,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// StringConcatInLoop flags Go `s += ...` (or `s = s + ...`) inside a `for`
-// body. O(n²) accumulation is the most common Go perf bug; the fix is
-// `strings.Builder` or `bytes.Buffer`.
+// StringConcatInLoop flags Go `s += "..."` or `s = s + ...` inside a `for` body, which
+// accumulates in O(n²).
 type StringConcatInLoop struct{}
 
 func (StringConcatInLoop) Meta() analyze.Meta {
@@ -40,14 +37,9 @@ var (
 
 func (StringConcatInLoop) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	depth := 0
 	loopDepth := 0
-	line := 0
-	for sc.Scan() {
-		line++
-		text := sc.Text()
+	for line, text := range analyze.Lines(t.Content) {
 		if forStartRe.MatchString(text) {
 			loopDepth = depth + 1
 		}

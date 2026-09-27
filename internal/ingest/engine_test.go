@@ -114,15 +114,14 @@ func (h *harness) edgeTouches(t *testing.T, id string) bool {
 	return false
 }
 
-// TestSyncFileReconciles is the core test: add, modify (renaming a symbol), and
-// delete a file, verifying the graph reflects each state with no stale nodes or
-// dangling edges.
+// TestSyncFileReconciles adds, modifies (renaming a symbol), and deletes a file, checking the graph has
+// no stale nodes or dangling edges at each step.
 func TestSyncFileReconciles(t *testing.T) {
 	h := newHarness(t, false, false)
 	ctx := context.Background()
 
 	p := h.write(t, "foo.go", "package src\nfunc Foo() { Bar() }\nfunc Bar() {}\n")
-	uri := uriFor(p)
+	uri := model.FileURI(p)
 	fooID := model.NewNodeID(uri, "Foo")
 	barID := model.NewNodeID(uri, "Bar")
 	bazID := model.NewNodeID(uri, "Baz")
@@ -222,7 +221,7 @@ func TestReanalyze(t *testing.T) {
 	h := newHarness(t, false, true)
 	ctx := context.Background()
 	p := h.write(t, "todo.go", "package src\n// TODO: refactor\nfunc T() {}\n")
-	uri := uriFor(p)
+	uri := model.FileURI(p)
 
 	if _, err := h.eng.SyncFile(ctx, p); err != nil {
 		t.Fatal(err)
@@ -253,7 +252,7 @@ func TestSyncDirPrunesRemovedFiles(t *testing.T) {
 	if _, err := h.eng.SyncDir(ctx, h.dir, true); err != nil {
 		t.Fatal(err)
 	}
-	if len(h.nodesForURI(t, uriFor(pa))) == 0 || len(h.nodesForURI(t, uriFor(pb))) == 0 {
+	if len(h.nodesForURI(t, model.FileURI(pa))) == 0 || len(h.nodesForURI(t, model.FileURI(pb))) == 0 {
 		t.Fatal("both files should be indexed after SyncDir")
 	}
 
@@ -267,18 +266,16 @@ func TestSyncDirPrunesRemovedFiles(t *testing.T) {
 	if sum.Deleted != 1 {
 		t.Errorf("expected 1 pruned file, got %d", sum.Deleted)
 	}
-	if n := len(h.nodesForURI(t, uriFor(pb))); n != 0 {
+	if n := len(h.nodesForURI(t, model.FileURI(pb))); n != 0 {
 		t.Errorf("b.go nodes should be pruned, got %d", n)
 	}
-	if len(h.nodesForURI(t, uriFor(pa))) == 0 {
+	if len(h.nodesForURI(t, model.FileURI(pa))) == 0 {
 		t.Error("a.go nodes should remain")
 	}
 }
 
-// TestSyncDirPruneKeepsPresentExcludedFiles verifies prune deletes only files
-// genuinely gone from disk — a file that still exists but was excluded from the
-// walk (here, because it lives under an ignored directory that build indexed)
-// must NOT be pruned.
+// TestSyncDirPruneKeepsPresentExcludedFiles verifies prune deletes only files gone from disk, not ones
+// still present but excluded from the walk (here, under an ignored dir that build indexed).
 func TestSyncDirPruneKeepsPresentExcludedFiles(t *testing.T) {
 	h := newHarness(t, false, false)
 	ctx := context.Background()
@@ -303,10 +300,10 @@ func TestSyncDirPruneKeepsPresentExcludedFiles(t *testing.T) {
 	if _, err := h.eng.SyncDir(ctx, h.dir, true); err != nil {
 		t.Fatal(err)
 	}
-	if len(h.nodesForURI(t, uriFor(vendored))) == 0 {
+	if len(h.nodesForURI(t, model.FileURI(vendored))) == 0 {
 		t.Error("vendored file (present on disk, excluded from walk) was wrongly pruned")
 	}
-	if len(h.nodesForURI(t, uriFor(pa))) == 0 {
+	if len(h.nodesForURI(t, model.FileURI(pa))) == 0 {
 		t.Error("a.go should be indexed")
 	}
 
@@ -317,7 +314,7 @@ func TestSyncDirPruneKeepsPresentExcludedFiles(t *testing.T) {
 	if _, err := h.eng.SyncDir(ctx, h.dir, true); err != nil {
 		t.Fatal(err)
 	}
-	if n := len(h.nodesForURI(t, uriFor(vendored))); n != 0 {
+	if n := len(h.nodesForURI(t, model.FileURI(vendored))); n != 0 {
 		t.Errorf("truly-removed vendored file should be pruned, got %d nodes", n)
 	}
 }
@@ -359,16 +356,47 @@ func TestIncrementalReclusterUpdatesSidecar(t *testing.T) {
 	if updated.NodeCount <= seedCount {
 		t.Errorf("sidecar node count did not grow: seed=%d updated=%d", seedCount, updated.NodeCount)
 	}
-	bID := model.NewNodeID(uriFor(pb), "B")
+	bID := model.NewNodeID(model.FileURI(pb), "B")
 	if _, ok := updated.Nodes[bID]; !ok {
 		t.Error("new symbol B missing from updated sidecar")
 	}
 }
 
-// TestWatchGracefulShutdown drives the full watch lifecycle: start, observe a
-// new file get indexed, cancel the context, and confirm the store reopens
-// cleanly with the change persisted. This is the supported shutdown path
-// (Ctrl-C → context cancel → drain → store.Close); a hard kill is not.
+// TestSyncReportsReclustered pins BatchSummary.Reclustered: set exactly when a sidecar exists after the batch,
+// including a batch that changed nothing.
+func TestSyncReportsReclustered(t *testing.T) {
+	h := newHarness(t, false, false)
+	ctx := context.Background()
+	p := h.write(t, "a.go", "package src\nfunc A() {}\n")
+	sync := func(want bool) {
+		t.Helper()
+		sum, err := h.eng.SyncDir(ctx, h.dir, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sum.Reclustered != want {
+			t.Fatalf("Reclustered = %v, want %v (summary %+v)", sum.Reclustered, want, sum)
+		}
+	}
+	sync(false) // changed, no sidecar yet
+	sync(false) // unchanged, no sidecar
+
+	nodes, _ := h.gs.AllNodes(ctx)
+	edges, _ := h.gs.AllEdges(ctx)
+	if err := cluster.WriteSidecar(cluster.SidecarPath(h.eng.cfg.GraphPath), cluster.Full(nodes, edges, 1.0, nil)); err != nil {
+		t.Fatal(err)
+	}
+	sync(true) // unchanged, sidecar exists
+	h.write(t, "a.go", "package src\nfunc A() {}\nfunc B() {}\n")
+	sync(true) // changed: re-clustered
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	sync(true) // pruned: re-clustered
+}
+
+// TestWatchGracefulShutdown drives start → index a new file → cancel, then checks the store reopens cleanly
+// with the change persisted (Ctrl-C → cancel → drain → Close is the supported shutdown path).
 func TestWatchGracefulShutdown(t *testing.T) {
 	root := t.TempDir()
 	src := filepath.Join(root, "src")
@@ -402,7 +430,7 @@ func TestWatchGracefulShutdown(t *testing.T) {
 	if err := os.WriteFile(p, []byte("package src\nfunc W() {}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	uri := uriFor(p)
+	uri := model.FileURI(p)
 
 	// Wait until W appears in the store (watcher processed the write).
 	indexed := false

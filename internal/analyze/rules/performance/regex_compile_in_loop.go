@@ -1,10 +1,7 @@
 package performance
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -12,11 +9,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// RegexCompileInLoop flags a regular expression that is compiled inside a loop
-// body. Compilation is expensive and the result is almost always invariant
-// across iterations, so it should be hoisted out of the loop (or, in Go, to a
-// package-level var). Covers Go (regexp.Compile/MustCompile), Python
-// (re.compile), JS/TS (new RegExp(...)) and Java (Pattern.compile).
+// RegexCompileInLoop flags a regex compiled inside a loop body (Go regexp.Compile/MustCompile,
+// Python re.compile, JS/TS new RegExp, Java Pattern.compile), where the result is loop-invariant.
 type RegexCompileInLoop struct{}
 
 func (RegexCompileInLoop) Meta() analyze.Meta {
@@ -33,9 +27,7 @@ func (RegexCompileInLoop) Meta() analyze.Meta {
 }
 
 var regexCompileRe = regexp.MustCompile(
-	// `\bre\.compile` requires a word boundary before the standalone `re`
-	// module so identifiers ending in `re` (core.compile, genre.compile) do
-	// not match.
+	// `\bre\.compile` keeps identifiers ending in `re` (core.compile, genre.compile) from matching.
 	`(?:regexp\.(?:MustCompile|Compile)|\bre\.compile|new\s+RegExp|Pattern\.compile)\s*\(`,
 )
 
@@ -53,30 +45,19 @@ func (RegexCompileInLoop) MatchFile(_ context.Context, t analyze.FileTarget) []a
 			Span:         &model.SourceSpan{StartLine: line, EndLine: line},
 		}
 	}
-	return scanLoopBody(t.Content, isPython(t.Path), regexCompileRe, finder)
+	return scanLoopBody(t.Content, analyze.FileExt(t.Path) == "py", regexCompileRe, finder)
 }
 
-// isPython reports whether the file is a Python source file by extension.
-func isPython(path string) bool {
-	return strings.EqualFold(filepath.Ext(path), ".py")
-}
-
-// scanLoopBody scans content line by line and emits a finding (built by mk) for
-// every line inside a loop body whose stripped text matches hit. For Python it
-// uses indentation to determine the loop body; otherwise it uses brace depth.
+// scanLoopBody emits mk(line) for each line inside a loop body whose comment-stripped text matches
+// hit; loop bodies are found by indentation for Python and by brace depth otherwise.
 func scanLoopBody(content []byte, python bool, hit *regexp.Regexp, mk func(line int) analyze.Finding) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
 
 	if python {
 		// Stack of indentation levels at which a loop header opened.
 		var loopIndents []int
-		for sc.Scan() {
-			line++
-			raw := sc.Text()
-			stripped := stripLineComment(raw)
+		for line, raw := range analyze.Lines(content) {
+			stripped := analyze.StripLineComment(raw, true)
 			if strings.TrimSpace(stripped) == "" {
 				continue
 			}
@@ -97,9 +78,8 @@ func scanLoopBody(content []byte, python bool, hit *regexp.Regexp, mk func(line 
 	}
 
 	var b braceLoopScanner
-	for sc.Scan() {
-		line++
-		stripped := stripLineComment(sc.Text())
+	for line, raw := range analyze.Lines(content) {
+		stripped := analyze.StripLineComment(raw, true)
 		isLoop := braceLoopHeaderRe.MatchString(stripped)
 		inside := b.feed(stripped, isLoop)
 		if inside && hit.MatchString(stripped) {
@@ -111,13 +91,8 @@ func scanLoopBody(content []byte, python bool, hit *regexp.Regexp, mk func(line 
 
 var (
 	pyLoopHeaderRe = regexp.MustCompile(`^\s*(?:for\b|while\b).*:\s*$`)
-	// A C-style loop header contains the for or while keyword not preceded by a
-	// word character or a dot, so a header sharing a line with a preceding
-	// token (`if (cond) { for (...) {`) is still recognized while a method or
-	// field named `for`/`while` (`foo.for`, `x_for`) is not. The line may or
-	// may not include the opening brace; brace counting in braceLoopScanner
-	// determines the body extent. `do { }` while loops are intentionally
-	// skipped (rare, low value).
+	// for/while not preceded by a word char or dot: matches mid-line headers (`if (c) { for (...) {`)
+	// but not members like `foo.for`; braceLoopScanner finds the body extent.
 	braceLoopHeaderRe = regexp.MustCompile(`(?:^|[^.\w])(?:for|while)\b`)
 )
 

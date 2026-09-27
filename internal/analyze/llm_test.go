@@ -183,9 +183,8 @@ func countFindings(ctx context.Context, gs interface {
 	return n
 }
 
-// TestLLMSubmitReplacesPriorFindings confirms LLM findings get a resolved
-// lifecycle: re-submitting a smaller set for the same (rule, file) deletes the
-// findings that are no longer reported (the issue moved or was fixed).
+// TestLLMSubmitReplacesPriorFindings confirms re-submitting a smaller set for the same
+// (rule, file) deletes findings no longer reported.
 func TestLLMSubmitReplacesPriorFindings(t *testing.T) {
 	ctx := context.Background()
 	gs := newTestStore(t)
@@ -229,9 +228,8 @@ func TestLLMSubmitReplacesPriorFindings(t *testing.T) {
 	}
 }
 
-// TestLLMSubmitDedupesCollisions confirms two findings colliding on FindingID
-// (same rule + file + start line) collapse to one node, keeping the
-// higher-confidence one regardless of array order, and the report counts uniques.
+// TestLLMSubmitDedupesCollisions confirms same-line findings collapse to one node, keeping the
+// higher-confidence one regardless of array order.
 func TestLLMSubmitDedupesCollisions(t *testing.T) {
 	ctx := context.Background()
 	gs := newTestStore(t)
@@ -263,9 +261,8 @@ func TestLLMSubmitDedupesCollisions(t *testing.T) {
 	}
 }
 
-// TestLLMPendingKeepsInjectionPayloadInInputOnly confirms ingested code is
-// carried verbatim in the task Input and never spliced into the Instructions or
-// Schema — so a malicious comment cannot become part of the assistant's prompt.
+// TestLLMPendingKeepsInjectionPayloadInInputOnly confirms ingested code stays verbatim in Input and
+// never reaches Instructions or Schema, so a malicious comment can't join the prompt.
 func TestLLMPendingKeepsInjectionPayloadInInputOnly(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()
@@ -294,9 +291,8 @@ func TestLLMPendingKeepsInjectionPayloadInInputOnly(t *testing.T) {
 	}
 }
 
-// TestLLMSubmitRejectsMismatchedTarget verifies a submit whose target_uri names
-// a real file that does not match its task_id is rejected, so it cannot delete
-// another file's findings via replacePriorFindings.
+// TestLLMSubmitRejectsMismatchedTarget verifies a submit whose target_uri doesn't match its task_id
+// is rejected, so it can't delete another file's findings.
 func TestLLMSubmitRejectsMismatchedTarget(t *testing.T) {
 	ctx := context.Background()
 	gs := newTestStore(t)

@@ -51,9 +51,8 @@ func TestProjectDirAnchorsRelativeGraphPath(t *testing.T) {
 	}
 }
 
-// A launcher that fails to substitute ${CLAUDE_PROJECT_DIR} passes the template
-// through verbatim. Anchoring to it would resolve graph_path under a directory
-// that cannot exist, so the placeholder must read as unset.
+// An unsubstituted ${CLAUDE_PROJECT_DIR} must read as unset rather than anchor graph_path under a
+// directory that cannot exist.
 func TestUnexpandedProjectDirTemplateIsIgnored(t *testing.T) {
 	isolate(t)
 	t.Setenv(ProjectDirEnv, "${CLAUDE_PROJECT_DIR}")
@@ -163,9 +162,8 @@ func quoteTOML(s string) string {
 }
 
 func TestEmbedDimEnvOverrideApplies(t *testing.T) {
-	// Regression: embed.dim is the one key with no SetDefault, so viper's
-	// Unmarshal skipped it and CHITON_EMBED_DIM was silently ignored while
-	// every other CHITON_* variable worked.
+	// Regression: embed.dim has no SetDefault, so viper's Unmarshal skipped it and
+	// CHITON_EMBED_DIM was silently ignored.
 	isolate(t)
 	t.Setenv("CHITON_EMBED_DIM", "1536")
 

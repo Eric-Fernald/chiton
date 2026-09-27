@@ -8,11 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// SleepInLoop flags a blocking sleep call inside a loop body. Sleeping in a
-// loop is occasionally intentional (polling, backoff) but is far more often a
-// busy-wait or an accidental serialization point, so it is reported at low
-// severity. Covers Go (time.Sleep), Python (time.sleep) and JS/TS/Java
-// (Thread.sleep).
+// SleepInLoop flags time.Sleep / time.sleep / Thread.sleep inside a loop body, at low severity
+// since polling and backoff loops sometimes sleep on purpose.
 type SleepInLoop struct{}
 
 func (SleepInLoop) Meta() analyze.Meta {
@@ -46,7 +43,7 @@ func (SleepInLoop) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.
 			Span:         &model.SourceSpan{StartLine: line, EndLine: line},
 		}
 	}
-	return scanLoopBody(t.Content, isPython(t.Path), sleepCallRe, mk)
+	return scanLoopBody(t.Content, analyze.FileExt(t.Path) == "py", sleepCallRe, mk)
 }
 
 func init() { analyze.Register(SleepInLoop{}) }

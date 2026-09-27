@@ -1,8 +1,6 @@
 package security
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 
@@ -10,9 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// WeakHash flags use of MD5 or SHA-1 hashing. Both are broken for any
-// security-relevant purpose (passwords, signatures, integrity). Non-security
-// uses (e.g. cache keys) exist, so this is medium severity, not high.
+// WeakHash flags MD5/SHA-1, broken for any security purpose; medium severity because
+// non-security uses (e.g. cache keys) exist.
 type WeakHash struct{}
 
 func (WeakHash) Meta() analyze.Meta {
@@ -38,12 +35,12 @@ var weakHashPatterns = []*regexp.Regexp{
 
 func (WeakHash) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := stripSlashComment(stripPyComment(sc.Text()))
+	for line, text := range analyze.Lines(t.Content) {
+		// The (?i) patterns still need a literal digit before the closing quote.
+		if !containsAny(text, "md5", "sha1", `5"`, `5'`, `1"`, `1'`) {
+			continue
+		}
+		text = stripSlashCommentKeepURL(analyze.StripPyComment(text))
 		for _, re := range weakHashPatterns {
 			if re.MatchString(text) {
 				out = append(out, analyze.Finding{

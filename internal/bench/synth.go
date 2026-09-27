@@ -7,19 +7,14 @@ import (
 	"strings"
 )
 
-// GenerateSynthetic writes a reproducible synthetic Go corpus of `files` files
-// into dir, so the small end of the benchmark is identical on every machine. It
-// is a single package whose functions call each other in a ring (yielding CALLS
-// edges) and import a few stdlib packages (yielding IMPORTS edges), producing a
-// connected graph of realistic shape.
+// GenerateSynthetic writes a reproducible Go corpus of `files` files into dir: one package whose
+// functions call each other in a ring (CALLS edges) and import stdlib packages (IMPORTS edges).
 func GenerateSynthetic(dir string, files int) error {
-	if files < 2 {
-		files = 2
-	}
+	files = max(files, 2)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}
-	for i := 0; i < files; i++ {
+	for i := range files {
 		next := (i + 1) % files
 		var b strings.Builder
 		fmt.Fprintf(&b, "package synth\n\n")

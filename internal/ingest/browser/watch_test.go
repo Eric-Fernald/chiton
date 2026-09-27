@@ -24,9 +24,8 @@ func countURLNodes(t *testing.T, gs interface {
 	return n
 }
 
-// TestWatchReingestsOnChange is the regression guard for the watcher: a History
-// file change must actually reach the ingest handler (the earlier IgnoreDir
-// misuse silently dropped every event), and shutdown must drain cleanly.
+// TestWatchReingestsOnChange guards that a History file change reaches the ingest handler (a past IgnoreDir
+// misuse dropped every event) and that shutdown drains cleanly.
 func TestWatchReingestsOnChange(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "History")

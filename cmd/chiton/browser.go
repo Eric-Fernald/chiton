@@ -6,8 +6,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Eric-Fernald/chiton/internal/config"
-	"github.com/Eric-Fernald/chiton/internal/graph/store"
 	"github.com/Eric-Fernald/chiton/internal/ingest/browser"
 )
 
@@ -42,11 +40,11 @@ func browserIngestCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			gs, closeStore, err := openWritableStore()
+			_, gs, err := loadStore(false)
 			if err != nil {
 				return err
 			}
-			defer closeStore()
+			defer gs.Close()
 
 			ing := browser.New(gs)
 			opts := browser.Options{Limit: limit, Since: sinceT, MinVisits: minVisits}
@@ -100,21 +98,18 @@ func browserWatchCmd() *cobra.Command {
 				}
 			}
 
-			gs, closeStore, err := openWritableStore()
+			_, gs, err := loadStore(false)
 			if err != nil {
 				return err
 			}
-			defer closeStore()
+			defer gs.Close()
 
 			// cmd.Context() is cancelled by the root signal handler on Ctrl-C,
 			// so the watcher stops and the store closes cleanly.
 			ing := browser.New(gs)
 			opts := browser.Options{Limit: limit, MinVisits: minVisits}
-			logf := func(format string, args ...any) {
-				fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", args...)
-			}
 			fmt.Fprintf(cmd.OutOrStdout(), "browser: watching %d history database(s) (Ctrl-C to stop)\n", len(dbs))
-			return ing.Watch(cmd.Context(), dbs, opts, time.Duration(debounceMS)*time.Millisecond, logf)
+			return ing.Watch(cmd.Context(), dbs, opts, time.Duration(debounceMS)*time.Millisecond, errLogf(cmd))
 		},
 	}
 	cmd.Flags().StringVar(&dbPath, "db", "", "Path to a specific History SQLite file (default: auto-detect)")
@@ -125,23 +120,8 @@ func browserWatchCmd() *cobra.Command {
 	return cmd
 }
 
-// openWritableStore opens the configured graph store read-write and returns it
-// with a close func, mirroring the pattern the teams/meeting ingest commands use.
-func openWritableStore() (gs store.GraphStore, closeFn func(), err error) {
-	cfg, err := config.Load()
-	if err != nil {
-		return nil, nil, err
-	}
-	s, err := openGraphStore(cfg.GraphPath, false)
-	if err != nil {
-		return nil, nil, fmt.Errorf("open store: %w", err)
-	}
-	return s, func() { s.Close() }, nil
-}
-
-// parseSince parses a --since flag: an empty string yields the zero time; a
-// YYYY-MM-DD or RFC3339 timestamp is taken literally; a Go duration (e.g. 168h)
-// is interpreted as "that long ago".
+// parseSince parses a --since flag: "" is the zero time, YYYY-MM-DD or RFC3339 is taken literally,
+// and a Go duration (e.g. 168h) means "that long ago".
 func parseSince(s string) (time.Time, error) {
 	if s == "" {
 		return time.Time{}, nil

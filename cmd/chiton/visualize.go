@@ -8,16 +8,13 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Eric-Fernald/chiton/internal/config"
 	"github.com/Eric-Fernald/chiton/internal/graph/cluster"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 	"github.com/Eric-Fernald/chiton/internal/report"
 )
 
-// visualizeCmd renders the graph as an interactive HTML page or a Mermaid
-// diagram. Unlike `chiton report` (which needs a cluster pass), this works on a
-// bare graph; a prior `chiton cluster` only enriches it with community colours
-// and betweenness sizing.
+// visualizeCmd renders the graph as interactive HTML or Mermaid. Unlike `chiton report` it works on a
+// bare graph; a prior `chiton cluster` only adds community colours and betweenness sizing.
 func visualizeCmd() *cobra.Command {
 	var format, outFile, scope, title string
 	var maxNodes int
@@ -40,24 +37,15 @@ to cap dense graphs (Mermaid is additionally capped internally).`,
 				return fmt.Errorf("unknown --format %q (want: html, mermaid)", format)
 			}
 
-			cfg, err := config.Load()
+			cfg, gs, err := loadStore(true)
 			if err != nil {
 				return err
 			}
-			gs, err := openGraphStore(cfg.GraphPath, true)
-			if err != nil {
-				return fmt.Errorf("open store: %w", err)
-			}
 			defer gs.Close()
 
-			ctx := cmd.Context()
-			nodes, err := gs.AllNodes(ctx)
+			nodes, edges, err := loadGraph(cmd.Context(), gs)
 			if err != nil {
-				return fmt.Errorf("load nodes: %w", err)
-			}
-			edges, err := gs.AllEdges(ctx)
-			if err != nil {
-				return fmt.Errorf("load edges: %w", err)
+				return err
 			}
 			if len(nodes) == 0 {
 				return fmt.Errorf("graph is empty — run 'chiton build' first")
@@ -122,15 +110,17 @@ to cap dense graphs (Mermaid is additionally capped internally).`,
 	return cmd
 }
 
-// scopeGraph filters nodes to those whose source_uri contains scope
-// (case-insensitive) and keeps only edges whose endpoints both survive. An
-// empty scope returns the inputs unchanged.
-func scopeGraph(nodes []model.Node, edges []model.Edge, scope string) ([]model.Node, []model.Edge) {
+// scopeGraph keeps nodes whose source_uri contains scope (case-insensitive) and edges whose endpoints
+// are both kept nodes or keepIDs. An empty scope returns the inputs unchanged.
+func scopeGraph(nodes []model.Node, edges []model.Edge, scope string, keepIDs ...string) ([]model.Node, []model.Edge) {
 	if scope == "" {
 		return nodes, edges
 	}
 	lower := strings.ToLower(scope)
-	kept := make(map[string]bool, len(nodes))
+	kept := make(map[string]bool, len(nodes)+len(keepIDs))
+	for _, id := range keepIDs {
+		kept[id] = true
+	}
 	var fn []model.Node
 	for _, n := range nodes {
 		if strings.Contains(strings.ToLower(n.SourceURI), lower) {

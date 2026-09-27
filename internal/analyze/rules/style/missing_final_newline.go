@@ -8,9 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// MissingFinalNewline flags files whose last line is not terminated by a
-// newline. POSIX text files should end with one; the absence breaks `cat`,
-// produces "\ No newline at end of file" diffs, and trips many linters.
+// MissingFinalNewline flags files whose last line lacks a terminating newline, which POSIX text
+// files need; its absence yields "\ No newline at end of file" diffs.
 type MissingFinalNewline struct{}
 
 func (MissingFinalNewline) Meta() analyze.Meta {
@@ -19,7 +18,7 @@ func (MissingFinalNewline) Meta() analyze.Meta {
 		Category:   analyze.CategoryStyle,
 		Severity:   analyze.SeverityLow,
 		Scope:      analyze.FileScope,
-		Languages:  []string{"go", "py", "js", "ts", "jsx", "tsx", "rs", "java"},
+		Languages:  sourceLangs,
 		Summary:    "File does not end with a newline.",
 		Fix:        "Add a trailing newline at the end of the file.",
 		Provenance: analyze.ProvenanceDeterministic,

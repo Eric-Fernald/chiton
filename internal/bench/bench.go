@@ -1,19 +1,5 @@
-// Package bench implements chiton's honest token-cost benchmark: for a corpus,
-// it answers a deterministic set of dependency questions three ways and reports
-// the token cost of each, so the README/docs can publish a table rather than a
-// single hero number.
-//
-// The three strategies model how an assistant actually gets context:
-//
-//   - naive     — read every file in scope (what a model does with no tooling).
-//   - grep+read — read the full contents of files that mention the symbol
-//     (the grep_search + read_file default of Copilot / Claude Code).
-//   - chiton    — the lean neighborhood payload chiton's MCP tools return.
-//
-// Token cost uses the same "chars ÷ 4" estimate as the Phase 0 benchmark
-// (PHASE0_BENCHMARK.md) so every strategy is measured identically. The graph is
-// built in memory from the AST extractors — no store, no MCP server — and the
-// chiton payload mirrors the lean node/edge shape the MCP server emits.
+// Package bench implements chiton's token-cost benchmark: each dependency question is costed (chars ÷ 4)
+// as naive (read every file), grep+read (files naming the symbol), and chiton's lean MCP neighborhood.
 package bench
 
 import (
@@ -54,12 +40,8 @@ type Report struct {
 	Queries      []QueryResult `json:"queries"`
 }
 
-// leanNode/leanEdge mirror the EXACT shape the MCP server returns (see
-// internal/mcp/server.go leanNode/leanEdge and toLeanNode/toLeanEdge) so the
-// chiton column measures what the model actually receives — fields and all.
-// Attrs/Provenance/Confidence are part of the real payload (Provenance and
-// Confidence are not omitempty and are always set), so omitting them would
-// understate chiton's token cost and flatter the benchmark.
+// leanNode/leanEdge mirror internal/mcp's lean shapes field-for-field (Provenance and Confidence are
+// never omitted) so the chiton column isn't flattered by a smaller payload.
 type leanNode struct {
 	Kind       model.NodeKind    `json:"kind"`
 	Label      string            `json:"label"`
@@ -90,9 +72,8 @@ func toLeanNode(n model.Node) leanNode {
 	}
 }
 
-// Run builds an in-memory graph over the supported files under path and
-// measures the token cost of the maxQueries highest-degree symbols' dependency
-// neighborhoods (depth 2). name labels the corpus in the report.
+// Run builds an in-memory graph over the supported files under path and costs the depth-2
+// neighborhoods of its maxQueries highest-degree symbols; name labels the report.
 func Run(ctx context.Context, name, path string, maxQueries int) (*Report, error) {
 	if maxQueries <= 0 {
 		maxQueries = 5
@@ -171,12 +152,8 @@ func Run(ctx context.Context, name, path string, maxQueries int) (*Report, error
 	return rep, nil
 }
 
-// grepReadTokens models "grep -l <symbol> | xargs cat": the token cost of
-// reading every file that mentions the symbol. It greps the *base* identifier a
-// developer would actually type — the part after the last '.' — because chiton
-// stores qualified method labels (e.g. "LinkService.Submit") that never appear
-// verbatim in source. Grepping a base name like "Submit" matches more broadly,
-// which faithfully captures grep's imprecision rather than hiding it.
+// grepReadTokens models "grep -l <symbol> | xargs cat" on the base identifier (after the last '.'),
+// since qualified labels like "LinkService.Submit" never appear verbatim in source.
 func grepReadTokens(label string, fileText map[string]string, fileTokens map[string]int) int {
 	needle := baseIdent(label)
 	total := 0
@@ -240,10 +217,8 @@ func (g *graph) topSymbols(n int) []string {
 		if g.degree[id] == 0 {
 			continue
 		}
-		// Skip external package/symbol nodes (e.g. fmt, http.Get): they are
-		// import targets with sky-high degree, not things a user asks "what
-		// does X depend on" about. Benchmarking them models no real query and
-		// inflates every column. Real questions target corpus-internal symbols.
+		// Skip external import targets (fmt, http.Get): their huge degree models no real question
+		// and would inflate every column.
 		if ext, _ := node.Attrs["external"].(bool); ext {
 			continue
 		}
@@ -311,8 +286,8 @@ func (g *graph) neighborhoodTokens(seed string, depth int) (int, error) {
 		Seed:  toLeanNode(sn),
 		Nodes: neighborNodes,
 		Edges: leanEdges,
-		// Match the MCP neighborhood handler's summary line so the payload is
-		// byte-faithful to what the model actually receives.
+		// Same summary as the MCP neighborhood handler. MCP indents its JSON but this compact
+		// marshal doesn't, so the chiton column slightly understates the real payload.
 		Summary: fmt.Sprintf("%d nodes, %d edges within depth %d of %q", len(neighborNodes), len(leanEdges), depth, sn.Label),
 	}
 	b, err := json.Marshal(payload)

@@ -1,6 +1,8 @@
 package cluster
 
 import (
+	"fmt"
+	"maps"
 	"math/rand"
 	"testing"
 
@@ -95,6 +97,24 @@ func TestDisconnectedNodes(t *testing.T) {
 	}
 	if len(seen) != 3 {
 		t.Errorf("expected 3 distinct communities for 3 isolated nodes, got %d", len(seen))
+	}
+}
+
+// TestRunDeterministic verifies a fixed seed yields identical partitions even when many moves tie on gain.
+func TestRunDeterministic(t *testing.T) {
+	const n = 300
+	var nodes []model.Node
+	var edges []model.Edge
+	for i := range n {
+		id := fmt.Sprint("n", i)
+		nodes = append(nodes, makeNode(id, id))
+		edges = append(edges, makeEdge(id, fmt.Sprint("n", (i+1)%n)), makeEdge(id, fmt.Sprint("n", (i*7+3)%n)))
+	}
+	want := Run(nodes, edges, 2.0, rand.New(rand.NewSource(1)))
+	for range 5 {
+		if got := Run(nodes, edges, 2.0, rand.New(rand.NewSource(1))); !maps.Equal(got, want) {
+			t.Fatal("Run gave different partitions for the same seed")
+		}
 	}
 }
 

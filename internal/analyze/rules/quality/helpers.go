@@ -2,56 +2,14 @@ package quality
 
 import (
 	"bytes"
+	"slices"
 
 	"github.com/Eric-Fernald/chiton/internal/analyze"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// qStripComment drops the content of a // or # line comment from s while
-// respecting simple string/char/backtick literals so a `//` inside a string is
-// not treated as the start of a comment. Block comments are not tracked across
-// lines, matching the extractor's per-line behaviour. The leading-`#` form
-// covers Python/Ruby/shell; the `//` form covers C-family languages.
-func qStripComment(s string) string {
-	var inStr byte
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if inStr != 0 {
-			if c == '\\' && i+1 < len(s) {
-				i++
-				continue
-			}
-			if c == inStr {
-				inStr = 0
-			}
-			continue
-		}
-		switch c {
-		case '"', '\'', '`':
-			inStr = c
-		case '/':
-			if i+1 < len(s) && s[i+1] == '/' {
-				return s[:i]
-			}
-		case '#':
-			return s[:i]
-		}
-	}
-	return s
-}
-
-// qMaskFiller is the neutral byte that replaces literal/comment content so the
-// rule regexes can no longer match keywords/operators that live inside them.
-const qMaskFiller = 'x'
-
-// qMaskLiteralsAndComments returns a copy of src with the BODIES of string,
-// char, and backtick literals, // and # line comments, /* */ block comments,
-// and Python triple-quoted strings replaced by the filler byte 'x'. Newlines
-// are preserved so reported line numbers stay accurate. Block comments and
-// triple-quoted strings are tracked across lines, so callers must mask the
-// WHOLE file content once (not line-by-line). A lone single quote that is not a
-// valid char literal (e.g. a Rust lifetime `&'a`) is NOT treated as a string
-// opener, so code after it still reaches the rule regex.
+// qMaskLiteralsAndComments masks string/char/backtick/triple-quoted literals and //, #, /* */ comments with
+// 'x', keeping newlines. It tracks state across lines, so mask the whole file once, never line by line.
 func qMaskLiteralsAndComments(src []byte) []byte {
 	out := make([]byte, len(src))
 	copy(out, src)
@@ -66,81 +24,77 @@ func qMaskLiteralsAndComments(src []byte) []byte {
 			if c == '\n' {
 				inLine = false
 			} else {
-				out[i] = qMaskFiller
+				out[i] = analyze.MaskFiller
 			}
 		case inBlock:
 			if c == '*' && i+1 < len(out) && out[i+1] == '/' {
-				out[i] = qMaskFiller
-				out[i+1] = qMaskFiller
+				out[i] = analyze.MaskFiller
+				out[i+1] = analyze.MaskFiller
 				i++
 				inBlock = false
 			} else if c != '\n' {
-				out[i] = qMaskFiller
+				out[i] = analyze.MaskFiller
 			}
 		case triple != nil:
 			if c == '\\' {
 				if i+1 < len(out) && out[i+1] != '\n' {
-					out[i] = qMaskFiller
-					out[i+1] = qMaskFiller
+					out[i] = analyze.MaskFiller
+					out[i+1] = analyze.MaskFiller
 				}
 				i++
 				continue
 			}
-			if c == triple[0] && qHasTripleAt(out, i, triple[0]) {
-				out[i] = qMaskFiller
-				out[i+1] = qMaskFiller
-				out[i+2] = qMaskFiller
+			if c == triple[0] && analyze.HasTripleAt(out, i, triple[0]) {
+				out[i] = analyze.MaskFiller
+				out[i+1] = analyze.MaskFiller
+				out[i+2] = analyze.MaskFiller
 				i += 2
 				triple = nil
 			} else if c != '\n' {
-				out[i] = qMaskFiller
+				out[i] = analyze.MaskFiller
 			}
 		case inStr != 0:
 			if c == '\\' {
 				if i+1 < len(out) && out[i+1] != '\n' {
-					out[i] = qMaskFiller
-					out[i+1] = qMaskFiller
+					out[i] = analyze.MaskFiller
+					out[i+1] = analyze.MaskFiller
 				}
 				i++ // skip escaped char
 				continue
 			}
 			if c == inStr {
 				inStr = 0
-				out[i] = qMaskFiller
+				out[i] = analyze.MaskFiller
 			} else if c == '\n' {
 				inStr = 0 // unterminated; reset at line end
 			} else {
-				out[i] = qMaskFiller
+				out[i] = analyze.MaskFiller
 			}
 		default:
 			switch {
 			case c == '/' && i+1 < len(out) && out[i+1] == '/':
 				inLine = true
-				out[i] = qMaskFiller
+				out[i] = analyze.MaskFiller
 			case c == '/' && i+1 < len(out) && out[i+1] == '*':
 				inBlock = true
-				out[i] = qMaskFiller
+				out[i] = analyze.MaskFiller
 			case c == '#':
 				inLine = true
-				out[i] = qMaskFiller
-			case (c == '"' || c == '\'') && qHasTripleAt(out, i, c):
+				out[i] = analyze.MaskFiller
+			case (c == '"' || c == '\'') && analyze.HasTripleAt(out, i, c):
 				triple = []byte{c}
-				out[i] = qMaskFiller
-				out[i+1] = qMaskFiller
-				out[i+2] = qMaskFiller
+				out[i] = analyze.MaskFiller
+				out[i+1] = analyze.MaskFiller
+				out[i+2] = analyze.MaskFiller
 				i += 2
 			case c == '"' || c == '`':
 				inStr = c
-				out[i] = qMaskFiller
+				out[i] = analyze.MaskFiller
 			case c == '\'':
-				// Distinguish a char literal (`'c'`, `'\n'`) from a Rust
-				// lifetime/label (`'a`) which has no closing quote. Only treat
-				// it as a string opener when a valid char literal closes nearby;
-				// otherwise leave it (and the following ident) untouched so code
-				// after a lifetime still reaches the rule regex.
+				// Mask only a closed char literal; a Rust lifetime (`'a`) must not swallow the code after it.
 				if end := qCharLitEnd(out, i); end > i {
 					for j := i; j <= end; j++ {
-						out[j] = qMaskFiller
+						out[j] = analyze.MaskFiller
 					}
 					i = end
 				}
@@ -151,10 +105,8 @@ func qMaskLiteralsAndComments(src []byte) []byte {
 	return out
 }
 
-// qCharLitEnd reports the index of the closing quote of a char literal starting
-// at out[i] (which must be '\”), or i itself (no advance) when out[i:] is not a
-// valid char literal — e.g. a Rust lifetime `'a` with no closing quote. Handles
-// the escaped form `'\n'`.
+// qCharLitEnd returns the index of the closing quote of a char literal (`'c'` or `'\n'`) opening at out[i],
+// or i itself when there is none, as with a Rust lifetime `'a`.
 func qCharLitEnd(out []byte, i int) int {
 	// `'\x'` — escaped char literal.
 	if i+3 < len(out) && out[i+1] == '\\' && out[i+3] == '\'' {
@@ -167,54 +119,34 @@ func qCharLitEnd(out []byte, i int) int {
 	return i
 }
 
-// qHasTripleAt reports whether out[i:i+3] is three consecutive q bytes.
-func qHasTripleAt(out []byte, i int, q byte) bool {
-	return i+2 < len(out) && out[i] == q && out[i+1] == q && out[i+2] == q
-}
-
-// qFuncBody describes a single function-like symbol and the source lines that
-// make up its body, so per-function rules (complexity, return-count) can share
-// one boundary-detection path modelled on the long-function rule: both read the
-// extractor's symbol spans rather than re-parsing function signatures.
+// qFuncBody is a function-like symbol and its body lines, located by the extractor's symbol spans (like
+// LongFunction) rather than by re-parsing signatures.
 type qFuncBody struct {
 	node  model.Node
-	lines []string // body source lines, 1:1 with the span (comments NOT stripped)
+	lines [][]byte // body lines, 1:1 with the span, with literals and comments masked
 }
 
-// qFuncBodiesMasked returns one qFuncBody per function-like symbol in the
-// target that has a valid span within the file content, with the body lines'
-// string, char, comment, and triple-quoted-string contents replaced by filler
-// bytes (a per-FILE masking pass). It mirrors LongFunction's reliance on
-// extractor-provided spans, so it inherits the same notion of "function".
-// Per-function rules that scan for keywords/operators (complexity, return-count)
-// use this so tokens inside literals/comments/docstrings — and Rust lifetimes —
-// are not counted.
+// qFuncBodiesMasked returns the masked body of every function-like symbol whose span fits the file, so
+// keywords/operators inside literals, comments, and docstrings are not counted.
 func qFuncBodiesMasked(t analyze.FileTarget) []qFuncBody {
-	return funcBodiesFrom(t, qMaskLiteralsAndComments(t.Content))
-}
-
-// funcBodiesFrom is the shared implementation: it slices content into the body
-// lines of each function-like symbol using the extractor's spans.
-func funcBodiesFrom(t analyze.FileTarget, content []byte) []qFuncBody {
-	fileLines := bytes.Split(content, []byte("\n"))
+	// Skip the masking when no function has a usable span (extractors that set no EndLine).
+	if !slices.ContainsFunc(t.Nodes, qHasBodySpan) {
+		return nil
+	}
+	fileLines := analyze.Cached(t, "quality/masked-lines", func() [][]byte {
+		return bytes.Split(qMaskLiteralsAndComments(t.Content), []byte("\n"))
+	})
 	var out []qFuncBody
 	for _, n := range t.Nodes {
-		if n.Kind != model.KindSymbol || n.Span == nil {
+		if !qHasBodySpan(n) || n.Span.EndLine > len(fileLines) {
 			continue
 		}
-		lk, _ := n.Attrs["lang_kind"].(string)
-		if !isFuncLike(lk) {
-			continue
-		}
-		start, end := n.Span.StartLine, n.Span.EndLine
-		if start < 1 || end < start || end > len(fileLines) {
-			continue
-		}
-		body := make([]string, 0, end-start+1)
-		for i := start - 1; i < end; i++ {
-			body = append(body, string(fileLines[i]))
-		}
-		out = append(out, qFuncBody{node: n, lines: body})
+		out = append(out, qFuncBody{node: n, lines: fileLines[n.Span.StartLine-1 : n.Span.EndLine]})
 	}
 	return out
+}
+
+// qHasBodySpan reports whether n is function-like with a non-empty 1-based line span.
+func qHasBodySpan(n model.Node) bool {
+	return isFuncNode(n) && n.Span.StartLine >= 1 && n.Span.EndLine >= n.Span.StartLine
 }

@@ -2,9 +2,8 @@ package subagent
 
 import "github.com/Eric-Fernald/chiton/internal/graph/model"
 
-// The submit schema is identical for both task kinds — concepts plus typed
-// edges — so it is defined once. Host assistants return JSON of this shape via
-// submit_extraction / `chiton extract submit`.
+// submitSchema is shared by both task kinds: concepts plus typed edges, returned via submit_extraction /
+// `chiton extract submit`.
 const submitSchema = `{
   "task_id": "<echo the task id>",
   "concepts": [

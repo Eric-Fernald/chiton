@@ -8,9 +8,8 @@ import (
 	"strings"
 )
 
-// HookMarker is the comment chiton writes into every hook script so we can
-// recognise (and safely replace/remove) hooks chiton owns without clobbering
-// hooks the user wrote.
+// HookMarker is written into every chiton hook script so chiton can replace or remove its own hooks
+// without clobbering ones the user wrote.
 const HookMarker = "# managed by chiton — do not edit"
 
 // InstallReport summarises a hooks install/uninstall pass.
@@ -20,11 +19,8 @@ type InstallReport struct {
 	Notes   []string `json:"notes,omitempty"`
 }
 
-// Install writes chiton-owned git hooks for each stage into hooksDir.
-//
-// If a stage's hook file already exists and is not chiton-owned, it is left
-// alone and reported in Notes — chiton never overwrites third-party hooks.
-// Existing chiton-owned hooks are refreshed in place.
+// Install writes chiton-owned git hooks for each stage into hooksDir, refreshing its own hooks in place;
+// a pre-existing third-party hook is never overwritten, only reported in Notes.
 func Install(hooksDir, exe string, stages []Stage) (InstallReport, error) {
 	rep := InstallReport{}
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
@@ -83,7 +79,7 @@ func Uninstall(hooksDir string, stages []Stage) (InstallReport, error) {
 	return rep, nil
 }
 
-// Status reports which hooks are present and whether they are chiton-owned.
+// StatusEntry reports whether one stage's hook is present and whether chiton owns it.
 type StatusEntry struct {
 	Stage       Stage  `json:"stage"`
 	Path        string `json:"path"`
@@ -114,11 +110,8 @@ func Status(hooksDir string, stages []Stage) ([]StatusEntry, error) {
 	return out, nil
 }
 
-// scriptFor returns the shell content for a hook of stage that invokes the
-// given chiton executable. Gating stages (pre-commit/pre-push) run the
-// finding-gate (`hooks run`); sync stages (post-commit/post-checkout) re-index
-// the changed files (`sync git`). Plain POSIX sh so Git for Windows can execute
-// it through its bundled bash.
+// scriptFor returns the hook script for stage: gating stages run `hooks run`, sync stages `sync git`.
+// It is plain POSIX sh so Git for Windows can run it through its bundled bash.
 func scriptFor(stage Stage, exe string) string {
 	var invocation string
 	switch stage {
@@ -150,17 +143,15 @@ func isChitonOwned(path string) (bool, error) {
 }
 
 func exists(path string) (bool, error) {
-	if _, err := os.Stat(path); err == nil {
-		return true, nil
-	} else if os.IsNotExist(err) {
+	_, err := os.Stat(path)
+	if os.IsNotExist(err) {
 		return false, nil
-	} else {
-		return false, err
 	}
+	return err == nil, err
 }
 
-// shellQuote single-quotes s for safe use as a POSIX sh argument. Embedded
-// single quotes are encoded as '\”.
+// shellQuote single-quotes s as one POSIX sh argument; each embedded quote closes the string, adds an
+// escaped quote, and reopens it.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,10 +10,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/bench"
 )
 
-// benchCmd measures the token cost of answering dependency questions over a
-// corpus three ways (naive / grep+read / chiton), and prints a Markdown table.
-// It builds the graph in memory — no store or running server required — so it
-// is safe to run anywhere and reproducible across machines.
+// benchCmd compares the token cost of answering dependency questions naively, via grep+read, and via
+// chiton. The graph is built in memory (no store or server), so it runs anywhere reproducibly.
 func benchCmd() *cobra.Command {
 	var name string
 	var queries, synth int
@@ -63,12 +60,7 @@ synthetic corpus of N Go files instead. Output is a Markdown table by default.`,
 
 			out := cmd.OutOrStdout()
 			if asJSON {
-				b, err := json.MarshalIndent(rep, "", "  ")
-				if err != nil {
-					return err
-				}
-				fmt.Fprintln(out, string(b))
-				return nil
+				return printJSON(out, rep)
 			}
 			bench.FormatMarkdown(out, []*bench.Report{rep})
 			return nil

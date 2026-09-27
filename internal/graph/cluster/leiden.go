@@ -1,26 +1,18 @@
-// Package cluster implements the Leiden community detection algorithm.
-//
-// Input is a slice of model.Node and model.Edge. Output is a map from node ID
-// to integer community ID (0-based, compact). The algorithm treats the graph
-// as undirected and unweighted (edge weight = 1).
-//
-// Reference: Traag, V.A., Waltman, L. & van Eck, N.J. (2019).
-// "From Louvain to Leiden: guaranteeing well-connected communities."
-// Scientific Reports 9, 5233. https://doi.org/10.1038/s41598-019-41695-z
+// Package cluster implements Leiden community detection (Traag et al. 2019) on the graph treated as
+// undirected and unweighted, mapping each node ID to a compact 0-based community ID.
 package cluster
 
 import (
 	"math/rand"
+	"slices"
 
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
 const eps = 1e-10
 
-// Run executes the Leiden algorithm and returns a map from node ID to community
-// ID. Resolution γ controls granularity: higher = smaller communities.
-// γ=1.0 gives standard modularity-equivalent behaviour. Pass nil rng to use a
-// fixed seed.
+// Run maps each node ID to a community ID. Higher resolution γ yields smaller communities (1.0 is standard
+// modularity); a nil rng uses a fixed seed.
 func Run(nodes []model.Node, edges []model.Edge, resolution float64, rng *rand.Rand) map[string]int {
 	if len(nodes) == 0 {
 		return nil
@@ -49,7 +41,7 @@ func Run(nodes []model.Node, edges []model.Edge, resolution float64, rng *rand.R
 // ── internal graph ────────────────────────────────────────────────────────────
 
 // graph is an undirected weighted graph with 0-based integer node indices.
-// All edge weights are 1.0 (unweighted graphs).
+// Input edges weigh 1.0; aggregation sums them.
 type graph struct {
 	n      int
 	adj    [][]nbr
@@ -100,54 +92,79 @@ type pstate struct {
 	commDeg []float64 // commDeg[c] = sum of node degrees in community c
 }
 
-func newState(g *graph, comm []int) *pstate {
-	maxC := 0
-	for _, c := range comm {
-		if c > maxC {
-			maxC = c
+// singletonState puts every node in its own community.
+func singletonState(g *graph) *pstate {
+	comm := make([]int, g.n)
+	for i := range comm {
+		comm[i] = i
+	}
+	return &pstate{comm: comm, commDeg: slices.Clone(g.deg)}
+}
+
+// commWeights sums edge weight per neighbouring community in reusable buffers, listing communities in
+// first-seen order so tie-breaks between equal gains are deterministic.
+type commWeights struct {
+	w    []float64
+	seen []bool
+	list []int
+}
+
+func newCommWeights(numComm int) *commWeights {
+	return &commWeights{w: make([]float64, numComm), seen: make([]bool, numComm)}
+}
+
+func (cw *commWeights) add(adj []nbr, comm []int) {
+	for _, nb := range adj {
+		c := comm[nb.id]
+		if !cw.seen[c] {
+			cw.seen[c] = true
+			cw.list = append(cw.list, c)
 		}
+		cw.w[c] += nb.weight
 	}
-	st := &pstate{
-		comm:    append([]int(nil), comm...),
-		commDeg: make([]float64, maxC+1),
+}
+
+func (cw *commWeights) clear() {
+	for _, c := range cw.list {
+		cw.w[c], cw.seen[c] = 0, false
 	}
-	for i, c := range comm {
-		st.commDeg[c] += g.deg[i]
-	}
-	return st
+	cw.list = cw.list[:0]
 }
 
 // ── local moving ──────────────────────────────────────────────────────────────
 
-// localMoving runs greedy modularity-improving moves until stable.
-// Returns whether any node was moved.
-func localMoving(g *graph, st *pstate, γ float64, rng *rand.Rand) bool {
+// moveNodes moves nodes to the neighbouring community with the best modularity gain for up to 20 sweeps,
+// reporting whether any moved; a non-nil coarse restricts moves to communities within the node's coarse community.
+func moveNodes(g *graph, st *pstate, γ float64, rng *rand.Rand, coarse []int) bool {
 	if g.totalW == 0 {
 		return false
 	}
 	twoM := 2 * g.totalW
 	improved := false
+	order := make([]int, g.n)
+	nc := newCommWeights(len(st.commDeg))
 
 	for iter := 0; iter < 20; iter++ {
 		moved := false
-		for _, v := range permutation(g.n, rng) {
+		permutation(order, rng)
+		for _, v := range order {
 			cOld := st.comm[v]
 			kv := g.deg[v]
 
-			nc := neighborComms(g.adj[v], st.comm)
+			nc.clear()
+			nc.add(g.adj[v], st.comm)
 
 			// Baseline score for staying in cOld (v excluded from cOld's degree).
 			degOld := st.commDeg[cOld] - kv
-			kvOld := nc[cOld]
-			base := kvOld - γ*kv*degOld/twoM
+			base := nc.w[cOld] - γ*kv*degOld/twoM
 
 			bestComm := cOld
 			bestGain := 0.0
-			for c, kvc := range nc {
-				if c == cOld {
+			for _, c := range nc.list {
+				if c == cOld || (coarse != nil && coarse[c] != coarse[v]) {
 					continue
 				}
-				score := kvc - γ*kv*st.commDeg[c]/twoM
+				score := nc.w[c] - γ*kv*st.commDeg[c]/twoM
 				if gain := score - base; gain > bestGain+eps {
 					bestGain = gain
 					bestComm = c
@@ -169,123 +186,53 @@ func localMoving(g *graph, st *pstate, γ float64, rng *rand.Rand) bool {
 	return improved
 }
 
-// neighborComms returns the sum of edge weights from v to each adjacent community.
-func neighborComms(adj []nbr, comm []int) map[int]float64 {
-	nc := make(map[int]float64, len(adj))
-	for _, nb := range adj {
-		nc[comm[nb.id]] += nb.weight
-	}
-	return nc
-}
-
 // ── Leiden refinement ─────────────────────────────────────────────────────────
 
-// refine runs constrained local moving within each coarse community, producing
-// a finer partition. This is the step that distinguishes Leiden from Louvain:
-// it guarantees that each final community was well-connected before aggregation.
+// refine re-runs local moving from singletons, merging only within each coarse community: Leiden's
+// guarantee, unlike Louvain, that every community is well-connected before aggregation.
 func refine(g *graph, coarseComm []int, γ float64, rng *rand.Rand) []int {
-	// Start with every node in its own singleton fine community.
-	fineComm := make([]int, g.n)
-	for i := range fineComm {
-		fineComm[i] = i
-	}
-	st := newState(g, fineComm)
-	// coarseOf maps a fine community ID to its coarse community.
-	// Initially fine community i contains only node i, so coarseOf[i] = coarseComm[i].
-	coarseOf := append([]int(nil), coarseComm...)
-
-	if g.totalW == 0 {
-		return fineComm
-	}
-	twoM := 2 * g.totalW
-
-	for iter := 0; iter < 20; iter++ {
-		moved := false
-		for _, v := range permutation(g.n, rng) {
-			cOld := st.comm[v]
-			kv := g.deg[v]
-			cv := coarseComm[v]
-
-			nc := neighborComms(g.adj[v], st.comm)
-
-			degOld := st.commDeg[cOld] - kv
-			kvOld := nc[cOld]
-			base := kvOld - γ*kv*degOld/twoM
-
-			bestComm := cOld
-			bestGain := 0.0
-			for c, kvc := range nc {
-				if c == cOld {
-					continue
-				}
-				if coarseOf[c] != cv {
-					continue // only merge within same coarse community
-				}
-				score := kvc - γ*kv*st.commDeg[c]/twoM
-				if gain := score - base; gain > bestGain+eps {
-					bestGain = gain
-					bestComm = c
-				}
-			}
-			if bestComm == cOld {
-				continue
-			}
-			st.commDeg[cOld] -= kv
-			st.commDeg[bestComm] += kv
-			st.comm[v] = bestComm
-			moved = true
-		}
-		if !moved {
-			break
-		}
-	}
+	st := singletonState(g)
+	// Fine community c starts as the singleton {c}, so coarseComm[c] is its coarse community.
+	moveNodes(g, st, γ, rng, coarseComm)
 	return st.comm
 }
 
 // ── aggregation ───────────────────────────────────────────────────────────────
 
-// aggregate builds a reduced graph where each community in comm is a super-node.
-// Edge weights in the aggregate are sums of inter-community edge weights.
-// The comm slice is compacted in-place to 0-based IDs before aggregation.
+// aggregate builds a reduced graph whose super-nodes are the communities in comm, weighting each edge by the
+// summed inter-community edge weight. It also returns comm compacted to 0-based IDs.
 func aggregate(g *graph, comm []int) (*graph, []int) {
 	comm = compactComm(comm)
 	numComm := 0
 	for _, c := range comm {
-		if c+1 > numComm {
-			numComm = c + 1
-		}
+		numComm = max(numComm, c+1)
 	}
 
-	type pair struct{ a, b int }
-	edgeW := make(map[pair]float64)
-	for u := 0; u < g.n; u++ {
-		cu := comm[u]
-		for _, nb := range g.adj[u] {
-			cv := comm[nb.id]
-			if cu == cv {
-				continue
-			}
-			p := pair{cu, cv}
-			if cu > cv {
-				p = pair{cv, cu}
-			}
-			// Each undirected edge (u,v) appears in adj[u] and adj[v], so we
-			// accumulate half the true weight per direction; dividing by 2 below
-			// gives the correct inter-community edge weight.
-			edgeW[p] += nb.weight
-		}
+	members := make([][]int, numComm)
+	for u, c := range comm {
+		members[c] = append(members[c], u)
 	}
 
 	aggAdj := make([][]nbr, numComm)
 	aggDeg := make([]float64, numComm)
 	var totalW float64
-	for p, w := range edgeW {
-		w /= 2
-		aggAdj[p.a] = append(aggAdj[p.a], nbr{p.b, w})
-		aggAdj[p.b] = append(aggAdj[p.b], nbr{p.a, w})
-		aggDeg[p.a] += w
-		aggDeg[p.b] += w
-		totalW += w
+	cw := newCommWeights(numComm)
+	for c, us := range members {
+		cw.clear()
+		for _, u := range us {
+			cw.add(g.adj[u], comm)
+		}
+		for _, d := range cw.list {
+			if d == c {
+				continue
+			}
+			w := cw.w[d]
+			aggAdj[c] = append(aggAdj[c], nbr{d, w})
+			aggDeg[c] += w
+			if c < d {
+				totalW += w
+			}
+		}
 	}
 	return &graph{n: numComm, adj: aggAdj, deg: aggDeg, totalW: totalW}, comm
 }
@@ -303,13 +250,8 @@ func runLeiden(g0 *graph, γ float64, rng *rand.Rand) []int {
 
 	g := g0
 	for {
-		comm := make([]int, g.n)
-		for i := range comm {
-			comm[i] = i
-		}
-		st := newState(g, comm)
-
-		if !localMoving(g, st, γ, rng) {
+		st := singletonState(g)
+		if !moveNodes(g, st, γ, rng, nil) {
 			break
 		}
 
@@ -333,23 +275,29 @@ func runLeiden(g0 *graph, γ float64, rng *rand.Rand) []int {
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-func permutation(n int, rng *rand.Rand) []int {
-	p := make([]int, n)
+// permutation fills p with a random permutation of 0..len(p)-1.
+func permutation(p []int, rng *rand.Rand) {
 	for i := range p {
 		p[i] = i
 	}
-	rng.Shuffle(n, func(i, j int) { p[i], p[j] = p[j], p[i] })
-	return p
+	rng.Shuffle(len(p), func(i, j int) { p[i], p[j] = p[j], p[i] })
 }
 
 // compactComm remaps community IDs to a contiguous 0-based range, preserving
 // relative order of first occurrence.
 func compactComm(comm []int) []int {
-	remap := make(map[int]int, len(comm))
+	maxC := -1
+	for _, c := range comm {
+		maxC = max(maxC, c)
+	}
+	remap := make([]int, maxC+1)
+	for i := range remap {
+		remap[i] = -1
+	}
 	next := 0
 	result := make([]int, len(comm))
 	for i, c := range comm {
-		if _, ok := remap[c]; !ok {
+		if remap[c] < 0 {
 			remap[c] = next
 			next++
 		}

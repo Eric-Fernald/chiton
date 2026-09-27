@@ -1,6 +1,5 @@
-// Package kuzu will hold the Kuzu embedded graph store implementation.
-// Kuzu requires CGo and a C compiler; on platforms where those are unavailable
-// use the badger store instead.
+// Package kuzu is a placeholder for a Kuzu (CGo) graph store; every method returns ErrUnavailable,
+// so use the badger store.
 package kuzu
 
 import (

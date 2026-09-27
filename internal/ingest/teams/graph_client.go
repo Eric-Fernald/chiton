@@ -2,6 +2,7 @@
 
 // The Microsoft Graph client. Excluded from the default build — see
 // graph_stub.go for why, and for the msgraph-free counterpart.
+
 package teams
 
 import (
@@ -15,21 +16,9 @@ import (
 	"github.com/microsoftgraph/msgraph-sdk-go/users"
 )
 
-// graphScopes requests the application (.default) scope: app-only auth with the
-// OnlineMeetingTranscript.Read.All application permission (admin-consented) plus
-// an application access policy granting the app rights to the organizer's
-// meetings. See docs — this is the unattended-daemon path the plan calls for.
+// graphScopes is the app-only .default scope; it needs OnlineMeetingTranscript.Read.All plus an application
+// access policy covering the organizer's meetings.
 var graphScopes = []string{"https://graph.microsoft.com/.default"}
-
-// GraphConfig configures the Microsoft Graph transcript source (app-only auth).
-type GraphConfig struct {
-	TenantID     string
-	ClientID     string
-	ClientSecret string
-	// UserID is the meeting organizer's id or UPN: transcripts are read under
-	// /users/{UserID}/onlineMeetings/... (app-only has no /me).
-	UserID string
-}
 
 // GraphSource is the Microsoft Graph implementation of TranscriptSource.
 type GraphSource struct {
@@ -80,8 +69,9 @@ func (g *GraphSource) ListTranscripts(ctx context.Context, meetingID string) ([]
 	if coll == nil {
 		return nil, nil
 	}
-	var metas []TranscriptMeta
-	for _, t := range coll.GetValue() {
+	vals := coll.GetValue()
+	metas := make([]TranscriptMeta, 0, len(vals))
+	for _, t := range vals {
 		m := TranscriptMeta{MeetingID: meetingID}
 		if id := t.GetId(); id != nil {
 			m.ID = *id
@@ -96,9 +86,8 @@ func (g *GraphSource) ListTranscripts(ctx context.Context, meetingID string) ([]
 	return metas, nil
 }
 
-// FetchContent fetches a transcript's content as WebVTT. The Accept header
-// requests text/vtt; ToGetRequestInformation only TryAdds its own Accept, so
-// ours wins.
+// FetchContent fetches a transcript as WebVTT; our Accept: text/vtt wins because ToGetRequestInformation only
+// TryAdds its own Accept header.
 func (g *GraphSource) FetchContent(ctx context.Context, meetingID, transcriptID string) ([]byte, error) {
 	headers := abstractions.NewRequestHeaders()
 	headers.Add("Accept", "text/vtt")

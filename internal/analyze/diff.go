@@ -1,24 +1,24 @@
 package analyze
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/Eric-Fernald/chiton/internal/fsutil"
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
 )
 
-// Baseline is a snapshot of the finding set at a particular commit, written to
-// .chiton/baselines/<commit>.json after a successful analyze run. `--diff`
-// compares the live finding set against the most recent baseline so a commit
-// is judged only on the findings it adds, not pre-existing tech debt.
+// Baseline is the finding set at a commit (.chiton/baselines/<commit>.json); `--diff` compares
+// against the latest one so a commit is judged only on the findings it adds.
 type Baseline struct {
 	Commit      string        `json:"commit"`
 	GeneratedAt time.Time     `json:"generated_at"`
@@ -42,9 +42,8 @@ type DiffResult struct {
 	Changed  []FindingChange `json:"changed"`
 }
 
-// Diff compares a baseline finding set to the current one, keyed by stable
-// finding ID. New = present now but not in baseline; Resolved = in baseline but
-// gone now; Changed = same ID with a different message or severity.
+// Diff compares a baseline finding set to the current one by stable finding ID; Changed means
+// the same ID with a different message or severity.
 func Diff(baseline, current []FindingView) DiffResult {
 	base := indexFindings(baseline)
 	cur := indexFindings(current)
@@ -67,7 +66,7 @@ func Diff(baseline, current []FindingView) DiffResult {
 	}
 	sortFindings(res.New)
 	sortFindings(res.Resolved)
-	sort.Slice(res.Changed, func(i, j int) bool { return res.Changed[i].ID < res.Changed[j].ID })
+	slices.SortFunc(res.Changed, func(a, b FindingChange) int { return strings.Compare(a.ID, b.ID) })
 	return res
 }
 
@@ -101,7 +100,7 @@ func SaveBaseline(dir, commit string, findings []FindingView, now time.Time) (st
 		return "", err
 	}
 	path := filepath.Join(dir, baselineFile(commit))
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := fsutil.WriteFileAtomic(path, data, 0o644); err != nil {
 		return "", err
 	}
 	return path, nil
@@ -114,7 +113,7 @@ func LoadBaseline(dir, commit string) (*Baseline, error) {
 		return LatestBaseline(dir)
 	}
 	b, err := readBaseline(filepath.Join(dir, baselineFile(commit)))
-	if os.IsNotExist(err) {
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
 	return b, err
@@ -124,7 +123,7 @@ func LoadBaseline(dir, commit string) (*Baseline, error) {
 // (nil, nil) when the directory has none.
 func LatestBaseline(dir string) (*Baseline, error) {
 	entries, err := os.ReadDir(dir)
-	if os.IsNotExist(err) {
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
@@ -139,9 +138,7 @@ func LatestBaseline(dir string) (*Baseline, error) {
 		if err != nil {
 			continue // skip unreadable/corrupt baselines
 		}
-		// Newest GeneratedAt wins; on an exact tie (e.g. baselines copied across
-		// machines preserving the timestamp) break deterministically by commit
-		// so "latest" never depends on directory iteration order.
+		// Newest GeneratedAt wins; ties break by commit so the result never depends on dir order.
 		if latest == nil || b.GeneratedAt.After(latest.GeneratedAt) ||
 			(b.GeneratedAt.Equal(latest.GeneratedAt) && b.Commit > latest.Commit) {
 			latest = b
@@ -176,18 +173,14 @@ func baselineFile(commit string) string {
 	return safe + ".json"
 }
 
-// GitCommit resolves ref to a full commit SHA in repoDir. Returns "" with no
-// error when git is unavailable or the ref does not resolve (e.g. a non-git
-// folder), so callers can fall back to a "working" baseline.
+// GitCommit resolves ref to a full commit SHA in repoDir, or "" when git is unavailable or the
+// ref doesn't resolve, so callers can fall back to a "working" baseline.
 func GitCommit(repoDir, ref string) string {
-	cmd := exec.Command("git", "-C", repoDir, "rev-parse", ref)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = nil
-	if err := cmd.Run(); err != nil {
+	out, err := exec.Command("git", "-C", repoDir, "rev-parse", ref).Output()
+	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(out.String())
+	return strings.TrimSpace(string(out))
 }
 
 // CurrentFindings is a convenience that lists confirmed (non-AMBIGUOUS)

@@ -1,17 +1,15 @@
 package security
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
+	"strings"
 
 	"github.com/Eric-Fernald/chiton/internal/analyze"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// CredentialsInURL flags a URL with embedded credentials of the form
-// scheme://user:pass@host. Such URLs leak secrets into logs, history, and
+// CredentialsInURL flags scheme://user:pass@host URLs, which leak secrets into logs, history, and
 // process listings.
 type CredentialsInURL struct{}
 
@@ -28,21 +26,13 @@ func (CredentialsInURL) Meta() analyze.Meta {
 	}
 }
 
-// scheme://user:pass@host. The userinfo must contain a colon (user:pass) so a
-// bare "host:port" path component does not match. Scheme, user, and pass are
-// restricted to URL-credential-safe characters to keep this conservative.
-// A non-empty password segment is required to avoid matching e.g. "git@host".
+// credsInURLRe requires a non-empty user:pass before '@', so "host:port" and "git@host" don't match.
 var credsInURLRe = regexp.MustCompile(`\b[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s:/@"']+:[^\s:/@"']+@[\w.\-]`)
 
 func (CredentialsInURL) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := sc.Text()
-		if credsInURLRe.MatchString(text) {
+	for line, text := range analyze.Lines(t.Content) {
+		if strings.Contains(text, "://") && credsInURLRe.MatchString(text) {
 			out = append(out, analyze.Finding{
 				RuleID:       "security/credentials-in-url",
 				Severity:     analyze.SeverityHigh,

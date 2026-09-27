@@ -5,9 +5,8 @@ import (
 	"testing"
 )
 
-// Regression tests for false positives fixed in the security category.
-// Each case asserts the reported FP input yields ZERO findings while a genuine
-// true positive STILL fires. Reuses the package-local target() helper.
+// False-positive regression tests: each FP input must yield zero findings while a genuine true
+// positive still fires.
 
 func TestInsecureTLSVerify_FP_PythonVerifyFalse(t *testing.T) {
 	r := InsecureTLSVerify{}

@@ -1,17 +1,11 @@
-// Package ast extracts graph nodes and edges from source files using
-// the Go standard library parser. No CGo required.
 package ast
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	goast "go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
@@ -20,77 +14,43 @@ import (
 // GoExtractor parses Go source files and emits typed graph nodes and edges.
 type GoExtractor struct{}
 
-// ExtractFile parses a single .go file and returns its nodes and edges.
-//
-// Emits:
-//   - 1 file node per source file
-//   - 1 symbol node per top-level func/type declaration
-//   - CONTAINS edges from file → each symbol
-//   - IMPORTS edges from file → each imported package (package node is external)
-//   - CALLS edges: direct intra-file calls and package-level selector calls
-//     (pkg.Method where pkg is an import alias). Cross-file direct calls and
-//     receiver method calls require go/types; skipped.
-func (g *GoExtractor) ExtractFile(_ context.Context, path string) ([]model.Node, []model.Edge, error) {
-	src, err := os.ReadFile(path)
-	if err != nil {
-		return nil, nil, fmt.Errorf("read %s: %w", path, err)
-	}
+func (g *GoExtractor) ExtractFile(ctx context.Context, path string) ([]model.Node, []model.Edge, error) {
+	return extractFile(ctx, g, path)
+}
 
+// ExtractSource parses a single .go file into file, top-level func/type, and imported-package nodes.
+// CALLS covers intra-file direct calls and pkg.Func selector calls; receiver method calls need go/types.
+func (g *GoExtractor) ExtractSource(_ context.Context, path string, src []byte) ([]model.Node, []model.Edge, error) {
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, src, parser.ParseComments)
+	// Object resolution is skipped: only identifier names are read, never ast.Object links.
+	f, err := parser.ParseFile(fset, path, src, parser.ParseComments|parser.SkipObjectResolution)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 
-	absPath, _ := filepath.Abs(path)
-	uri := "file://" + filepath.ToSlash(absPath)
-	sum := sha256.Sum256(src)
-
-	fileNode := model.Node{
-		ID:            model.NewNodeID(uri, uri),
-		Kind:          model.KindFile,
-		Label:         filepath.Base(path),
-		SourceURI:     uri,
-		Provenance:    model.ProvExtracted,
-		Confidence:    1.0,
-		ContentSHA256: fmt.Sprintf("%x", sum[:]),
-		Attrs:         map[string]any{"language": "go", "package": f.Name.Name},
-	}
+	fileNode := newFileNode(path, src, map[string]any{"language": "go", "package": f.Name.Name})
+	uri := fileNode.SourceURI
 
 	nodes := []model.Node{fileNode}
 	var edges []model.Edge
 
-	// symbols maps unqualified func name → node ID for intra-file CALLS resolution.
+	// symbols maps plain func and type names → node ID for intra-file CALLS resolution. Methods are left out:
+	// a bare call can't name one, and same-named methods on different types would overwrite each other.
 	symbols := map[string]string{}
-
-	// Imports → package nodes + IMPORTS edges.
-	for _, imp := range f.Imports {
-		pkgPath := strings.Trim(imp.Path.Value, `"`)
-		pkgURI := "pkg://" + pkgPath
-		pkgNode := model.Node{
-			ID:         model.NewNodeID(pkgURI, pkgPath),
-			Kind:       model.KindSymbol,
-			Label:      pkgPath,
-			SourceURI:  pkgURI,
-			Provenance: model.ProvExtracted,
-			Confidence: 1.0,
-			Attrs:      map[string]any{"external": true},
-		}
-		nodes = append(nodes, pkgNode)
-		edges = append(edges, model.Edge{
-			ID:         model.NewEdgeID(fileNode.ID, pkgNode.ID, model.EdgeImports),
-			Src:        fileNode.ID,
-			Dst:        pkgNode.ID,
-			Kind:       model.EdgeImports,
-			Provenance: model.ProvExtracted,
-			Confidence: 1.0,
-		})
+	type funcBody struct {
+		id   string
+		body *goast.BlockStmt
 	}
+	var bodies []funcBody
 
-	// Build alias → full package path map for resolving selector call expressions.
-	importAliases := map[string]string{}
+	// Imports → package nodes + IMPORTS edges, and alias → package path for selector calls.
+	importAliases := make(map[string]string, len(f.Imports))
 	for _, imp := range f.Imports {
 		pkgPath := strings.Trim(imp.Path.Value, `"`)
+		pkgNode := importNode(pkgPath)
+		nodes = append(nodes, pkgNode)
+		edges = append(edges, importEdge(fileNode.ID, pkgNode.ID))
+
 		alias := pkgPath[strings.LastIndexByte(pkgPath, '/')+1:]
 		if imp.Name != nil && imp.Name.Name != "_" && imp.Name.Name != "." {
 			alias = imp.Name.Name
@@ -124,7 +84,12 @@ func (g *GoExtractor) ExtractFile(_ context.Context, path string) ([]model.Node,
 				Attrs:      attrs,
 			}
 			nodes = append(nodes, sym)
-			symbols[d.Name.Name] = sym.ID
+			if d.Recv == nil {
+				symbols[d.Name.Name] = sym.ID
+			}
+			if d.Body != nil {
+				bodies = append(bodies, funcBody{id: sym.ID, body: d.Body})
+			}
 			edges = append(edges, containsEdge(fileNode.ID, sym.ID))
 
 		case *goast.GenDecl:
@@ -157,20 +122,10 @@ func (g *GoExtractor) ExtractFile(_ context.Context, path string) ([]model.Node,
 		}
 	}
 
-	// CALLS edges: walk each func body for two cases:
-	//   1. Direct calls to symbols defined in this file (e.g. fetch(url)).
-	//   2. Selector calls where X is an import alias (e.g. http.Get(url)).
-	//      Receiver method calls and chained calls require go/types; skipped.
-	for _, decl := range f.Decls {
-		fd, ok := decl.(*goast.FuncDecl)
-		if !ok || fd.Body == nil {
-			continue
-		}
-		callerID, ok := symbols[fd.Name.Name]
-		if !ok {
-			continue
-		}
-		goast.Inspect(fd.Body, func(n goast.Node) bool {
+	// CALLS edges: direct calls to this file's symbols, and pkg.Func calls where pkg is an import alias.
+	for _, fb := range bodies {
+		callerID := fb.id
+		goast.Inspect(fb.body, func(n goast.Node) bool {
 			call, ok := n.(*goast.CallExpr)
 			if !ok {
 				return true
@@ -181,14 +136,7 @@ func (g *GoExtractor) ExtractFile(_ context.Context, path string) ([]model.Node,
 				if !ok || calleeID == callerID {
 					return true
 				}
-				edges = append(edges, model.Edge{
-					ID:         model.NewEdgeID(callerID, calleeID, model.EdgeCalls),
-					Src:        callerID,
-					Dst:        calleeID,
-					Kind:       model.EdgeCalls,
-					Provenance: model.ProvExtracted,
-					Confidence: 1.0,
-				})
+				edges = append(edges, callsEdge(callerID, calleeID))
 			case *goast.SelectorExpr:
 				xIdent, ok := fun.X.(*goast.Ident)
 				if !ok {
@@ -198,56 +146,24 @@ func (g *GoExtractor) ExtractFile(_ context.Context, path string) ([]model.Node,
 				if !ok {
 					return true
 				}
+				pkgURI := "pkg://" + pkgPath
 				calleeNode := model.Node{
-					ID:         model.NewNodeID("pkg://"+pkgPath, fun.Sel.Name),
+					ID:         model.NewNodeID(pkgURI, fun.Sel.Name),
 					Kind:       model.KindSymbol,
 					Label:      xIdent.Name + "." + fun.Sel.Name,
-					SourceURI:  "pkg://" + pkgPath,
+					SourceURI:  pkgURI,
 					Provenance: model.ProvExtracted,
 					Confidence: 1.0,
 					Attrs:      map[string]any{"external": true},
 				}
 				nodes = append(nodes, calleeNode)
-				edges = append(edges, model.Edge{
-					ID:         model.NewEdgeID(callerID, calleeNode.ID, model.EdgeCalls),
-					Src:        callerID,
-					Dst:        calleeNode.ID,
-					Kind:       model.EdgeCalls,
-					Provenance: model.ProvExtracted,
-					Confidence: 1.0,
-				})
+				edges = append(edges, callsEdge(callerID, calleeNode.ID))
 			}
 			return true
 		})
 	}
 
 	return nodes, edges, nil
-}
-
-// ExtractDir walks dir recursively, extracts all .go files, and returns
-// the combined nodes and edges. Files that fail to parse are skipped with
-// a warning printed to stderr (parse errors in one file should not abort the build).
-func (g *GoExtractor) ExtractDir(ctx context.Context, dir string) ([]model.Node, []model.Edge, error) {
-	var allNodes []model.Node
-	var allEdges []model.Edge
-
-	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() || !strings.HasSuffix(path, ".go") {
-			return nil
-		}
-		nodes, edges, err := g.ExtractFile(ctx, path)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "chiton: skip %s: %v\n", path, err)
-			return nil
-		}
-		allNodes = append(allNodes, nodes...)
-		allEdges = append(allEdges, edges...)
-		return nil
-	})
-	return allNodes, allEdges, err
 }
 
 // --- helpers ---

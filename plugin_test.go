@@ -9,9 +9,8 @@ import (
 	"testing"
 )
 
-// These tests guard the Claude Code plugin layout. The manifests, the skills,
-// and the MCP registration are only exercised by an actual Claude Code install,
-// so nothing else in the test suite would notice if one of them broke.
+// These tests guard the Claude Code plugin layout, which otherwise only an actual Claude Code install
+// would exercise.
 
 var kebab = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
@@ -152,9 +151,8 @@ func TestSkillsAreLoadable(t *testing.T) {
 		if !strings.Contains(front, "description:") {
 			t.Errorf("skills/%s/SKILL.md has no description; Claude cannot tell when to use it", dir)
 		}
-		// The directory name supplies the command in both the plugin layout
-		// (/chiton:<dir>) and the .claude/skills layout that `chiton install`
-		// writes. An explicit name: would desynchronise the two.
+		// The directory name supplies the command in both the plugin and `chiton install` layouts;
+		// an explicit name: would desynchronise the two.
 		if strings.Contains(front, "name:") {
 			t.Errorf("skills/%s/SKILL.md pins an explicit name:, which collides with the plugin namespace", dir)
 		}

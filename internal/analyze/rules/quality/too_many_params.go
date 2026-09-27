@@ -1,11 +1,8 @@
 package quality
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"fmt"
-	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -13,9 +10,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// TooManyParams flags a function/method declaration with more than
-// MaxParams parameters. A long parameter list usually signals a missing
-// struct/options object and hurts call-site readability.
+// TooManyParams flags a function/method declaration with more than MaxParams parameters; a long list
+// usually signals a missing struct/options object.
 type TooManyParams struct{}
 
 // MaxParams is the threshold; lists with more than this many parameters fire.
@@ -34,15 +30,8 @@ func (TooManyParams) Meta() analyze.Meta {
 	}
 }
 
-// funcDeclRe matches the start of a function/method declaration across the
-// supported languages and captures the open paren that begins the parameter
-// list. It is deliberately anchored to declaration keywords / patterns so that
-// ordinary call expressions are not counted.
-//
-//   - An optional Go method receiver `(r T)` may appear between `func` and the
-//     name, so receiver methods (`func (s *S) Do(...)`) are matched.
-//   - Generic/type-parameter lists may be `[...]` (Go/Rust) OR `<...>` (TS/Rust),
-//     so generic signatures are matched.
+// funcDeclRe matches a keyword-led declaration up to its parameter list's open paren, so call expressions
+// never count. It allows a Go receiver and `[...]`/`<...>` type parameters before the list.
 var funcDeclRe = regexp.MustCompile(
 	`(?:\bfunc\b|\bdef\b|\bfn\b|\bfunction\b)\s*` + // go/py/rust/js keyword form
 		`(?:\([^)]*\)\s*)?` + // optional Go method receiver
@@ -50,21 +39,20 @@ var funcDeclRe = regexp.MustCompile(
 		`\s*(?:\[[^\]]*\]|<[^>]*>)?` + // optional generic/type params ([..] or <..>)
 		`\s*\(`)
 
-// methodDeclRe matches a Java/TS-style method declaration: an access or
-// modifier keyword, then `name(`. Requires a leading modifier so we don't
-// match arbitrary `foo(` call sites.
+// methodDeclRe matches a Java/TS-style method declaration: a modifier keyword, then `name(`; requiring the
+// modifier keeps arbitrary `foo(` call sites out.
 var methodDeclRe = regexp.MustCompile(
 	`(?:\bpublic\b|\bprivate\b|\bprotected\b|\bstatic\b|\bfinal\b|\babstract\b)` +
 		`[^;={}()]*\b[A-Za-z_][A-Za-z0-9_]*\s*\(`)
 
 func (TooManyParams) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := qStripComment(sc.Text())
+	isPy := analyze.FileExt(t.Path) == "py"
+	for line, raw := range analyze.Lines(t.Content) {
+		if strings.IndexByte(raw, '(') < 0 {
+			continue
+		}
+		text := analyze.StripLineComment(raw, true)
 		loc := funcDeclRe.FindStringIndex(text)
 		if loc == nil {
 			loc = methodDeclRe.FindStringIndex(text)
@@ -72,21 +60,15 @@ func (TooManyParams) MatchFile(_ context.Context, t analyze.FileTarget) []analyz
 		if loc == nil {
 			continue
 		}
-		// Parameter list starts at the last '(' inside the matched declaration.
-		open := strings.LastIndexByte(text[:loc[1]], '(')
-		if open < 0 {
-			continue
-		}
-		params, ok := paramList(text[open:])
+		// Both regexes end at the parameter list's opening paren.
+		params, ok := paramList(text[loc[1]-1:])
 		if !ok {
-			// Parameter list not closed on this single line — skip to avoid
-			// guessing across line continuations (keeps FP low).
+			// Not closed on this line: skip rather than guess across continuations (keeps FP low).
 			continue
 		}
 		n := countParams(params)
-		// In Python the implicit receiver (`self`/`cls`) is not a real
-		// parameter from the caller's perspective; do not count it.
-		if isPyPath(t.Path) && n > 0 && hasLeadingSelf(params) {
+		// Python's implicit receiver (`self`/`cls`) is not a parameter from the caller's perspective.
+		if isPy && n > 0 && hasLeadingSelf(params) {
 			n--
 		}
 		if n <= MaxParams {
@@ -106,31 +88,19 @@ func (TooManyParams) MatchFile(_ context.Context, t analyze.FileTarget) []analyz
 	return out
 }
 
-// isPyPath reports whether path names a Python source file.
-func isPyPath(path string) bool {
-	return strings.EqualFold(filepath.Ext(path), ".py")
-}
-
 // hasLeadingSelf reports whether the first parameter in a Python parameter list
 // is the implicit receiver `self` or `cls` (optionally type-annotated/defaulted).
 func hasLeadingSelf(params string) bool {
-	first := params
-	if i := strings.IndexByte(first, ','); i >= 0 {
-		first = first[:i]
-	}
-	first = strings.TrimSpace(first)
+	first, _, _ := strings.Cut(params, ",")
 	// Strip any annotation/default so `self: Foo` / `cls = X` still match.
-	for _, sep := range []string{":", "="} {
-		if i := strings.Index(first, sep); i >= 0 {
-			first = strings.TrimSpace(first[:i])
-		}
-	}
+	first, _, _ = strings.Cut(first, ":")
+	first, _, _ = strings.Cut(first, "=")
+	first = strings.TrimSpace(first)
 	return first == "self" || first == "cls"
 }
 
-// paramList takes a string beginning at the opening '(' of a parameter list and
-// returns the inner text up to the matching ')'. ok is false if the list is not
-// balanced on this line (e.g. a multi-line signature).
+// paramList returns the text between the '(' that s starts with and its matching ')'; ok is false when the
+// list is not balanced on this line (e.g. a multi-line signature).
 func paramList(s string) (string, bool) {
 	if len(s) == 0 || s[0] != '(' {
 		return "", false
@@ -150,9 +120,8 @@ func paramList(s string) (string, bool) {
 	return "", false
 }
 
-// countParams counts top-level comma-separated parameters in a parameter list,
-// ignoring commas nested in generics/tuples/defaults. An empty (or whitespace)
-// list counts as zero.
+// countParams counts top-level comma-separated parameters, skipping commas nested in brackets or generics;
+// an empty or blank list counts as zero.
 func countParams(s string) int {
 	if strings.TrimSpace(s) == "" {
 		return 0

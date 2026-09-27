@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
 // maxBodyBytes caps how much of a response/file is read into memory.
@@ -47,7 +49,11 @@ func (h *httpFetcher) fetch(ctx context.Context, rawURL string) (*fetchResult, e
 	}
 	switch strings.ToLower(u.Scheme) {
 	case "file":
-		return h.fetchFile(filepath.FromSlash(strings.TrimPrefix(rawURL, "file://")))
+		path, ok := model.PathFromFileURI(rawURL)
+		if !ok { // no lower-case "file://" prefix (e.g. "FILE://x"): the raw string is the path
+			path = filepath.FromSlash(rawURL)
+		}
+		return h.fetchFile(path)
 	case "http", "https":
 		if isYouTube(u.Host) {
 			return h.fetchYouTube(ctx, rawURL)
@@ -74,7 +80,7 @@ func (h *httpFetcher) fetchFile(path string) (*fetchResult, error) {
 	}
 	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(abs)), ".")
 	return &fetchResult{
-		canonicalURL: "file://" + filepath.ToSlash(abs),
+		canonicalURL: model.FileURI(path),
 		contentType:  contentTypeForExt(ext),
 		title:        strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs)),
 		ext:          ext,
@@ -128,9 +134,8 @@ func (h *httpFetcher) fetchHTTP(ctx context.Context, rawURL string) (*fetchResul
 	}, nil
 }
 
-// fetchYouTube shells out to yt-dlp to retrieve a video's title and English
-// (auto-)subtitles as WebVTT, which extractText then renders to plain text. It
-// returns a clear error when yt-dlp is not installed.
+// fetchYouTube shells out to yt-dlp for a video's title and English (auto-)subtitles as WebVTT,
+// returning a clear error when yt-dlp is not installed.
 func (h *httpFetcher) fetchYouTube(ctx context.Context, rawURL string) (*fetchResult, error) {
 	bin := h.ytdlp
 	if bin == "" {
@@ -193,11 +198,8 @@ func firstFileWithExt(dir, ext string) (string, error) {
 	return "", fmt.Errorf("no %s file in %s", ext, dir)
 }
 
-// hostAllowed reports whether host is safe to fetch, blocking SSRF to internal
-// services: it rejects literal or DNS-resolved loopback, private, link-local,
-// and unspecified addresses. (A determined DNS-rebinding attacker can still
-// race resolution between this check and the dial; closing that fully would
-// need a custom DialContext — out of scope for this local single-user tool.)
+// hostAllowed rejects hosts that are or resolve to loopback, private, link-local, or unspecified addresses
+// (SSRF guard). DNS rebinding can still race this check and the dial; closing that needs a custom dialer.
 func hostAllowed(host string) error {
 	if host == "" {
 		return nil // file:// and other scheme-less inputs don't reach here

@@ -1,9 +1,5 @@
-// Package embed provides a pluggable embedding-provider interface and the
-// helpers chiton uses to turn graph nodes into embeddable text.
-//
-// The default provider is Ollama (local, no API key). A deterministic
-// HashEmbedder is provided for offline/CI use and for tests, so the whole
-// semantic layer is exercisable without a running model.
+// Package embed provides pluggable embedding providers (local Ollama by default; a deterministic
+// HashEmbedder for offline/CI and tests) and the helpers that turn graph nodes into embeddable text.
 package embed
 
 import (
@@ -12,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
+	"github.com/Eric-Fernald/chiton/internal/graph/store"
 )
 
 // Embedder turns text into fixed-dimension float32 vectors. Implementations
@@ -51,9 +48,8 @@ func New(cfg Config) (Embedder, error) {
 	}
 }
 
-// TextFor returns the text chiton embeds for a node, or "" if the node kind
-// is not embedded. We embed symbols (label + docstring), doc sections (their
-// text), and concepts (label + description).
+// TextFor returns the text chiton embeds for a node — symbol label + docstring, doc section label + text,
+// concept label + description — or "" if the node kind is not embedded.
 func TextFor(n model.Node) string {
 	switch n.Kind {
 	case model.KindSymbol:
@@ -70,15 +66,43 @@ func TextFor(n model.Node) string {
 	}
 }
 
-// Embeddable reports whether TextFor would return a non-empty string.
-func Embeddable(n model.Node) bool { return TextFor(n) != "" }
-
-func join(parts ...string) string {
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if s := strings.TrimSpace(p); s != "" {
-			out = append(out, s)
+// NodeEmbeddings embeds, in one Embed call, each node TextFor gives text for; results as for TextEmbeddings.
+func NodeEmbeddings(ctx context.Context, e Embedder, nodes []model.Node) (embs []store.Embedding, exact bool, err error) {
+	var ids, texts []string
+	for _, n := range nodes {
+		if t := TextFor(n); t != "" {
+			ids = append(ids, n.ID)
+			texts = append(texts, t)
 		}
 	}
-	return strings.Join(out, "\n")
+	return TextEmbeddings(ctx, e, ids, texts)
+}
+
+// TextEmbeddings embeds texts in one call (none if empty), pairing vectors with ids in order, truncated to the
+// shorter list; exact reports whether the embedder returned exactly one vector per text.
+func TextEmbeddings(ctx context.Context, e Embedder, ids, texts []string) (embs []store.Embedding, exact bool, err error) {
+	if len(texts) == 0 {
+		return nil, true, nil
+	}
+	vecs, err := e.Embed(ctx, texts)
+	if err != nil {
+		return nil, false, err
+	}
+	embs = make([]store.Embedding, min(len(ids), len(vecs)))
+	for i := range embs {
+		embs[i] = store.Embedding{NodeID: ids[i], Vec: vecs[i]}
+	}
+	return embs, len(vecs) == len(texts), nil
+}
+
+// join joins the trimmed, non-empty parts with a newline.
+func join(a, b string) string {
+	a, b = strings.TrimSpace(a), strings.TrimSpace(b)
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	}
+	return a + "\n" + b
 }

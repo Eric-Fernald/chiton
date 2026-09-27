@@ -1,13 +1,5 @@
-// Package audio transcribes local audio/video into a meeting.Transcript.
-//
-// The default, always-available backend (NewShell) shells out to a configured
-// whisper CLI (OpenAI's `whisper` or whisper.cpp's `whisper-cli`) — pure Go,
-// no CGo, no build-time C toolchain. An in-process whisper.cpp backend lives in
-// whisper_cgo.go behind the `whisper_cgo` build tag (NewCgo); it needs
-// CGO_ENABLED=1, a C compiler, libwhisper, and
-// `go get github.com/ggerganov/whisper.cpp/bindings/go`, so it is excluded from
-// the default build. Both backends produce the same Transcript, which then
-// flows through meeting.ToGraph exactly like a downloaded .vtt.
+// Package audio transcribes local audio/video into a meeting.Transcript via a whisper CLI (NewShell, pure Go)
+// or, with the whisper_cgo build tag, in-process whisper.cpp bindings (NewCgo).
 package audio
 
 import (

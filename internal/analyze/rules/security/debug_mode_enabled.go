@@ -1,8 +1,6 @@
 package security
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 
@@ -10,9 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// DebugModeEnabled flags web-framework debug mode left on. In Flask/Django,
-// debug mode exposes an interactive debugger / stack traces (the Werkzeug
-// console is effectively RCE). Test files are skipped.
+// DebugModeEnabled flags web-framework debug mode left on outside tests; in Flask the Werkzeug
+// debugger console is effectively RCE.
 type DebugModeEnabled struct{}
 
 func (DebugModeEnabled) Meta() analyze.Meta {
@@ -39,12 +36,11 @@ func (DebugModeEnabled) MatchFile(_ context.Context, t analyze.FileTarget) []ana
 		return nil
 	}
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := stripSlashComment(stripPyComment(sc.Text()))
+	for line, text := range analyze.Lines(t.Content) {
+		if !containsAny(text, "debug", "DEBUG") {
+			continue
+		}
+		text = stripSlashCommentKeepURL(analyze.StripPyComment(text))
 		for _, re := range debugModePatterns {
 			if re.MatchString(text) {
 				out = append(out, analyze.Finding{

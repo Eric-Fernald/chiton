@@ -1,8 +1,6 @@
 package bugs
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 
@@ -10,10 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// AssignmentInCondition flags `if (x = y)` / `while (x = y)` in C-family
-// languages (JS/TS/Java) where a single `=` inside the condition is almost
-// always a typo for `==` / `===`. Compound assignment operators (+=, ==, etc.)
-// are excluded.
+// AssignmentInCondition flags `if (x = y)` / `while (x = y)` in JS/TS/Java, where a lone `=` in the
+// condition is almost always a typo for `==` / `===`.
 type AssignmentInCondition struct{}
 
 func (AssignmentInCondition) Meta() analyze.Meta {
@@ -29,21 +25,15 @@ func (AssignmentInCondition) Meta() analyze.Meta {
 	}
 }
 
-// `if (` or `while (` followed by an identifier/member-access, then a lone `=`
-// (not ==, +=, -=, etc.) and a value. The char before `=` is constrained to the
-// identifier/whitespace tail so compound operators (`+=`, `<=`) don't match.
+// The identifier/member-only lvalue keeps compound operators (`+=`, `<=`) from matching; `([^=]|$)`
+// rejects `==`.
 var assignInCondBareRe = regexp.MustCompile(
 	`\b(if|while)\s*\(\s*[A-Za-z_$][\w$.\[\]]*\s*=([^=]|$)`)
 
 func (AssignmentInCondition) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := stripJSComment(sc.Text())
-		if assignInCondBareRe.MatchString(text) {
+	for line, raw := range analyze.Lines(t.Content) {
+		if assignInCondBareRe.MatchString(analyze.StripLineComment(raw, false)) {
 			out = append(out, analyze.Finding{
 				RuleID:       "bugs/assignment-in-condition",
 				Severity:     analyze.SeverityHigh,

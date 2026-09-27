@@ -1,17 +1,5 @@
-// Package subagent implements chiton's subagent-mode semantic extraction.
-//
-// chiton never calls an LLM itself in this mode. Instead it emits structured
-// task specs (Pending) describing what needs extracting — doc-section concepts,
-// image descriptions — and ingests the host assistant's structured results
-// (Submit), writing concept nodes and semantic edges into the graph tagged
-// INFERRED or AMBIGUOUS by confidence. The MCP tools and the `chiton extract`
-// CLI are both thin wrappers over this one Service, so a future daemon mode
-// (direct LLM calls) can reuse the exact same write path.
-//
-// Output shape is pinned by an explicit JSON schema in every task spec, so
-// ingested content can never smuggle instructions into a chiton prompt — there
-// is no chiton prompt. That is the prompt-injection mitigation the security
-// section of the plan calls for.
+// Package subagent emits semantic-extraction task specs (Pending) for a host assistant and ingests its
+// schema-pinned JSON results (Submit); chiton calls no LLM and has no prompt for ingested text to hijack.
 package subagent
 
 import (
@@ -35,9 +23,8 @@ const (
 // complete, so Pending will not re-emit it.
 const extractionStatusDone = "done"
 
-// Service emits extraction task specs and ingests their results.
-// embedder is optional; when present, Submit embeds new concept nodes inline
-// so they are immediately retrievable (otherwise the next `chiton embed` does).
+// Service emits extraction task specs and ingests their results. With an embedder, Submit embeds new
+// concepts inline so they are immediately retrievable; otherwise the next `chiton embed` does.
 type Service struct {
 	store     store.GraphStore
 	embedder  embed.Embedder
@@ -54,9 +41,8 @@ func New(s store.GraphStore, embedder embed.Embedder, threshold float32) *Servic
 	return &Service{store: s, embedder: embedder, threshold: threshold, now: time.Now}
 }
 
-// TaskSpec is one unit of work for the host assistant. Input carries the doc
-// section's text or the image's file path; Schema/Instructions tell the
-// assistant exactly what JSON to return.
+// TaskSpec is one unit of work for the host assistant: the doc section's text or the image's path, plus
+// the Schema/Instructions for the JSON to return.
 type TaskSpec struct {
 	ID           string `json:"id"`    // source node ID (also the submit task_id)
 	Kind         string `json:"kind"`  // doc_concepts | image_description
@@ -67,11 +53,10 @@ type TaskSpec struct {
 	Instructions string `json:"instructions"`
 }
 
-// Pending returns task specs for nodes that still need semantic extraction:
-// doc_section and image nodes whose attrs["extraction_status"] != "done".
+// Pending returns task specs for doc_section and image nodes whose attrs["extraction_status"] != "done".
 // kind filters to one task kind (""=both); limit<=0 means no cap.
 func (s *Service) Pending(ctx context.Context, kind string, limit int) ([]TaskSpec, error) {
-	nodes, err := s.store.AllNodes(ctx)
+	nodes, err := store.NodesMatching(ctx, s.store, store.NodeFilter{Kinds: []model.NodeKind{model.KindDocSection, model.KindImage}})
 	if err != nil {
 		return nil, fmt.Errorf("load nodes: %w", err)
 	}
@@ -114,10 +99,8 @@ type ConceptResult struct {
 	Confidence  float32 `json:"confidence"`
 }
 
-// EdgeResult links the source node (by its task ID) or a concept to a concept.
-// From may be "" (defaults to the source node) or a concept label from the same
-// submission; To is a concept label. Kind is a semantic edge kind; empty
-// defaults to DESCRIBES.
+// EdgeResult links From (a concept label from the same submission, or "" for the source node) to the
+// concept labelled To. Kind is a semantic edge kind; empty or unknown defaults to DESCRIBES.
 type EdgeResult struct {
 	From       string  `json:"from"`
 	To         string  `json:"to"`
@@ -140,18 +123,14 @@ type SubmitReport struct {
 	Ambiguous     int    `json:"ambiguous"`
 }
 
-// Submit ingests one task's results: it creates/updates concept nodes and
-// semantic edges (provenance INFERRED, or AMBIGUOUS below threshold), marks the
-// source node done, and (if an embedder is wired) embeds the new concepts.
-// It is idempotent: stable IDs mean re-submitting the same result is a no-op.
+// Submit writes concept nodes and semantic edges (INFERRED, or AMBIGUOUS below threshold), marks the source
+// done, and embeds the new concepts if an embedder is wired. Stable IDs make re-submits a no-op.
 func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, error) {
 	if r.TaskID == "" {
 		return SubmitReport{}, fmt.Errorf("submit: task_id is required")
 	}
-	// Reject a read-only store before doing any work (notably the per-concept
-	// embed round-trips below), mirroring the analyze submit path, so the caller
-	// gets an actionable message instead of a raw backend write error.
-	if ro, ok := s.store.(store.ReadOnlyAware); ok && ro.ReadOnly() {
+	// Reject a read-only store before any work (notably the embed round-trip below), with an actionable message.
+	if store.IsReadOnly(s.store) {
 		return SubmitReport{}, fmt.Errorf("submit: store is read-only — restart 'chiton serve --writable' or use 'chiton extract submit'")
 	}
 	src, err := s.store.GetNode(ctx, r.TaskID)
@@ -168,7 +147,6 @@ func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, err
 	// Build concept nodes, keyed by label for edge resolution.
 	conceptID := map[string]string{}
 	var nodes []model.Node
-	var toEmbed []store.Embedding
 	for _, c := range r.Concepts {
 		label := strings.TrimSpace(c.Label)
 		if label == "" {
@@ -178,7 +156,7 @@ func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, err
 		if prov == model.ProvAmbiguous {
 			rep.Ambiguous++
 		}
-		uri := "concept://" + slug(label)
+		uri := "concept://" + model.Slug(label, "concept")
 		id := model.NewNodeID(uri, label)
 		conceptID[label] = id
 		n := model.Node{
@@ -197,15 +175,12 @@ func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, err
 		}
 		nodes = append(nodes, n)
 		rep.ConceptsAdded++
+	}
 
-		if s.embedder != nil {
-			if text := embed.TextFor(n); text != "" {
-				vecs, err := s.embedder.Embed(ctx, []string{text})
-				if err == nil && len(vecs) == 1 {
-					toEmbed = append(toEmbed, store.Embedding{NodeID: id, Vec: vecs[0]})
-				}
-			}
-		}
+	// Embedding is best-effort: a concept left without a vector gets one from the next `chiton embed`.
+	var toEmbed []store.Embedding
+	if s.embedder != nil {
+		toEmbed = s.embedConcepts(ctx, nodes)
 	}
 
 	// Mark the source node done (preserve its other attrs).
@@ -246,10 +221,8 @@ func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, err
 		rep.EdgesAdded++
 	}
 
-	// If no edges were actually written — the result declared none, OR every
-	// declared edge referenced a concept we didn't create (all skipped above) —
-	// default to DESCRIBES from the source to every extracted concept, so
-	// concepts are never orphaned in the graph.
+	// No edge survived (none declared, or all pointed at uncreated concepts): default to DESCRIBES from the
+	// source to every concept so none is orphaned.
 	if len(edges) == 0 {
 		for _, c := range r.Concepts {
 			toID, ok := conceptID[strings.TrimSpace(c.Label)]
@@ -287,6 +260,21 @@ func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, err
 	return rep, nil
 }
 
+// embedConcepts embeds concepts in one batch, retrying one concept per call if the batch fails or returns the
+// wrong vector count, so only concepts that fail on their own go without a vector.
+func (s *Service) embedConcepts(ctx context.Context, concepts []model.Node) []store.Embedding {
+	if embs, exact, err := embed.NodeEmbeddings(ctx, s.embedder, concepts); err == nil && exact {
+		return embs
+	}
+	var embs []store.Embedding
+	for i := range concepts {
+		if one, exact, err := embed.NodeEmbeddings(ctx, s.embedder, concepts[i:i+1]); err == nil && exact {
+			embs = append(embs, one...)
+		}
+	}
+	return embs
+}
+
 // edgeKind normalises a host-supplied edge kind to a known semantic kind,
 // defaulting to DESCRIBES for empty/unknown values.
 func edgeKind(raw string) model.EdgeKind {
@@ -308,28 +296,4 @@ func edgeKind(raw string) model.EdgeKind {
 	default:
 		return model.EdgeDescribes
 	}
-}
-
-// slug lowercases and replaces runs of non-alphanumerics with single hyphens,
-// for a readable concept:// URI. Empty input yields "concept".
-func slug(s string) string {
-	var b strings.Builder
-	lastHyphen := false
-	for _, r := range strings.ToLower(s) {
-		switch {
-		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
-			b.WriteRune(r)
-			lastHyphen = false
-		default:
-			if !lastHyphen {
-				b.WriteByte('-')
-				lastHyphen = true
-			}
-		}
-	}
-	out := strings.Trim(b.String(), "-")
-	if out == "" {
-		return "concept"
-	}
-	return out
 }

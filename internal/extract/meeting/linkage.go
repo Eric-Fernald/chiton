@@ -15,31 +15,20 @@ import (
 // KindMeetingLinkage is the subagent task kind for meeting→code linkage.
 const KindMeetingLinkage = "meeting_linkage"
 
-// linkageStatusDone marks a meeting whose linkage is complete, so Pending will
-// not re-emit it. Reuses the same attr key as semantic extraction; meeting and
-// doc/image nodes never collide because each Pending only scans its own kinds.
+// linkageStatusDone marks a linked meeting so Pending skips it. It shares the extraction_status attr with
+// semantic extraction; no collision, since each Pending scans only its own node kinds.
 const linkageStatusDone = "done"
 
-// defaultMaxCandidates caps the candidate-symbol hint menu in a task spec, so a
-// large corpus does not blow the host assistant's context budget. The menu is a
-// hint only — submit resolves any returned label against the whole graph.
+// defaultMaxCandidates caps a task spec's candidate-symbol menu to protect the host's context budget. The
+// menu is only a hint: submit resolves any returned label against the whole graph.
 const defaultMaxCandidates = 300
 
-// defaultDiscussedConfidence is the confidence assigned to a "merely discussed"
-// symbol link, which the host reports without a per-item score. It is a real
-// confidence (not the threshold), run through model.ResolveProvenance like every
-// other INFERRED edge so it splits INFERRED/AMBIGUOUS consistently.
+// defaultDiscussedConfidence scores a "merely discussed" symbol link (the host gives no per-item score); it
+// goes through model.ResolveProvenance like every other INFERRED edge.
 const defaultDiscussedConfidence float32 = 0.7
 
-// LinkService runs chiton's meeting→code linkage in subagent mode: it emits one
-// task spec per un-linked meeting (the transcript text plus a menu of candidate
-// code-symbol labels), and ingests the host assistant's structured decisions,
-// writing decision/rationale nodes and DECIDED_IN / DISCUSSED_IN / ACTION_FOR /
-// MENTIONED / RATIONALE_FOR edges tagged INFERRED (or AMBIGUOUS below the
-// confidence threshold). chiton calls no LLM itself — exactly mirroring the
-// doc/image semantic-extraction and LLM-rule paths. This is the capability the
-// plan calls out as unique: meeting decisions linked back to the code symbols
-// they reference.
+// LinkService runs meeting→code linkage in subagent mode: Pending emits one task spec per un-linked meeting,
+// Submit writes the host's decisions as INFERRED (or AMBIGUOUS) nodes/edges. chiton calls no LLM itself.
 type LinkService struct {
 	store         store.GraphStore
 	threshold     float32
@@ -56,10 +45,8 @@ func NewLinkService(s store.GraphStore, threshold float32) *LinkService {
 	return &LinkService{store: s, threshold: threshold, maxCandidates: defaultMaxCandidates, now: time.Now}
 }
 
-// LinkTaskSpec is one unit of linkage work for the host assistant. Input is the
-// transcript text; CandidateSymbols is a hint menu of code-symbol labels that
-// appear to be referenced. Schema/Instructions pin the JSON the assistant must
-// return via submit_meeting_links / `chiton meeting submit`.
+// LinkTaskSpec is one unit of linkage work: the transcript text, a hint menu of code-symbol labels it seems
+// to reference, and the Schema/Instructions pinning the JSON returned via submit_meeting_links.
 type LinkTaskSpec struct {
 	ID               string   `json:"id"`   // meeting node ID (also the submit task_id)
 	Kind             string   `json:"kind"` // meeting_linkage
@@ -106,18 +93,37 @@ type LinkReport struct {
 // Pending returns linkage task specs for meetings not yet linked (meeting nodes
 // whose attrs["extraction_status"] != "done"). limit<=0 means no cap.
 func (s *LinkService) Pending(ctx context.Context, limit int) ([]LinkTaskSpec, error) {
-	nodes, err := s.store.AllNodes(ctx)
+	meetings, err := store.NodesMatching(ctx, s.store, store.NodeFilter{Kinds: []model.NodeKind{model.KindMeeting}})
 	if err != nil {
 		return nil, fmt.Errorf("load nodes: %w", err)
 	}
 
-	// Collect candidate code-symbol labels once for the whole corpus.
-	var symbolLabels []string
-	seenLabel := map[string]bool{}
-	for _, n := range nodes {
-		if n.Kind != model.KindSymbol && n.Kind != model.KindFile {
+	// Find the pending meetings first, so a call with nothing to do skips loading the symbol menu.
+	var pending []model.Node
+	for _, n := range meetings {
+		if model.AttrString(n.Attrs, "extraction_status") == linkageStatusDone {
 			continue
 		}
+		if strings.TrimSpace(model.AttrString(n.Attrs, "text")) == "" {
+			continue
+		}
+		pending = append(pending, n)
+		if limit > 0 && len(pending) >= limit {
+			break
+		}
+	}
+	if len(pending) == 0 {
+		return nil, nil
+	}
+
+	// Collect candidate code-symbol labels once for the whole corpus.
+	code, err := store.NodesMatching(ctx, s.store, store.NodeFilter{Kinds: []model.NodeKind{model.KindSymbol, model.KindFile}})
+	if err != nil {
+		return nil, fmt.Errorf("load nodes: %w", err)
+	}
+	var symbolLabels []string
+	seenLabel := map[string]bool{}
+	for _, n := range code {
 		lbl := strings.TrimSpace(n.Label)
 		if lbl == "" || seenLabel[lbl] {
 			continue
@@ -126,46 +132,32 @@ func (s *LinkService) Pending(ctx context.Context, limit int) ([]LinkTaskSpec, e
 		symbolLabels = append(symbolLabels, lbl)
 	}
 	sort.Strings(symbolLabels)
+	candidates := newSymbolCandidates(symbolLabels)
 
-	var specs []LinkTaskSpec
-	for _, n := range nodes {
-		if n.Kind != model.KindMeeting {
-			continue
-		}
-		if model.AttrString(n.Attrs, "extraction_status") == linkageStatusDone {
-			continue
-		}
+	specs := make([]LinkTaskSpec, 0, len(pending))
+	for _, n := range pending {
 		text := model.AttrString(n.Attrs, "text")
-		if strings.TrimSpace(text) == "" {
-			continue
-		}
 		specs = append(specs, LinkTaskSpec{
 			ID:               n.ID,
 			Kind:             KindMeetingLinkage,
 			Label:            n.Label,
 			SourceURI:        n.SourceURI,
 			Input:            text,
-			CandidateSymbols: candidatesFor(text, symbolLabels, s.maxCandidates),
+			CandidateSymbols: candidatesFor(text, candidates, s.maxCandidates),
 			Schema:           linkSchema,
 			Instructions:     linkInstructions,
 		})
-		if limit > 0 && len(specs) >= limit {
-			break
-		}
 	}
 	return specs, nil
 }
 
-// Submit ingests one meeting's linkage results. It is idempotent: stable IDs
-// make re-submitting the same result a no-op, and prior decision/rationale
-// nodes for the meeting that are absent from the new result are deleted (the
-// decision is resolved/superseded), exactly like the LLM-rule resolved
-// lifecycle.
+// Submit ingests one meeting's linkage results idempotently (stable IDs); prior decision/rationale nodes for
+// the meeting that are absent from the new result are deleted as superseded.
 func (s *LinkService) Submit(ctx context.Context, r LinkResult) (LinkReport, error) {
 	if r.TaskID == "" {
 		return LinkReport{}, fmt.Errorf("submit: task_id is required")
 	}
-	if ro, ok := s.store.(store.ReadOnlyAware); ok && ro.ReadOnly() {
+	if store.IsReadOnly(s.store) {
 		return LinkReport{}, fmt.Errorf("submit: store is read-only — restart 'chiton serve --writable' or use 'chiton meeting submit'")
 	}
 	meeting, err := s.store.GetNode(ctx, r.TaskID)
@@ -199,11 +191,8 @@ func (s *LinkService) Submit(ctx context.Context, r LinkResult) (LinkReport, err
 		if prov == model.ProvAmbiguous {
 			rep.Ambiguous++
 		}
-		// Key the decision (and its rationale) on its position as well as its
-		// summary, so two decisions with identical summaries in one meeting do not
-		// collide onto a single node. Re-submit stays clean because
-		// deleteSupersededDecisions prunes any prior decision/rationale not in this
-		// submission's keep set.
+		// Key on position as well as summary so identical summaries in one meeting stay distinct nodes;
+		// deleteSupersededDecisions prunes any prior decision not in this submission's keep set.
 		disambig := fmt.Sprintf("%d:%s", i, slug(summary))
 		decID := model.NewNodeID(meetingURI, "decision:"+disambig)
 		keep[decID] = true
@@ -264,9 +253,8 @@ func (s *LinkService) Submit(ctx context.Context, r LinkResult) (LinkReport, err
 			edges = append(edges, typedEdge(decID, symID, model.EdgeDecidedIn, prov, conf, now, nil))
 			// symbol --DISCUSSED_IN--> meeting (code discussed in the meeting).
 			edges = append(edges, typedEdge(symID, r.TaskID, model.EdgeDiscussedIn, prov, conf, now, nil))
-			// meeting --MENTIONED--> symbol, so "what did this meeting mention?"
-			// is complete for decision-governed symbols too, matching the
-			// discussed-only path below.
+			// meeting --MENTIONED--> symbol, so "what did this meeting mention?" also covers
+			// decision-governed symbols, matching the discussed-only path below.
 			edges = append(edges, typedEdge(r.TaskID, symID, model.EdgeMentioned, prov, conf, now, nil))
 			rep.EdgesAdded += 3
 		}
@@ -282,9 +270,7 @@ func (s *LinkService) Submit(ctx context.Context, r LinkResult) (LinkReport, err
 				continue // unassigned action: kept only in decision attrs below
 			}
 			pid := PersonID(assignee)
-			// Dedupe the person node within this submission (the same assignee may
-			// own several action items); UpsertNodes also dedupes by ID, but this
-			// keeps the batch clean, matching the file's other dedup maps.
+			// Emit each assignee's person node once per submission, though they may own several items.
 			if !seenPersons[pid] {
 				seenPersons[pid] = true
 				nodes = append(nodes, personNode(assignee, pid, now))
@@ -346,11 +332,8 @@ func (s *LinkService) Submit(ctx context.Context, r LinkResult) (LinkReport, err
 	return rep, nil
 }
 
-// resolveSymbol resolves a code-symbol label to a node ID, preferring an exact
-// (case-insensitive) label match on a symbol node, then a file/other node, then
-// an exact-substring match. Returns "" when nothing resolves — chiton never
-// fabricates a link to a symbol it cannot find (the same discipline the AST
-// extractor applies to CALLS edges).
+// resolveSymbol resolves a label to a node ID: exact (case-insensitive) symbol match, then exact
+// file/other match, then substring match. Returns "" rather than fabricate a link to an unknown symbol.
 func (s *LinkService) resolveSymbol(ctx context.Context, label string) string {
 	label = strings.TrimSpace(label)
 	if label == "" {
@@ -387,21 +370,19 @@ func (s *LinkService) resolveSymbol(ctx context.Context, label string) string {
 	return contains
 }
 
-// deleteSupersededDecisions removes decision/rationale nodes under meetingURI
-// that are not in keep, giving decisions a resolved/superseded lifecycle on
-// re-submit. Uses NodeDeleter (removes adjacent DECIDED_IN/RATIONALE_FOR/
-// ACTION_FOR edges too) when available; otherwise it is a no-op fallback so a
-// minimal store still works (stale decisions then linger until rebuild).
+// deleteSupersededDecisions removes decision/rationale nodes under meetingURI not in keep, via NodeDeleter
+// (which drops adjacent edges too); stores without it keep stale decisions until a rebuild.
 func (s *LinkService) deleteSupersededDecisions(ctx context.Context, meetingURI string, keep map[string]bool) error {
-	all, err := s.store.AllNodes(ctx)
+	prior, err := store.NodesMatching(ctx, s.store, store.NodeFilter{
+		Kinds:     []model.NodeKind{model.KindDecision, model.KindRationale},
+		SourceURI: meetingURI,
+	})
 	if err != nil {
 		return fmt.Errorf("load nodes for supersede: %w", err)
 	}
 	var stale []string
-	for _, n := range all {
-		if n.Kind != model.KindDecision && n.Kind != model.KindRationale {
-			continue
-		}
+	for _, n := range prior {
+		// The filter ignores an empty SourceURI, so the check stays for a meeting without one.
 		if n.SourceURI != meetingURI || keep[n.ID] {
 			continue
 		}
@@ -447,27 +428,45 @@ func typedEdge(src, dst string, kind model.EdgeKind, prov model.Provenance, conf
 	}
 }
 
+// symbolCandidate is a symbol label lowercased and tokenized once, then matched against every meeting.
+type symbolCandidate struct {
+	label  string
+	lower  string
+	tokens []string // lowercased identifier tokens of at least 4 bytes
+}
+
+func newSymbolCandidates(labels []string) []symbolCandidate {
+	out := make([]symbolCandidate, len(labels))
+	for i, lbl := range labels {
+		c := symbolCandidate{label: lbl, lower: strings.ToLower(lbl)}
+		for _, tok := range identifierTokens(lbl) {
+			if len(tok) >= 4 {
+				c.tokens = append(c.tokens, strings.ToLower(tok))
+			}
+		}
+		out[i] = c
+	}
+	return out
+}
+
 // candidatesFor returns up to max symbol labels that appear to be referenced in
 // the transcript text (substring or identifier-token match), as a hint menu.
-func candidatesFor(text string, symbols []string, max int) []string {
+func candidatesFor(text string, symbols []symbolCandidate, max int) []string {
 	lower := strings.ToLower(text)
 	words := tokenSet(lower)
 	var out []string
-	for _, lbl := range symbols {
-		low := strings.ToLower(lbl)
-		hit := false
-		if len(low) >= 3 && strings.Contains(lower, low) {
-			hit = true
-		} else {
-			for _, tok := range identifierTokens(lbl) {
-				if len(tok) >= 4 && words[strings.ToLower(tok)] {
+	for _, c := range symbols {
+		hit := len(c.lower) >= 3 && strings.Contains(lower, c.lower)
+		if !hit {
+			for _, tok := range c.tokens {
+				if words[tok] {
 					hit = true
 					break
 				}
 			}
 		}
 		if hit {
-			out = append(out, lbl)
+			out = append(out, c.label)
 			if max > 0 && len(out) >= max {
 				break
 			}
@@ -476,9 +475,8 @@ func candidatesFor(text string, symbols []string, max int) []string {
 	return out
 }
 
-// identifierTokens splits a symbol label into word tokens, handling camelCase,
-// snake_case, dotted, and slashed names (fetchAll → [fetch All], do_work →
-// [do work], pkg.Method → [pkg Method]).
+// identifierTokens splits a symbol label into camelCase/snake_case/dotted/slashed word tokens
+// (fetchAll → [fetch All], pkg.Method → [pkg Method]).
 func identifierTokens(s string) []string {
 	var tokens []string
 	var cur strings.Builder

@@ -1,20 +1,14 @@
 package quality
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 
 	"github.com/Eric-Fernald/chiton/internal/analyze"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// NestedTernary flags a nested ternary expression (`a ? b ? c : d : e`) in
-// JS/TS sources. Nested ternaries are notoriously hard to read. Detection is
-// conservative: it counts ternary `?` operators on a line (ignoring `?.`, `??`,
-// strings, template literals, and comments) and fires only when two or more
-// genuine ternary conditions and at least two `:` branch separators appear,
-// which signals nesting rather than a single ternary.
+// NestedTernary flags a nested ternary expression (`a ? b ? c : d : e`) on one line of JS/TS source;
+// nested ternaries are notoriously hard to read. Sibling ternaries on the same line do not fire.
 type NestedTernary struct{}
 
 func (NestedTernary) Meta() analyze.Meta {
@@ -32,12 +26,8 @@ func (NestedTernary) Meta() analyze.Meta {
 
 func (NestedTernary) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		if hasNestedTernary(sc.Text()) {
+	for line, raw := range analyze.Lines(t.Content) {
+		if hasNestedTernary(raw) {
 			out = append(out, analyze.Finding{
 				RuleID:       "quality/nested-ternary",
 				Severity:     analyze.SeverityLow,
@@ -53,15 +43,8 @@ func (NestedTernary) MatchFile(_ context.Context, t analyze.FileTarget) []analyz
 	return out
 }
 
-// hasNestedTernary reports whether a line contains an ACTUALLY nested ternary:
-// a second ternary `?` opening before the matching `:` of the first one
-// (`c1 ? c2 ? a : b : d`). It skips strings, template literals, comments, the
-// optional-chaining `?.` operator, and the nullish-coalescing `??` operator.
-//
-// Independent sibling ternaries on one physical line (`a?b:c; d?e:f` or
-// `f(a?b:c, d?e:f)`) are NOT nested: the running ternary depth is reset at a
-// top-level `;` and at a top-level `,`, so each sibling starts fresh and never
-// reaches depth 2.
+// hasNestedTernary reports whether a second ternary `?` opens before the first one's `:`, ignoring strings,
+// `//` comments, `?.`, and `??`. A `;` or top-level `,` resets the depth so siblings start fresh.
 func hasNestedTernary(raw string) bool {
 	var inStr byte
 	depth := 0   // currently-open ternaries (each `?` not yet closed by a `:`)
@@ -95,9 +78,7 @@ func hasNestedTernary(raw string) bool {
 			// A statement boundary ends any ternary; siblings start fresh.
 			depth = 0
 		case ',':
-			// A top-level comma separates sibling expressions (e.g. call
-			// arguments at this bracket level); reset so siblings are not
-			// treated as nested. A comma inside deeper brackets keeps depth.
+			// Only a top-level comma separates sibling expressions; one inside brackets keeps the depth.
 			if bracket == 0 {
 				depth = 0
 			}

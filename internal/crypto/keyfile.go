@@ -1,40 +1,27 @@
-// Package crypto handles chiton's at-rest encryption: passphrase prompting,
-// Argon2id key derivation, AES-256-GCM file encryption for ad-hoc artifacts
-// (cache.json, audit.jsonl, cluster.json), and key material for the graph
-// store's built-in encryption.
-//
-// Design:
-//
-//   - .chiton/keyfile.json holds the salt and Argon2id parameters. The
-//     passphrase itself is never written to disk. Without the passphrase,
-//     the keyfile alone reveals nothing.
-//   - The derived key is 32 bytes (AES-256). The same passphrase + same
-//     keyfile always produce the same key, so we can re-open BadgerDB
-//     (which stores encrypted SSTs) deterministically.
-//   - For one-off files (cache.json, audit.jsonl), we wrap content in
-//     AES-256-GCM with a fresh nonce per write. The nonce is prepended to
-//     the ciphertext on disk.
+// Package crypto handles chiton's at-rest encryption: an Argon2id key from a passphrase that is never
+// stored (the keyfile holds only salt+params, so the same inputs reopen BadgerDB) and AES-256-GCM files.
 package crypto
 
 import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 
 	"golang.org/x/crypto/argon2"
+
+	"github.com/Eric-Fernald/chiton/internal/fsutil"
 )
 
 // KeyFileVersion is bumped when the on-disk keyfile format changes in a way
 // that breaks readers.
 const KeyFileVersion = 1
 
-// Minimum Argon2id parameters accepted from a loaded keyfile. These are floors,
-// not the recommended values (see DefaultKeyFile) — they exist so a corrupt or
-// tampered keyfile fails with a clear error instead of panicking inside argon2
-// (which aborts when iterations or parallelism are below 1) or silently deriving
-// a trivially weak key.
+// Floors (not defaults) for a loaded keyfile's Argon2id params: a corrupt or tampered keyfile must
+// fail clearly rather than panic inside argon2 (iterations/parallelism < 1) or derive a weak key.
 const (
 	minMemoryKiB   = 8 * 1024 // 8 MiB floor — well below the 64 MiB default
 	minIterations  = 1
@@ -43,12 +30,8 @@ const (
 	keyLengthBytes = 32 // AES-256; every chiton consumer requires exactly this
 )
 
-// KeyFile is the on-disk metadata for deriving a chiton encryption key from
-// a passphrase. The passphrase itself is never persisted.
-//
-// Argon2id parameters follow OWASP's 2024 guidance for general use:
-// 64 MiB memory, 3 iterations, parallelism 4, 32-byte output. These can be
-// raised on newer hardware by writing a higher Version with stronger params.
+// KeyFile is the on-disk metadata for deriving a chiton encryption key from a passphrase (never
+// persisted). Defaults follow OWASP 2024 Argon2id guidance: 64 MiB, 3 iterations, parallelism 4.
 type KeyFile struct {
 	Version     int    `json:"version"`
 	KDF         string `json:"kdf"`         // "argon2id"
@@ -88,11 +71,8 @@ func (kf *KeyFile) Salt() ([]byte, error) {
 	return b, nil
 }
 
-// validate checks the keyfile's parameters are well-formed and meet chiton's
-// minimum strength, returning a descriptive error otherwise. It guards against
-// corrupt or tampered keyfiles: argon2.IDKey panics when Iterations or
-// Parallelism is below 1, and sub-floor cost params or a short salt would
-// silently weaken the derived key.
+// validate rejects malformed or sub-floor params: argon2.IDKey panics when Iterations or Parallelism
+// is below 1, and low cost params or a short salt would silently weaken the key.
 func (kf *KeyFile) validate() error {
 	if kf.KDF != "argon2id" {
 		return fmt.Errorf("unsupported KDF %q (want argon2id)", kf.KDF)
@@ -139,9 +119,8 @@ func (kf *KeyFile) DeriveKey(passphrase string) ([]byte, error) {
 	), nil
 }
 
-// Save writes the keyfile to path with restrictive permissions. Existing
-// files are not overwritten unless force is true — protecting users from
-// regenerating a salt and locking themselves out.
+// Save atomically writes the keyfile to path with mode 0600. An existing file is kept unless force is set:
+// regenerating the salt would lock the user out of existing encrypted data.
 func (kf *KeyFile) Save(path string, force bool) error {
 	if !force {
 		if _, err := os.Stat(path); err == nil {
@@ -152,18 +131,17 @@ func (kf *KeyFile) Save(path string, force bool) error {
 	if err != nil {
 		return fmt.Errorf("marshal keyfile: %w", err)
 	}
-	if err := os.WriteFile(path, append(b, '\n'), 0o600); err != nil {
+	if err := fsutil.WriteFileAtomic(path, append(b, '\n'), 0o600); err != nil {
 		return fmt.Errorf("write keyfile: %w", err)
 	}
 	return nil
 }
 
-// LoadKeyFile reads and parses a keyfile from path. Missing files return
-// (nil, nil) so callers can tell "no encryption configured" apart from a
-// parse error.
+// LoadKeyFile reads and validates the keyfile at path. A missing file returns (nil, nil), meaning
+// "no encryption configured" as distinct from a parse error.
 func LoadKeyFile(path string) (*KeyFile, error) {
 	b, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {

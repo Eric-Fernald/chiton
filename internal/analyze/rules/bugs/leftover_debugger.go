@@ -1,8 +1,6 @@
 package bugs
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 
@@ -10,9 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// LeftoverDebugger flags debugger breakpoints accidentally left in source:
-// `debugger;` in JS/TS, and `pdb.set_trace()` / `breakpoint()` in Python.
-// These halt execution and must never reach production.
+// LeftoverDebugger flags breakpoints left in source (`debugger;` in JS/TS, `pdb.set_trace()` /
+// `breakpoint()` in Python); they halt execution and must never reach production.
 type LeftoverDebugger struct{}
 
 func (LeftoverDebugger) Meta() analyze.Meta {
@@ -35,13 +32,9 @@ var (
 
 func (LeftoverDebugger) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
+	for line, raw := range analyze.Lines(t.Content) {
 		// Strip both // (js) and # (py) line comments; harmless to apply both.
-		text := stripPyComment(stripJSComment(sc.Text()))
+		text := analyze.StripPyComment(analyze.StripLineComment(raw, false))
 		if jsDebuggerRe.MatchString(text) || pyPdbRe.MatchString(text) {
 			out = append(out, analyze.Finding{
 				RuleID:       "bugs/leftover-debugger",

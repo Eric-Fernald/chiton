@@ -2,6 +2,7 @@ package badger
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -58,6 +59,36 @@ func TestDeleteByIDsRemovesNodesEdgesAndEmbeddings(t *testing.T) {
 	embs, _ := gs.AllEmbeddings(ctx)
 	if len(embs) != 0 {
 		t.Fatalf("embedding for a should be gone, got %d", len(embs))
+	}
+}
+
+func TestDeleteBySourceURIExactMatch(t *testing.T) {
+	ctx := context.Background()
+	gs, err := Open(filepath.Join(t.TempDir(), "graph.badger"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gs.Close()
+
+	uris := []string{"file:///a.go", "file:///a.go.bak", "file:///a&b<c>.go", `file:///C:\x.go`, "file:///é.go", `q"uote`, "bad\xffutf8"}
+	var nodes []model.Node
+	for i, u := range uris {
+		nodes = append(nodes, model.Node{ID: fmt.Sprint("n", i), Kind: model.KindFile, Label: u, SourceURI: u})
+	}
+	if err := gs.UpsertNodes(ctx, nodes); err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range uris[:6] {
+		if n, err := gs.DeleteBySourceURI(ctx, u); err != nil || n != 1 {
+			t.Fatalf("DeleteBySourceURI(%q) = %d, %v; want 1", u, n, err)
+		}
+	}
+	// Invalid UTF-8 is stored as U+FFFD, so only the decoded form matches.
+	if n, _ := gs.DeleteBySourceURI(ctx, "bad\xffutf8"); n != 0 {
+		t.Fatalf("raw invalid UTF-8 URI deleted %d, want 0", n)
+	}
+	if n, _ := gs.DeleteBySourceURI(ctx, "bad\ufffdutf8"); n != 1 {
+		t.Fatalf("U+FFFD URI deleted %d, want 1", n)
 	}
 }
 

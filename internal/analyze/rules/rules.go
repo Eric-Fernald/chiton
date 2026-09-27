@@ -1,8 +1,5 @@
-// Package rules is a barrel import: importing it brings in every rule
-// sub-package, which registers its rules with the default registry via init().
-//
-// Anywhere that needs rule discovery (CLI commands, MCP server, tests) should
-// blank-import this package once at startup.
+// Package rules is a barrel import: blank-import it once wherever rule discovery is needed, and
+// every rule sub-package registers its rules with the default registry via init().
 package rules
 
 import (

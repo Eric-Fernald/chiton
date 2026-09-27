@@ -135,9 +135,8 @@ func TestWatchIgnoresIgnoredDir(t *testing.T) {
 	}
 }
 
-// TestWatchDirRemove verifies that removing a watched directory fires
-// OnDirRemove with that directory's path, so the engine can prune its subtree
-// (fsnotify delivers no per-child events for a directory removal/rename).
+// TestWatchDirRemove verifies removing a watched directory fires OnDirRemove with its path, since
+// fsnotify sends no per-child events for a directory removal.
 func TestWatchDirRemove(t *testing.T) {
 	root := t.TempDir()
 	sub := filepath.Join(root, "pkg")
@@ -205,19 +204,8 @@ func TestWatchRejectsNonAccepted(t *testing.T) {
 	}
 }
 
-// TestDirRemoveWhenWatchAlreadyDropped pins the ordering that made
-// TestWatchDirRemove fail on Linux while passing on Windows.
-//
-// On Linux the kernel invalidates a deleted directory's watch and fsnotify
-// forgets it (IN_DELETE_SELF / IN_IGNORED) while draining its event buffer —
-// synchronously, before the parent directory's Remove event is handed to us on
-// the Events channel. So by the time handle() runs, fsnotify's WatchList no
-// longer contains the path. Classifying the event by asking fsnotify therefore
-// misread a directory removal as a file event and never called OnDirRemove,
-// leaving the consumer's index full of paths that no longer exist.
-//
-// This test reproduces that state deterministically on every platform by
-// dropping the fsnotify watch before delivering the event.
+// TestDirRemoveWhenWatchAlreadyDropped reproduces the Linux ordering on every platform: fsnotify has already
+// forgotten a deleted dir when its Remove event arrives, and OnDirRemove must still fire.
 func TestDirRemoveWhenWatchAlreadyDropped(t *testing.T) {
 	root := t.TempDir()
 	sub := filepath.Join(root, "pkg")
@@ -263,9 +251,8 @@ func TestDirRemoveWhenWatchAlreadyDropped(t *testing.T) {
 	}
 }
 
-// TestDirRemoveForgetsSubtree checks the bookkeeping half: once a directory is
-// gone, neither it nor its descendants may still count as watched, or a later
-// event on a recreated path would be misclassified.
+// TestDirRemoveForgetsSubtree checks a removed directory and its descendants no longer count as watched,
+// or a later event on a recreated path would be misclassified.
 func TestDirRemoveForgetsSubtree(t *testing.T) {
 	root := t.TempDir()
 	sub := filepath.Join(root, "pkg")

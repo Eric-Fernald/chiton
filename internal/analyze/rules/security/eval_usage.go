@@ -1,8 +1,6 @@
 package security
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 
@@ -33,14 +31,8 @@ var evalRe = regexp.MustCompile(`(^|[^a-zA-Z0-9_])(eval|exec)\s*\(`)
 
 func (EvalUsage) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := sc.Text()
-		trimmed := stripPyComment(text)
-		if evalRe.MatchString(trimmed) {
+	for line, text := range analyze.Lines(t.Content) {
+		if containsAny(text, "eval", "exec") && evalRe.MatchString(analyze.StripPyComment(text)) {
 			out = append(out, analyze.Finding{
 				RuleID:       "security/eval-usage",
 				Severity:     analyze.SeverityHigh,
@@ -54,33 +46,6 @@ func (EvalUsage) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Fi
 		}
 	}
 	return out
-}
-
-// stripPyComment removes everything from the first '#' that isn't inside a
-// quoted string. Keeps the rule from firing on lines that only mention eval()
-// in a comment.
-func stripPyComment(s string) string {
-	var inStr byte
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if inStr != 0 {
-			if c == '\\' && i+1 < len(s) {
-				i++
-				continue
-			}
-			if c == inStr {
-				inStr = 0
-			}
-			continue
-		}
-		switch c {
-		case '"', '\'':
-			inStr = c
-		case '#':
-			return s[:i]
-		}
-	}
-	return s
 }
 
 func init() { analyze.Register(EvalUsage{}) }

@@ -1,10 +1,12 @@
 package report
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/Eric-Fernald/chiton/internal/graph/cluster"
@@ -13,28 +15,23 @@ import (
 
 // VisualOptions controls the graph visual exports (interactive HTML, Mermaid).
 type VisualOptions struct {
-	// MaxNodes caps how many nodes are rendered. When the graph is larger,
-	// the highest-degree (then highest-betweenness) nodes are kept and the
-	// rest dropped along with their dangling edges. 0 means no cap.
+	// MaxNodes caps rendered nodes (0 = no cap), keeping the highest-degree then highest-betweenness
+	// nodes and dropping the rest with their dangling edges.
 	MaxNodes int
 	// Title is shown in the HTML <title>/heading and as a Mermaid comment.
 	Title string
 }
 
-// DefaultVisual is the standard configuration for visual exports. The HTML
-// renderer (vis-network) stays interactive into the low thousands of nodes;
-// Mermaid is capped far lower by GenerateMermaid because the dagre layout and
-// browser SVG choke well before that.
+// DefaultVisual is the standard configuration for visual exports. vis-network stays interactive
+// into the low thousands of nodes; Mermaid gets its own, far lower cap (mermaidMaxNodes).
 var DefaultVisual = VisualOptions{MaxNodes: 600, Title: "chiton graph"}
 
-// mermaidMaxNodes is a hard ceiling for Mermaid output regardless of
-// VisualOptions.MaxNodes — Mermaid's layout engine degrades badly past a few
-// hundred nodes, so a dense graph is trimmed to its most central nodes.
+// mermaidMaxNodes is a hard ceiling for Mermaid output regardless of VisualOptions.MaxNodes:
+// Mermaid's layout degrades badly past a few hundred nodes.
 const mermaidMaxNodes = 160
 
-// viewNode is the render-ready projection of a graph node: only the fields the
-// visualizers need, with community/centrality overlaid from a cluster pass when
-// one is available.
+// viewNode is the render-ready projection of a graph node, with community/centrality overlaid
+// from a cluster pass when one is available.
 type viewNode struct {
 	ID          string
 	Label       string
@@ -45,11 +42,8 @@ type viewNode struct {
 	Degree      int
 }
 
-// buildView projects nodes+edges (and an optional cluster overlay) into a
-// render-ready node set plus the edges whose endpoints both survive the
-// MaxNodes cap. Degree is always computed from the supplied edges so the view
-// is correct even without a prior cluster run; community/betweenness come from
-// the overlay when present (community -1 and betweenness 0 otherwise).
+// buildView projects nodes+edges into capped view nodes plus the edges whose endpoints both survive.
+// Degree comes from the edges (so no cluster run is needed); overlay-less nodes get community -1.
 func buildView(nodes []model.Node, edges []model.Edge, overlay *cluster.Results, maxNodes int) ([]viewNode, []model.Edge) {
 	degree := make(map[string]int, len(nodes))
 	for _, e := range edges {
@@ -109,10 +103,8 @@ func buildView(nodes []model.Node, edges []model.Edge, overlay *cluster.Results,
 	return views, keptEdges
 }
 
-// GenerateMermaid writes a Mermaid flowchart of the graph to w, grouping nodes
-// into per-community subgraphs. Suitable for embedding in Markdown docs that a
-// renderer (GitHub, mkdocs, Obsidian) draws inline. Large graphs are trimmed to
-// their most central nodes (see mermaidMaxNodes).
+// GenerateMermaid writes a Mermaid flowchart of the graph to w, one subgraph per community, for
+// Markdown renderers that draw it inline. Large graphs are trimmed (see mermaidMaxNodes).
 func GenerateMermaid(w io.Writer, nodes []model.Node, edges []model.Edge, overlay *cluster.Results, opts VisualOptions) error {
 	cap := opts.MaxNodes
 	if cap == 0 || cap > mermaidMaxNodes {
@@ -126,11 +118,7 @@ func GenerateMermaid(w io.Writer, nodes []model.Node, edges []model.Edge, overla
 		id[v.ID] = fmt.Sprintf("n%d", i)
 	}
 
-	title := opts.Title
-	if title == "" {
-		title = "chiton graph"
-	}
-	fmt.Fprintf(w, "%%%% %s — %d nodes, %d edges\n", title, len(views), len(keptEdges))
+	fmt.Fprintf(w, "%%%% %s — %d nodes, %d edges\n", cmp.Or(opts.Title, "chiton graph"), len(views), len(keptEdges))
 	fmt.Fprintln(w, "flowchart LR")
 
 	// Group nodes by community so the layout clusters them visually.
@@ -152,7 +140,7 @@ func GenerateMermaid(w io.Writer, nodes []model.Node, edges []model.Edge, overla
 			fmt.Fprintf(w, "  subgraph cNA[\"Unclustered\"]\n")
 		}
 		for _, v := range members {
-			fmt.Fprintf(w, "    %s[\"%s\"]\n", id[v.ID], mermaidLabel(v))
+			fmt.Fprintf(w, "    %s[\"%s\"]\n", id[v.ID], mermaidEscaper.Replace(v.Label))
 		}
 		fmt.Fprintln(w, "  end")
 	}
@@ -168,30 +156,15 @@ func GenerateMermaid(w io.Writer, nodes []model.Node, edges []model.Edge, overla
 	return nil
 }
 
-// mermaidLabel renders a node's display text, escaped for Mermaid's
-// quoted-label syntax.
-func mermaidLabel(v viewNode) string {
-	return mermaidEscape(v.Label)
-}
-
-// mermaidEscape neutralises characters that break Mermaid's "..." labels.
-// Double quotes become &quot; (Mermaid honours HTML entities inside quotes);
-// '#' becomes &#35; because Mermaid otherwise reads a '#…;' run as an HTML
-// numeric entity and mangles the label; characters that confuse the parser are
-// replaced with spaces. '#' must be replaced before any entity is introduced
-// so we don't re-encode the '#' in '&quot;' / '&#35;' (NewReplacer scans the
-// input left-to-right and never re-scans its own replacements, so ordering the
-// '#' rule first is safe regardless).
-func mermaidEscape(s string) string {
-	r := strings.NewReplacer(
-		"#", "&#35;",
-		"\"", "&quot;",
-		"`", "'",
-		"\n", " ",
-		"\r", " ",
-	)
-	return r.Replace(s)
-}
+// mermaidEscaper neutralises characters that break Mermaid's "..." labels. '#' → &#35; because Mermaid
+// reads a '#…;' run as an entity; a Replacer never re-scans its output, so &quot; is not re-encoded.
+var mermaidEscaper = strings.NewReplacer(
+	"#", "&#35;",
+	"\"", "&quot;",
+	"`", "'",
+	"\n", " ",
+	"\r", " ",
+)
 
 func mermaidEdgeLabel(k model.EdgeKind) string {
 	return strings.ToLower(string(k))
@@ -215,13 +188,8 @@ type htmlEdge struct {
 	Kind string `json:"kind"`
 }
 
-// GenerateHTML writes a self-contained interactive graph page to w. The node
-// and edge data are embedded inline; only the vis-network library is loaded
-// from a CDN, so the file is portable and works offline once the library is
-// cached. Nodes are coloured by community and sized by degree.
-func GenerateHTML(w io.Writer, nodes []model.Node, edges []model.Edge, overlay *cluster.Results, opts VisualOptions) error {
-	views, keptEdges := buildView(nodes, edges, overlay, opts.MaxNodes)
-
+// toHTMLData converts the view nodes and kept edges to the JSON shapes embedded in the HTML pages.
+func toHTMLData(views []viewNode, edges []model.Edge) ([]htmlNode, []htmlEdge) {
 	hn := make([]htmlNode, len(views))
 	for i, v := range views {
 		hn[i] = htmlNode{
@@ -234,11 +202,23 @@ func GenerateHTML(w io.Writer, nodes []model.Node, edges []model.Edge, overlay *
 			Btw:   v.Betweenness,
 		}
 	}
-	he := make([]htmlEdge, 0, len(keptEdges))
-	for _, e := range keptEdges {
-		he = append(he, htmlEdge{From: e.Src, To: e.Dst, Kind: strings.ToLower(string(e.Kind))})
+	he := make([]htmlEdge, len(edges))
+	for i, e := range edges {
+		he[i] = htmlEdge{From: e.Src, To: e.Dst, Kind: strings.ToLower(string(e.Kind))}
 	}
+	return hn, he
+}
 
+// GenerateHTML writes a self-contained interactive graph page to w: data inline, only vis-network
+// from a CDN. Nodes are coloured by community and sized by degree.
+func GenerateHTML(w io.Writer, nodes []model.Node, edges []model.Edge, overlay *cluster.Results, opts VisualOptions) error {
+	hn, he := toHTMLData(buildView(nodes, edges, overlay, opts.MaxNodes))
+	return writePage(w, htmlTemplate, cmp.Or(opts.Title, "chiton graph"), hn, he)
+}
+
+// writePage fills tmpl's graph placeholders (__TITLE__, __NODE_COUNT__, __EDGE_COUNT__, __NODES__, __EDGES__)
+// plus the extra old/new pairs, and writes the page to w.
+func writePage(w io.Writer, tmpl, title string, hn []htmlNode, he []htmlEdge, extra ...string) error {
 	nodesJSON, err := marshalForScript(hn)
 	if err != nil {
 		return fmt.Errorf("marshal nodes: %w", err)
@@ -247,29 +227,20 @@ func GenerateHTML(w io.Writer, nodes []model.Node, edges []model.Edge, overlay *
 	if err != nil {
 		return fmt.Errorf("marshal edges: %w", err)
 	}
-
-	title := opts.Title
-	if title == "" {
-		title = "chiton graph"
-	}
-
-	page := strings.NewReplacer(
+	// No placeholder is a prefix of another, so pair order can't change the output.
+	pairs := append([]string{
 		"__TITLE__", htmlTextEscape(title),
-		"__NODE_COUNT__", fmt.Sprintf("%d", len(hn)),
-		"__EDGE_COUNT__", fmt.Sprintf("%d", len(he)),
+		"__NODE_COUNT__", strconv.Itoa(len(hn)),
+		"__EDGE_COUNT__", strconv.Itoa(len(he)),
 		"__NODES__", nodesJSON,
 		"__EDGES__", edgesJSON,
-	).Replace(htmlTemplate)
-
-	_, err = io.WriteString(w, page)
+	}, extra...)
+	_, err = io.WriteString(w, strings.NewReplacer(pairs...).Replace(tmpl))
 	return err
 }
 
-// marshalForScript JSON-encodes v for embedding inside a <script> block.
-// json.Marshal escapes '<', '>', and '&' to \u00XX by default (SetEscapeHTML is
-// on), so a node label containing "</script>" cannot break out of the block —
-// it serialises as "</script>". The extra "</" → "<\/" replacement is
-// belt-and-suspenders in case the encoder's HTML escaping is ever disabled.
+// marshalForScript JSON-encodes v for a <script> block. json.Marshal already escapes '<' '>' '&' as
+// \u00XX, so "</script>" can't break out; the "</" → "<\/" rewrite is belt-and-braces.
 func marshalForScript(v any) (string, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -278,16 +249,13 @@ func marshalForScript(v any) (string, error) {
 	return strings.ReplaceAll(string(b), "</", "<\\/"), nil
 }
 
-// htmlTextEscape escapes the handful of characters that matter for text placed
-// in element content / the <title>.
-func htmlTextEscape(s string) string {
-	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
-	return r.Replace(s)
-}
+// htmlTextEscaper escapes the characters that matter for element content and the <title>.
+var htmlTextEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
 
-// htmlTemplate is the self-contained page. Placeholders (__NODES__ etc.) are
-// substituted by GenerateHTML. The vis-network UMD bundle is the only external
-// resource; everything else (data, styling, interaction) is inline.
+func htmlTextEscape(s string) string { return htmlTextEscaper.Replace(s) }
+
+// htmlTemplate is the self-contained page GenerateHTML fills in (__NODES__ etc.); the
+// vis-network bundle is its only external resource.
 const htmlTemplate = `<!DOCTYPE html>
 <html lang="en">
 <head>

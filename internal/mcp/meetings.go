@@ -134,7 +134,7 @@ func decisionsAboutHandler(gs store.GraphStore) mcpsdk.ToolHandlerFunc {
 				}
 				actions := d.Actions
 				if !includePII {
-					actions = stripActionAssignees([]decisionView{d})[0].Actions
+					actions = actionTextsOnly(actions)
 				}
 				hits = append(hits, decisionHit{
 					Summary:    d.Summary,
@@ -224,13 +224,8 @@ func pendingMeetingLinksHandler(svc *meeting.LinkService) mcpsdk.ToolHandlerFunc
 			return mcplib.NewToolResultText("meeting linkage unavailable — the server was started without a graph store."), nil
 		}
 		specs, err := svc.Pending(ctx, clampInt(req.GetInt("limit", 10), 1, 100))
-		if err != nil {
-			return mcplib.NewToolResultErrorFromErr("pending meeting links failed", err), nil
-		}
-		if len(specs) == 0 {
-			return mcplib.NewToolResultText("no pending meeting links — every ingested meeting is already linked."), nil
-		}
-		return jsonResult(specs)
+		return pendingResult(specs, err, "pending_meeting_links",
+			"no pending meeting links — every ingested meeting is already linked.")
 	}
 }
 
@@ -270,15 +265,7 @@ func submitMeetingLinksHandler(svc *meeting.LinkService) mcpsdk.ToolHandlerFunc 
 		if svc == nil {
 			return mcplib.NewToolResultText("meeting linkage unavailable — the server was started without a graph store."), nil
 		}
-		var result meeting.LinkResult
-		if err := req.BindArguments(&result); err != nil {
-			return mcplib.NewToolResultErrorFromErr("invalid submit_meeting_links arguments", err), nil
-		}
-		rep, err := svc.Submit(ctx, result)
-		if err != nil {
-			return mcplib.NewToolResultErrorFromErr("submit meeting links failed", err), nil
-		}
-		return jsonResult(rep)
+		return bindAndSubmit(ctx, req, "submit_meeting_links", svc.Submit)
 	}
 }
 
@@ -313,11 +300,8 @@ type meetingView struct {
 	parsedDate time.Time
 }
 
-// matches reports whether the meeting matches the query. When includePII is
-// false the structured participant list is not matched (returning a meeting
-// because a queried name is a listed participant would itself disclose that the
-// person attended); title, transcript content, and decision summaries are always
-// searchable — meeting content is the point of the tool.
+// matches reports whether the meeting matches the query. Without includePII participants aren't
+// matched: returning a meeting because a queried name attended would itself disclose that PII.
 func (v meetingView) matches(lowerQuery string, includePII bool) bool {
 	if strings.Contains(strings.ToLower(v.Title), lowerQuery) {
 		return true
@@ -340,9 +324,8 @@ func (v meetingView) matches(lowerQuery string, includePII bool) bool {
 	return false
 }
 
-// public returns a copy safe to serialize: it drops the transcript scratch text
-// and, unless includePII, the participant names and action-item assignees (both
-// PII), keeping only a participant count and the action text.
+// public returns a copy safe to serialize: no transcript scratch text and, unless includePII, no
+// participant names or action-item assignees (both PII) — just a participant count and action text.
 func (v meetingView) public(includePII bool) meetingView {
 	out := v
 	out.text = ""
@@ -354,22 +337,28 @@ func (v meetingView) public(includePII bool) meetingView {
 	return out
 }
 
-// stripActionAssignees returns decisions with action-item assignee names removed,
-// deep-copying so the shared cached views are not mutated.
+// stripActionAssignees returns decisions with action-item assignee names removed, deep-copying so
+// the source views (whose slices public's shallow copy shares) are not mutated.
 func stripActionAssignees(decisions []decisionView) []decisionView {
 	if len(decisions) == 0 {
 		return decisions
 	}
 	out := make([]decisionView, len(decisions))
 	for i, d := range decisions {
-		if len(d.Actions) > 0 {
-			actions := make([]actionView, len(d.Actions))
-			for j, a := range d.Actions {
-				actions[j] = actionView{Text: a.Text}
-			}
-			d.Actions = actions
-		}
+		d.Actions = actionTextsOnly(d.Actions)
 		out[i] = d
+	}
+	return out
+}
+
+// actionTextsOnly returns a copy of actions without assignees (PII).
+func actionTextsOnly(actions []actionView) []actionView {
+	if len(actions) == 0 {
+		return actions
+	}
+	out := make([]actionView, len(actions))
+	for i, a := range actions {
+		out[i] = actionView{Text: a.Text}
 	}
 	return out
 }
@@ -389,11 +378,10 @@ func decisionMatchesTopic(d decisionView, topicLower string) bool {
 	return false
 }
 
-// buildMeetingViews loads the graph and assembles one view per meeting node,
-// resolving its participants, decisions, and the symbols those decisions govern
-// (DECIDED_IN edges to non-meeting nodes). Sorted newest-first by date.
+// buildMeetingViews assembles one view per meeting node, newest first, with its decisions and the symbols
+// they govern (DECIDED_IN edges to non-meeting nodes). Scans all edges but loads only the nodes it needs.
 func buildMeetingViews(ctx context.Context, gs store.GraphStore) ([]meetingView, error) {
-	nodes, err := gs.AllNodes(ctx)
+	nodes, err := store.NodesMatching(ctx, gs, store.NodeFilter{Kinds: []model.NodeKind{model.KindMeeting, model.KindDecision}})
 	if err != nil {
 		return nil, err
 	}
@@ -402,9 +390,9 @@ func buildMeetingViews(ctx context.Context, gs store.GraphStore) ([]meetingView,
 		return nil, err
 	}
 
-	byID := make(map[string]model.Node, len(nodes))
-	for _, n := range nodes {
-		byID[n.ID] = n
+	byID := make(map[string]*model.Node, len(nodes)) // nil caches a missing node
+	for i := range nodes {
+		byID[nodes[i].ID] = &nodes[i]
 	}
 
 	// Index decision → (governed symbol labels, meeting id) and meeting → label.
@@ -416,6 +404,12 @@ func buildMeetingViews(ctx context.Context, gs store.GraphStore) ([]meetingView,
 		}
 		dst, ok := byID[e.Dst]
 		if !ok {
+			if dst, err = gs.GetNode(ctx, e.Dst); err != nil {
+				return nil, err
+			}
+			byID[e.Dst] = dst
+		}
+		if dst == nil {
 			continue
 		}
 		if dst.Kind == model.KindMeeting {
@@ -436,8 +430,8 @@ func buildMeetingViews(ctx context.Context, gs store.GraphStore) ([]meetingView,
 			continue
 		}
 		meetingDecisions[mID] = append(meetingDecisions[mID], decisionView{
-			Summary:    attrStr(n, "summary"),
-			Rationale:  attrStr(n, "rationale"),
+			Summary:    model.AttrString(n.Attrs, "summary"),
+			Rationale:  model.AttrString(n.Attrs, "rationale"),
 			Confidence: n.Confidence,
 			Provenance: n.Provenance,
 			Governs:    dedupeStrings(decGoverns[n.ID]),
@@ -453,12 +447,12 @@ func buildMeetingViews(ctx context.Context, gs store.GraphStore) ([]meetingView,
 		v := meetingView{
 			Title:        n.Label,
 			SourceURI:    n.SourceURI,
-			text:         strings.ToLower(attrStr(n, "text")),
+			text:         strings.ToLower(model.AttrString(n.Attrs, "text")),
 			Participants: model.AttrStrings(n.Attrs, "participants"),
 			Decisions:    meetingDecisions[n.ID],
 		}
 		v.ParticipantCount = len(v.Participants)
-		if d := attrStr(n, "date"); d != "" {
+		if d := model.AttrString(n.Attrs, "date"); d != "" {
 			v.Date = d
 			if t, err := time.Parse(time.RFC3339, d); err == nil {
 				v.parsedDate = t
@@ -488,22 +482,9 @@ func parseSince(s string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-func attrStr(n model.Node, key string) string {
-	if n.Attrs == nil {
-		return ""
-	}
-	if v, ok := n.Attrs[key].(string); ok {
-		return v
-	}
-	return ""
-}
-
 // actionItems extracts action items (text + assignee) stored on a decision
 // node. Assignee is kept separate so PII gating can drop it at output time.
 func actionItems(n model.Node) []actionView {
-	if n.Attrs == nil {
-		return nil
-	}
 	raw, ok := n.Attrs["action_items"].([]any)
 	if !ok {
 		return nil

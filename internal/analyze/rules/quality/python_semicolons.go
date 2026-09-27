@@ -1,8 +1,6 @@
 package quality
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"strings"
 
@@ -10,10 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// PythonSemicolons flags a Python line that uses a semicolon to separate
-// statements (`a = 1; b = 2`). Idiomatic Python puts one statement per line;
-// statement-separating semicolons are a code smell. Trailing semicolons and
-// semicolons inside strings/comments are ignored.
+// PythonSemicolons flags a Python line that separates statements with a semicolon (`a = 1; b = 2`).
+// Trailing semicolons and semicolons inside strings/comments are ignored.
 type PythonSemicolons struct{}
 
 func (PythonSemicolons) Meta() analyze.Meta {
@@ -31,12 +27,8 @@ func (PythonSemicolons) Meta() analyze.Meta {
 
 func (PythonSemicolons) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		if separatingSemicolon(sc.Text()) {
+	for line, raw := range analyze.Lines(t.Content) {
+		if separatingSemicolon(raw) {
 			out = append(out, analyze.Finding{
 				RuleID:       "quality/python-semicolons",
 				Severity:     analyze.SeverityLow,
@@ -52,9 +44,8 @@ func (PythonSemicolons) MatchFile(_ context.Context, t analyze.FileTarget) []ana
 	return out
 }
 
-// separatingSemicolon reports whether the Python source line contains a
-// semicolon that separates two statements — i.e. a ';' outside of any string or
-// comment that is followed by further non-whitespace, non-comment code.
+// separatingSemicolon reports whether a Python line has a ';' outside strings and comments that is
+// followed by more code.
 func separatingSemicolon(raw string) bool {
 	var inStr byte
 	for i := 0; i < len(raw); i++ {

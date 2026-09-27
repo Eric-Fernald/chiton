@@ -2,13 +2,11 @@ package mcpsrv
 
 import (
 	"context"
-	"strings"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	mcpsdk "github.com/mark3labs/mcp-go/server"
 
 	"github.com/Eric-Fernald/chiton/internal/extract/subagent"
-	"github.com/Eric-Fernald/chiton/internal/graph/model"
 	"github.com/Eric-Fernald/chiton/internal/graph/retrieve"
 )
 
@@ -62,15 +60,11 @@ func semanticSearchHandler(eng *retrieve.Engine) mcpsdk.ToolHandlerFunc {
 		if err != nil {
 			return mcplib.NewToolResultError(err.Error()), nil
 		}
-		var kinds []model.EdgeKind
-		for _, k := range req.GetStringSlice("edge_kinds", nil) {
-			kinds = append(kinds, model.EdgeKind(strings.ToUpper(k)))
-		}
 		res, err := eng.Query(ctx, query, retrieve.Options{
 			SeedK:            clampInt(req.GetInt("k", 8), 1, 50),
 			Hops:             clampInt(req.GetInt("hops", 1), 0, 3),
 			MaxTokens:        clampInt(req.GetInt("max_tokens", 4000), 500, 16000),
-			EdgeKinds:        kinds,
+			EdgeKinds:        parseEdgeKinds(req),
 			SourcePrefix:     req.GetString("source_prefix", ""),
 			IncludeAmbiguous: req.GetBool("include_ambiguous", false),
 		})
@@ -92,15 +86,11 @@ func semanticSearchHandler(eng *retrieve.Engine) mcpsdk.ToolHandlerFunc {
 		for i, s := range res.Nodes {
 			nodes[i] = scoredLean{Score: s.Score, Hop: s.Hop, Node: toLeanNode(s.Node)}
 		}
-		edges := make([]leanEdge, len(res.Edges))
-		for i, e := range res.Edges {
-			edges[i] = toLeanEdge(e, labels)
-		}
 		return jsonResult(struct {
 			Nodes   []scoredLean `json:"nodes"`
 			Edges   []leanEdge   `json:"edges"`
 			Summary string       `json:"summary"`
-		}{nodes, edges, res.Summary})
+		}{nodes, toLeanEdges(res.Edges, labels), res.Summary})
 	}
 }
 
@@ -128,13 +118,8 @@ func pendingExtractionsHandler(svc *subagent.Service) mcpsdk.ToolHandlerFunc {
 			return mcplib.NewToolResultText("extraction unavailable — the server was started without a graph store."), nil
 		}
 		specs, err := svc.Pending(ctx, req.GetString("kind", ""), clampInt(req.GetInt("limit", 20), 1, 200))
-		if err != nil {
-			return mcplib.NewToolResultErrorFromErr("pending extractions failed", err), nil
-		}
-		if len(specs) == 0 {
-			return mcplib.NewToolResultText("no pending extractions — every doc section and image is already processed."), nil
-		}
-		return jsonResult(specs)
+		return pendingResult(specs, err, "pending_extractions",
+			"no pending extractions — every doc section and image is already processed.")
 	}
 }
 
@@ -181,14 +166,6 @@ func submitExtractionHandler(svc *subagent.Service) mcpsdk.ToolHandlerFunc {
 		if svc == nil {
 			return mcplib.NewToolResultText("extraction unavailable — the server was started without a graph store."), nil
 		}
-		var result subagent.SubmitResult
-		if err := req.BindArguments(&result); err != nil {
-			return mcplib.NewToolResultErrorFromErr("invalid submit_extraction arguments", err), nil
-		}
-		rep, err := svc.Submit(ctx, result)
-		if err != nil {
-			return mcplib.NewToolResultErrorFromErr("submit extraction failed", err), nil
-		}
-		return jsonResult(rep)
+		return bindAndSubmit(ctx, req, "submit_extraction", svc.Submit)
 	}
 }

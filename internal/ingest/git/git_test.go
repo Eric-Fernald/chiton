@@ -53,16 +53,7 @@ func TestIntegration(t *testing.T) {
 		t.Skip("git not on PATH")
 	}
 	root := t.TempDir()
-	runGit := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
-			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
+	runGit := gitRunner(t, root)
 
 	runGit("init")
 	if !Available(root) {
@@ -106,24 +97,14 @@ func TestIntegration(t *testing.T) {
 	}
 }
 
-// TestMergeCommitChanges verifies LastCommitChanges reports the files a merge
-// commit brings onto the branch. A plain `git diff-tree HEAD` is empty for a
-// merge, which used to leave every merged-in file stale in the graph.
+// TestMergeCommitChanges verifies LastCommitChanges reports the files a merge brings in; a plain
+// `git diff-tree HEAD` is empty for a merge.
 func TestMergeCommitChanges(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")
 	}
 	root := t.TempDir()
-	runGit := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
-			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
+	runGit := gitRunner(t, root)
 	write := func(name, content string) {
 		t.Helper()
 		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
@@ -177,9 +158,8 @@ func TestMergeCommitChanges(t *testing.T) {
 	}
 }
 
-// TestRejectsOptionLikeRefs verifies that an option-like ref (e.g.
-// "--output=...") is refused before reaching git, so it cannot be smuggled in
-// as a flag that writes an arbitrary file.
+// TestRejectsOptionLikeRefs verifies an option-like ref (e.g. "--output=...") is refused before reaching
+// git, so it can't be smuggled in as a file-writing flag.
 func TestRejectsOptionLikeRefs(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")
@@ -199,6 +179,20 @@ func TestRejectsOptionLikeRefs(t *testing.T) {
 	}
 	if _, err := os.Stat(pwned); err == nil {
 		t.Errorf("option-like ref wrote a file at %s", pwned)
+	}
+}
+
+// gitRunner returns a func that runs git in root with a fixed test identity, failing t on error.
+func gitRunner(t *testing.T, root string) func(args ...string) {
+	return func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
 	}
 }
 

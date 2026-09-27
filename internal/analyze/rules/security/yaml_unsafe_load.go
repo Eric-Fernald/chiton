@@ -1,19 +1,16 @@
 package security
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
+	"strings"
 
 	"github.com/Eric-Fernald/chiton/internal/analyze"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// YAMLUnsafeLoad flags PyYAML's yaml.load() used without a safe loader.
-// The default loader constructs arbitrary Python objects, so untrusted YAML is
-// an RCE vector. Lines that name SafeLoader / a safe Loader= / yaml.safe_load
-// are not flagged.
+// YAMLUnsafeLoad flags PyYAML's yaml.load() unless the line names a safe loader: the default
+// loader constructs arbitrary Python objects, so untrusted YAML is an RCE vector.
 type YAMLUnsafeLoad struct{}
 
 func (YAMLUnsafeLoad) Meta() analyze.Meta {
@@ -36,12 +33,11 @@ var (
 
 func (YAMLUnsafeLoad) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := stripPyComment(sc.Text())
+	for line, text := range analyze.Lines(t.Content) {
+		if !strings.Contains(text, "yaml.load") {
+			continue
+		}
+		text = analyze.StripPyComment(text)
 		if !yamlLoadRe.MatchString(text) {
 			continue
 		}

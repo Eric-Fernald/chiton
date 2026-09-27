@@ -32,12 +32,8 @@ type Result struct {
 // Blocks reports whether this Result should fail the git hook.
 func (r Result) Blocks() bool { return r.BlockingCount > 0 }
 
-// Run executes the analyzer at root, filters findings by the stage's
-// MinBlockingSeverity, and returns a Result. The caller decides what to print
-// and how to translate Blocks() into the process exit code.
-//
-// The analyzer's timeout is enforced via the parent context — pass one with
-// a deadline derived from cfg.TimeoutSeconds if you want timeouts honored.
+// Run analyzes opts.Root and collects findings at or above the stage's MinBlockingSeverity. It does not
+// apply Config.TimeoutSeconds itself: pass a ctx with that deadline to honor it.
 func Run(ctx context.Context, gs store.GraphStore, opts RunOptions) (*Result, error) {
 	az := analyze.New(gs, nil)
 	start := time.Now()
@@ -46,19 +42,19 @@ func Run(ctx context.Context, gs store.GraphStore, opts RunOptions) (*Result, er
 		return nil, fmt.Errorf("analyze: %w", err)
 	}
 
-	min := opts.Config.MinBlockingSeverity()
+	minSev := opts.Config.MinBlockingSeverity()
 	out := &Result{
 		Stage:         opts.Stage,
 		FilesScanned:  res.FilesScanned,
 		RulesRun:      res.RulesRun,
 		TotalFindings: len(res.Findings),
-		BlockingMin:   min,
+		BlockingMin:   minSev,
 		Duration:      time.Since(start),
 	}
-	if min == "" {
+	if minSev == "" {
 		return out, nil
 	}
-	threshold := analyze.SeverityRank(min)
+	threshold := analyze.SeverityRank(minSev)
 	for _, f := range res.Findings {
 		if analyze.SeverityRank(f.Severity) >= threshold {
 			out.BlockingCount++

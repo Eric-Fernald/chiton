@@ -1,8 +1,6 @@
 package security
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 
@@ -36,12 +34,8 @@ var sqlConcatRe = regexp.MustCompile(
 
 func (SQLStringConcat) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		if sqlConcatRe.MatchString(sc.Text()) {
+	for line, text := range analyze.Lines(t.Content) {
+		if sqlConcatRe.MatchString(text) {
 			out = append(out, analyze.Finding{
 				RuleID:       "security/sql-string-concat",
 				Severity:     analyze.SeverityHigh,

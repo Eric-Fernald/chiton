@@ -1,8 +1,6 @@
 package database
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 
@@ -10,11 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// SelectStar flags `SELECT * FROM` in a SQL string literal. Selecting every
-// column couples callers to the schema, ships unused bytes over the wire, and
-// breaks when columns are added or reordered. Distinct from
-// select-star-unbounded (which is about missing WHERE/LIMIT): this fires on any
-// SELECT *, including bounded queries, at a lower severity.
+// SelectStar flags any `SELECT * FROM`, bounded or not, at lower severity than
+// select-star-unbounded: it couples callers to the schema and fetches unused columns.
 type SelectStar struct{}
 
 func (SelectStar) Meta() analyze.Meta {
@@ -36,12 +31,9 @@ var selectStarLiteralRe = regexp.MustCompile(`(?i)\bSELECT\s+\*\s+FROM\s`)
 
 func (SelectStar) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(maskDBBlocks(t.Content, t.URI)))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := stripDBComment(sc.Text(), t.URI)
+	py := analyze.FileExt(t.URI) == "py"
+	for line, raw := range analyze.Lines(maskedDB(t, py)) {
+		text := stripDBComment(raw, py)
 		if selectStarLiteralRe.MatchString(text) {
 			out = append(out, analyze.Finding{
 				RuleID:       "database/select-star",

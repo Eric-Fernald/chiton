@@ -1,11 +1,5 @@
-// Package retrieve implements chiton's hybrid retrieval policy:
-//
-//	embed query → vector-seed top-K → graph-expand H hops → rerank → token budget
-//
-// Vector search supplies semantic recall (the gap a pure graph leaves on cold,
-// natural-language queries); graph expansion restores the typed-relationship
-// precision that is chiton's reason to exist. The reranker blends the two
-// signals plus community membership and provenance into one ordering.
+// Package retrieve implements chiton's hybrid retrieval: embed the query, seed top-K nodes by vector
+// similarity, expand H graph hops, rerank, and trim to a token budget.
 package retrieve
 
 import (
@@ -22,11 +16,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/vector"
 )
 
-// Rerank weights. score = wVector·vScore + wProx·proximity + wEdge·edgeConf,
-// plus a community bonus, all scaled by a provenance penalty. Tuned so that an
-// exact vector hit (vScore≈1) outranks a 1-hop neighbour (proximity 0.5) that
-// has no vector score of its own, while still letting strongly-connected
-// neighbours surface above weak vector matches.
+// Rerank weights: score = wVector·vScore + wProximity·proximity + wEdgeConf·edgeConf + community bonus,
+// times a provenance penalty. An exact vector hit outranks a 1-hop neighbour with no vector score.
 const (
 	wVector        = 0.6
 	wProximity     = 0.3
@@ -35,9 +26,8 @@ const (
 	ambiguousScale = 0.85 // multiplicative penalty for AMBIGUOUS provenance
 )
 
-// Engine runs hybrid retrieval against a store + vector index + embedder.
-// clusters is optional (nil when no cluster pass has run); it only feeds the
-// community bonus.
+// Engine runs hybrid retrieval against a store, vector index, and embedder. clusters is optional (nil
+// before any cluster pass) and only feeds the community bonus.
 type Engine struct {
 	store    store.GraphStore
 	index    vector.Index

@@ -1,11 +1,10 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -40,17 +39,12 @@ The default provider is local Ollama (no data leaves the machine). Use
 --provider hash for an offline, dependency-free embedder (lower quality; good
 for CI and demos). Restart 'chiton serve' afterwards to load the new vectors.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := config.Load()
+			cfg, gs, err := loadStore(false)
 			if err != nil {
 				return err
 			}
-			out := cmd.OutOrStdout()
-
-			gs, err := openGraphStore(cfg.GraphPath, false)
-			if err != nil {
-				return fmt.Errorf("open store: %w", err)
-			}
 			defer gs.Close()
+			out := cmd.OutOrStdout()
 
 			es, ok := store.GraphStore(gs).(store.EmbeddingStore)
 			if !ok {
@@ -77,58 +71,48 @@ for CI and demos). Restart 'chiton serve' afterwards to load the new vectors.`,
 
 			existing := map[string]bool{}
 			if !all {
-				embs, err := es.AllEmbeddings(ctx)
+				have, err := store.EmbeddingIDs(ctx, es)
 				if err != nil {
 					return fmt.Errorf("load existing embeddings: %w", err)
 				}
-				for _, e := range embs {
-					existing[e.NodeID] = true
+				for _, id := range have {
+					existing[id] = true
 				}
 			}
 
-			var work []model.Node
+			// Work is the embeddable nodes (non-empty TextFor) still lacking a vector, as parallel ids/texts.
+			var ids, texts []string
 			for _, n := range nodes {
-				if embed.Embeddable(n) && (all || !existing[n.ID]) {
-					work = append(work, n)
+				if all || !existing[n.ID] {
+					if t := embed.TextFor(n); t != "" {
+						ids = append(ids, n.ID)
+						texts = append(texts, t)
+					}
 				}
 			}
-			if len(work) == 0 {
+			if len(ids) == 0 {
 				fmt.Fprintln(out, "embed: nothing to do (all embeddable nodes already have vectors; use --all to re-embed)")
 				return nil
 			}
-			fmt.Fprintf(out, "embed: %d node(s) to embed\n", len(work))
+			fmt.Fprintf(out, "embed: %d node(s) to embed\n", len(ids))
 
 			written := 0
-			for start := 0; start < len(work); start += embedBatchSize {
+			for start := 0; start < len(ids); start += embedBatchSize {
 				// Stop between batches on Ctrl-C (root context cancelled) so
 				// the deferred store close runs cleanly.
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				end := start + embedBatchSize
-				if end > len(work) {
-					end = len(work)
-				}
-				batch := work[start:end]
-				texts := make([]string, len(batch))
-				for i, n := range batch {
-					texts[i] = embed.TextFor(n)
-				}
-				vecs, err := emb.Embed(ctx, texts)
+				end := min(start+embedBatchSize, len(ids))
+				embs, _, err := embed.TextEmbeddings(ctx, emb, ids[start:end], texts[start:end])
 				if err != nil {
 					return fmt.Errorf("embed batch: %w", err)
-				}
-				embs := make([]store.Embedding, 0, len(batch))
-				for i, n := range batch {
-					if i < len(vecs) {
-						embs = append(embs, store.Embedding{NodeID: n.ID, Vec: vecs[i]})
-					}
 				}
 				if err := es.UpsertEmbeddings(ctx, embs); err != nil {
 					return fmt.Errorf("store embeddings: %w", err)
 				}
 				written += len(embs)
-				fmt.Fprintf(out, "embed: %d/%d\n", written, len(work))
+				fmt.Fprintf(out, "embed: %d/%d\n", written, len(ids))
 			}
 
 			fmt.Fprintf(out, "embed: done — %d embeddings written (dim %d)\n", written, emb.Dim())
@@ -161,12 +145,9 @@ func linkSimilarNodes(ctx context.Context, gs store.GraphStore, es store.Embeddi
 	if err != nil {
 		return 0, err
 	}
-	idx := vector.NewFlat()
-	for _, e := range embs {
-		idx.Add([]vector.Item{{ID: e.NodeID, Vec: e.Vec}})
-	}
+	idx := newFlatIndex(slices.Clone(embs)) // a header copy: embs keeps its raw vectors, the queries below
 
-	seen := map[string]bool{}
+	seen := map[[2]string]bool{}
 	var edges []model.Edge
 	for _, e := range embs {
 		for _, r := range idx.Search(e.Vec, 6) {
@@ -178,7 +159,7 @@ func linkSimilarNodes(ctx context.Context, gs store.GraphStore, es store.Embeddi
 			if a > b {
 				a, b = b, a
 			}
-			key := a + "|" + b
+			key := [2]string{a, b}
 			if seen[key] {
 				continue
 			}
@@ -202,6 +183,19 @@ func linkSimilarNodes(ctx context.Context, gs store.GraphStore, es store.Embeddi
 	return len(edges), nil
 }
 
+// newFlatIndex builds an in-memory vector index over embs, nil-ing each embs[i].Vec once indexed (the index keeps a
+// normalized copy) so the raw and normalized sets are never both fully live.
+func newFlatIndex(embs []store.Embedding) *vector.Flat {
+	idx := vector.NewFlatSized(len(embs))
+	item := make([]vector.Item, 1)
+	for i := range embs {
+		item[0] = vector.Item{ID: embs[i].NodeID, Vec: embs[i].Vec}
+		idx.Add(item)
+		embs[i].Vec = nil
+	}
+	return idx
+}
+
 // searchCmd runs hybrid retrieval from the command line.
 func searchCmd() *cobra.Command {
 	var k, hops, maxTokens int
@@ -213,17 +207,12 @@ func searchCmd() *cobra.Command {
 		Short: "Hybrid semantic + graph search over the embedded graph",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load()
+			cfg, gs, err := loadStore(true)
 			if err != nil {
 				return err
 			}
-			out := cmd.OutOrStdout()
-
-			gs, err := openGraphStore(cfg.GraphPath, true)
-			if err != nil {
-				return fmt.Errorf("open store: %w", err)
-			}
 			defer gs.Close()
+			out := cmd.OutOrStdout()
 
 			es, ok := store.GraphStore(gs).(store.EmbeddingStore)
 			if !ok {
@@ -237,17 +226,12 @@ func searchCmd() *cobra.Command {
 				fmt.Fprintln(out, "search: no embeddings indexed — run 'chiton embed' first")
 				return nil
 			}
-			idx := vector.NewFlat()
-			for _, e := range embs {
-				idx.Add([]vector.Item{{ID: e.NodeID, Vec: e.Vec}})
-			}
-
 			emb, err := newEmbedder(cfg, "", "")
 			if err != nil {
 				return err
 			}
 			clusterResults, _ := cluster.LoadSidecar(cluster.SidecarPath(cfg.GraphPath))
-			eng := retrieve.New(gs, idx, emb, clusterResults)
+			eng := retrieve.New(gs, newFlatIndex(embs), emb, clusterResults)
 
 			query := strings.Join(args, " ")
 			res, err := eng.Query(cmd.Context(), query, retrieve.Options{
@@ -262,12 +246,7 @@ func searchCmd() *cobra.Command {
 			}
 
 			if asJSON {
-				b, err := json.MarshalIndent(res, "", "  ")
-				if err != nil {
-					return err
-				}
-				fmt.Fprintln(out, string(b))
-				return nil
+				return printJSON(out, res)
 			}
 
 			fmt.Fprintf(out, "%s\n\n", res.Summary)
@@ -317,13 +296,9 @@ func extractPendingCmd() *cobra.Command {
 		Use:   "pending",
 		Short: "Print pending extraction task specs as JSON",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := config.Load()
+			cfg, gs, err := loadStore(true)
 			if err != nil {
 				return err
-			}
-			gs, err := openGraphStore(cfg.GraphPath, true)
-			if err != nil {
-				return fmt.Errorf("open store: %w", err)
 			}
 			defer gs.Close()
 
@@ -332,20 +307,8 @@ func extractPendingCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-
-			b, err := json.MarshalIndent(specs, "", "  ")
-			if err != nil {
-				return err
-			}
-			if outFile != "" {
-				if err := os.WriteFile(outFile, b, 0o644); err != nil {
-					return fmt.Errorf("write %s: %w", outFile, err)
-				}
-				fmt.Fprintf(cmd.OutOrStdout(), "extract: %d pending task(s) written to %s\n", len(specs), outFile)
-				return nil
-			}
-			fmt.Fprintln(cmd.OutOrStdout(), string(b))
-			return nil
+			return emitSpecs(cmd.OutOrStdout(), specs, outFile,
+				fmt.Sprintf("extract: %d pending task(s)", len(specs)))
 		},
 	}
 	cmd.Flags().StringVar(&kind, "kind", "", "Filter to one kind: doc_concepts | image_description")
@@ -372,14 +335,14 @@ func extractSubmitCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("read %s: %w", args[0], err)
 			}
-			results, err := parseSubmitResults(data)
+			results, err := parseOneOrMany[subagent.SubmitResult](data, "a SubmitResult")
 			if err != nil {
 				return err
 			}
 
 			gs, err := openGraphStore(cfg.GraphPath, false)
 			if err != nil {
-				return fmt.Errorf("open store: %w", err)
+				return err
 			}
 			defer gs.Close()
 
@@ -416,20 +379,4 @@ func extractSubmitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&modelName, "model", "", "Embedding model override")
 	cmd.Flags().BoolVar(&noEmbed, "no-embed", false, "Do not embed new concepts (defer to a later 'chiton embed')")
 	return cmd
-}
-
-// parseSubmitResults accepts either a single SubmitResult object or a JSON
-// array of them. A leading UTF-8 BOM (common on Windows-authored files) is
-// stripped first.
-func parseSubmitResults(data []byte) ([]subagent.SubmitResult, error) {
-	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
-	var arr []subagent.SubmitResult
-	if err := json.Unmarshal(data, &arr); err == nil {
-		return arr, nil
-	}
-	var single subagent.SubmitResult
-	if err := json.Unmarshal(data, &single); err != nil {
-		return nil, fmt.Errorf("parse results: expected a SubmitResult object or array: %w", err)
-	}
-	return []subagent.SubmitResult{single}, nil
 }

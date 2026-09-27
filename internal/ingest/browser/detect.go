@@ -12,9 +12,8 @@ type browserRoot struct {
 	root string
 }
 
-// DetectDBs returns the History databases of installed Chromium-family browsers
-// on the current OS — the Default profile plus any numbered "Profile N" dirs —
-// filtered to files that actually exist. Returns nil when none are found.
+// DetectDBs returns the existing History databases of installed Chromium-family browsers (Default and
+// "Profile N" profiles), or nil when none are found.
 func DetectDBs() []DetectedDB {
 	var out []DetectedDB
 	for _, b := range browserRoots() {

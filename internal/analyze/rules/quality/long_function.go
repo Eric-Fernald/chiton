@@ -30,13 +30,7 @@ func (LongFunction) Meta() analyze.Meta {
 func (LongFunction) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
 	for _, n := range t.Nodes {
-		if n.Kind != model.KindSymbol || n.Span == nil {
-			continue
-		}
-		// Only treat nodes the extractor explicitly tagged as a function-like
-		// kind; class/struct/etc. nodes also live in symbol-space.
-		lk, _ := n.Attrs["lang_kind"].(string)
-		if !isFuncLike(lk) {
+		if !isFuncNode(n) {
 			continue
 		}
 		lines := n.Span.EndLine - n.Span.StartLine + 1
@@ -57,12 +51,10 @@ func (LongFunction) MatchFile(_ context.Context, t analyze.FileTarget) []analyze
 	return out
 }
 
-func isFuncLike(langKind string) bool {
-	switch langKind {
-	case "func", "method", "arrow":
-		return true
-	}
-	return false
+// isFuncNode reports whether n is a spanned symbol the extractor tagged as function-like; class/struct/etc.
+// nodes also live in symbol space.
+func isFuncNode(n model.Node) bool {
+	return n.Kind == model.KindSymbol && n.Span != nil && analyze.IsFuncKind(model.AttrString(n.Attrs, "lang_kind"))
 }
 
 func init() { analyze.Register(LongFunction{}) }

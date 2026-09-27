@@ -1,134 +1,61 @@
 package install
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
+	"errors"
 	"slices"
 
 	"gopkg.in/yaml.v3"
 )
 
-// Aider has no native MCP support, so chiton integrates with it purely through
-// its conventions mechanism: a CONVENTIONS.md rules file that Aider only loads
-// when it is named in the `read:` list of .aider.conf.yml (or passed via
-// --read). These helpers merge a filename into that `read:` list, which Aider
-// accepts as either a scalar string or a sequence.
+// Aider loads CONVENTIONS.md only when .aider.conf.yml names it under `read:`, which Aider accepts as
+// either a scalar string or a sequence; these helpers merge a filename into that list.
 
-// AddAiderRead ensures file appears in the `read:` list of the Aider config at
-// path, creating the file/key as needed and preserving all other settings.
-//
-// Returns whether the file was created (true) or updated in place (false),
-// plus whether file was already present in `read:`.
+// AddAiderRead ensures file is in the `read:` list of the Aider config at path, preserving other settings.
+// It reports whether the file was created and whether file was already listed.
 func AddAiderRead(path, file string) (created, preexisted bool, err error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return false, false, fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
+	doc, created, err := openDoc(path, yaml.Unmarshal)
+	if err != nil {
+		return false, false, err
 	}
-	existing, readErr := os.ReadFile(path)
-	if readErr != nil && !os.IsNotExist(readErr) {
-		return false, false, fmt.Errorf("read %s: %w", path, readErr)
-	}
-
-	doc := map[string]any{}
-	if len(existing) > 0 {
-		if err := yaml.Unmarshal(existing, &doc); err != nil {
-			return false, false, fmt.Errorf("parse %s: %w", path, err)
-		}
-		if doc == nil {
-			doc = map[string]any{}
-		}
-	}
-
 	reads := normalizeStringList(doc["read"])
-	for _, r := range reads {
-		if r == file {
-			preexisted = true
-		}
-	}
+	preexisted = slices.Contains(reads, file)
 	if !preexisted {
 		reads = append(reads, file)
 	}
 	doc["read"] = reads
-
-	out, err := yaml.Marshal(doc)
-	if err != nil {
-		return false, false, fmt.Errorf("marshal %s: %w", path, err)
-	}
-	created = len(existing) == 0
-	if err := writeFileAtomic(path, out, 0o644); err != nil {
-		return false, false, fmt.Errorf("write %s: %w", path, err)
+	if err := saveDoc(path, doc, yaml.Marshal); err != nil {
+		return false, false, err
 	}
 	return created, preexisted, nil
 }
 
-// RemoveAiderRead removes file from the `read:` list of the Aider config at
-// path. If `read:` becomes empty the key is dropped; if the file is left with
-// no settings it is deleted.
-//
-// Returns whether anything was changed.
+// RemoveAiderRead removes file from the `read:` list at path, dropping an emptied key and deleting a
+// file left with no settings. It reports whether anything changed.
 func RemoveAiderRead(path, file string) (changed bool, err error) {
-	existing, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
+	doc, found, err := readDoc(path, yaml.Unmarshal)
+	if !found || err != nil {
+		return false, err
+	}
+	reads := normalizeStringList(doc["read"]) // a null doc has no reads and returns unchanged below
+	n := len(reads)
+	reads = slices.DeleteFunc(reads, func(r string) bool { return r == file })
+	if len(reads) == n {
 		return false, nil
 	}
-	if err != nil {
-		return false, fmt.Errorf("read %s: %w", path, err)
-	}
-	doc := map[string]any{}
-	if err := yaml.Unmarshal(existing, &doc); err != nil {
-		return false, fmt.Errorf("parse %s: %w", path, err)
-	}
-	if doc == nil {
-		return false, nil
-	}
-
-	reads := normalizeStringList(doc["read"])
-	kept := reads[:0]
-	for _, r := range reads {
-		if r == file {
-			changed = true
-			continue
-		}
-		kept = append(kept, r)
-	}
-	if !changed {
-		return false, nil
-	}
-	if len(kept) == 0 {
+	if len(reads) == 0 {
 		delete(doc, "read")
 	} else {
-		doc["read"] = kept
+		doc["read"] = reads
 	}
-
-	if len(doc) == 0 {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return true, fmt.Errorf("remove empty %s: %w", path, err)
-		}
-		return true, nil
-	}
-	out, err := yaml.Marshal(doc)
-	if err != nil {
-		return true, fmt.Errorf("marshal %s: %w", path, err)
-	}
-	if err := writeFileAtomic(path, out, 0o644); err != nil {
-		return true, fmt.Errorf("write %s: %w", path, err)
-	}
-	return true, nil
+	return true, saveOrRemove(path, doc, len(doc) == 0, yaml.Marshal)
 }
 
-// AiderConfHasRead reports whether the Aider config at path lists file in its
-// `read:` setting. Missing/unreadable file → false, nil.
+// AiderConfHasRead reports whether the Aider config at path lists file in its `read:` setting.
+// A missing file is false, nil.
 func AiderConfHasRead(path, file string) (bool, error) {
-	existing, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return false, nil
-	}
+	doc, _, err := readDoc(path, yaml.Unmarshal)
 	if err != nil {
-		return false, err
-	}
-	doc := map[string]any{}
-	if err := yaml.Unmarshal(existing, &doc); err != nil {
-		return false, err
+		return false, errors.Unwrap(err) // bare cause: Doctor prefixes the path itself
 	}
 	return slices.Contains(normalizeStringList(doc["read"]), file), nil
 }

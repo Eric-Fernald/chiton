@@ -1,6 +1,46 @@
 package vector
 
-import "testing"
+import (
+	"fmt"
+	"math/rand"
+	"slices"
+	"sort"
+	"testing"
+)
+
+// TestFlatSearchTopKMatchesFullSort checks heap-based top-k selection against a full sort, ties included.
+func TestFlatSearchTopKMatchesFullSort(t *testing.T) {
+	rng := rand.New(rand.NewSource(1))
+	f := NewFlat()
+	var items []Item
+	for i := range 400 {
+		v := make([]float32, 6)
+		for j := range v {
+			v[j] = float32(rng.Intn(5) - 2) // small integer range forces many exact score ties
+		}
+		items = append(items, Item{ID: fmt.Sprintf("n%03d", i), Vec: v})
+	}
+	f.Add(items)
+	query := []float32{1, -1, 0.5, 2, 0, 1}
+
+	var want []Result
+	q := normalized(query)
+	for i, v := range f.vecs {
+		want = append(want, Result{ID: f.ids[i], Score: dot(q, v)})
+	}
+	sort.Slice(want, func(i, j int) bool {
+		if want[i].Score != want[j].Score {
+			return want[i].Score > want[j].Score
+		}
+		return want[i].ID < want[j].ID
+	})
+	for _, k := range []int{1, 2, 7, 50, f.Len() - 1, f.Len(), f.Len() + 10} {
+		got := f.Search(query, k)
+		if exp := want[:min(k, len(want))]; !slices.Equal(got, exp) {
+			t.Fatalf("k=%d: top-k differs from full sort\n got=%v\nwant=%v", k, got, exp)
+		}
+	}
+}
 
 func TestFlatSearchOrdersByCosine(t *testing.T) {
 	f := NewFlat()
@@ -78,6 +118,36 @@ func TestFlatDelete(t *testing.T) {
 	res := f.Search([]float32{1, 0}, 1)
 	if res[0].ID != "a" {
 		t.Fatalf("after delete nearest to (1,0) = %q, want a", res[0].ID)
+	}
+}
+
+// TestNewFlatSizedMatchesNewFlat checks presizing changes nothing observable, under one-at-a-time adds,
+// replacements, and deletes.
+func TestNewFlatSizedMatchesNewFlat(t *testing.T) {
+	rng := rand.New(rand.NewSource(2))
+	plain, sized := NewFlat(), NewFlatSized(50)
+	for i := range 120 {
+		v := []float32{rng.Float32() - 0.5, rng.Float32() - 0.5, rng.Float32() - 0.5}
+		it := []Item{{ID: fmt.Sprintf("n%d", rng.Intn(80)), Vec: v}}
+		plain.Add(it)
+		sized.Add(it)
+		if i%17 == 0 {
+			del := []string{fmt.Sprintf("n%d", rng.Intn(80))}
+			plain.Delete(del)
+			sized.Delete(del)
+		}
+	}
+	if !slices.Equal(plain.ids, sized.ids) || plain.Len() != sized.Len() {
+		t.Fatalf("ids differ: %v vs %v", plain.ids, sized.ids)
+	}
+	for i := range plain.vecs {
+		if !slices.Equal(plain.vecs[i], sized.vecs[i]) || plain.pos[plain.ids[i]] != sized.pos[sized.ids[i]] {
+			t.Fatalf("vector %d differs", i)
+		}
+	}
+	q := []float32{0.3, -0.2, 0.9}
+	if got, want := sized.Search(q, 10), plain.Search(q, 10); !slices.Equal(got, want) {
+		t.Fatalf("search differs\n got=%v\nwant=%v", got, want)
 	}
 }
 

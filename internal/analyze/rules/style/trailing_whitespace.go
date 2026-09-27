@@ -2,29 +2,27 @@
 package style
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	"strings"
 
 	"github.com/Eric-Fernald/chiton/internal/analyze"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// TrailingWhitespace flags trailing spaces/tabs at end-of-line. The most
-// pedestrian style finding, but cheap, deterministic, and surfaces editors
-// that aren't configured to strip on save.
+// sourceLangs restricts style rules to source code: Markdown uses two trailing spaces as a hard
+// line break, and image/binary files have no meaningful "lines". Shared; never mutate.
+var sourceLangs = []string{"go", "py", "js", "ts", "jsx", "tsx", "rs", "java"}
+
+// TrailingWhitespace flags trailing spaces/tabs at end-of-line, surfacing editors that aren't
+// configured to strip on save.
 type TrailingWhitespace struct{}
 
 func (TrailingWhitespace) Meta() analyze.Meta {
 	return analyze.Meta{
-		ID:       "style/trailing-whitespace",
-		Category: analyze.CategoryStyle,
-		Severity: analyze.SeverityInfo,
-		Scope:    analyze.FileScope,
-		// Restrict to source languages: Markdown uses two trailing spaces as a
-		// hard line break, and image/binary files have no meaningful "lines".
-		Languages:  []string{"go", "py", "js", "ts", "jsx", "tsx", "rs", "java"},
+		ID:         "style/trailing-whitespace",
+		Category:   analyze.CategoryStyle,
+		Severity:   analyze.SeverityInfo,
+		Scope:      analyze.FileScope,
+		Languages:  sourceLangs,
 		Summary:    "Line ends with trailing whitespace.",
 		Fix:        "Configure your editor to strip trailing whitespace on save.",
 		Provenance: analyze.ProvenanceDeterministic,
@@ -33,17 +31,11 @@ func (TrailingWhitespace) Meta() analyze.Meta {
 
 func (TrailingWhitespace) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := sc.Text()
+	for line, text := range analyze.Lines(t.Content) {
 		if text == "" {
 			continue
 		}
-		trimmed := strings.TrimRight(text, " \t")
-		if len(trimmed) == len(text) {
+		if last := text[len(text)-1]; last != ' ' && last != '\t' {
 			continue
 		}
 		out = append(out, analyze.Finding{

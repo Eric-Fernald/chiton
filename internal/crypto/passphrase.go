@@ -16,21 +16,18 @@ const EnvVarPassphrase = "CHITON_PASSPHRASE"
 // set nor an interactive terminal is available.
 var ErrNoPassphrase = errors.New("no passphrase available: set CHITON_PASSPHRASE or run interactively")
 
-// GetPassphrase returns the chiton passphrase from CHITON_PASSPHRASE, or by
-// prompting on the controlling terminal (no echo). The prompt argument is the
-// label shown when interactive — typically "Enter chiton passphrase:".
-//
-// Confirm=true asks the user to enter the passphrase twice and verifies they
-// match — appropriate when creating a new keyfile.
+// GetPassphrase returns CHITON_PASSPHRASE, else prompts with prompt on the terminal (no echo);
+// confirm asks twice and requires a match (use it when creating a keyfile).
 func GetPassphrase(prompt string, confirm bool) (string, error) {
 	if env := os.Getenv(EnvVarPassphrase); env != "" {
 		return env, nil
 	}
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
+	fd := int(os.Stdin.Fd())
+	if !term.IsTerminal(fd) {
 		return "", ErrNoPassphrase
 	}
 	fmt.Fprint(os.Stderr, prompt+" ")
-	first, err := term.ReadPassword(int(os.Stdin.Fd()))
+	first, err := term.ReadPassword(fd)
 	fmt.Fprintln(os.Stderr)
 	if err != nil {
 		return "", fmt.Errorf("read passphrase: %w", err)
@@ -42,7 +39,7 @@ func GetPassphrase(prompt string, confirm bool) (string, error) {
 		return string(first), nil
 	}
 	fmt.Fprint(os.Stderr, "Confirm: ")
-	second, err := term.ReadPassword(int(os.Stdin.Fd()))
+	second, err := term.ReadPassword(fd)
 	fmt.Fprintln(os.Stderr)
 	if err != nil {
 		return "", fmt.Errorf("read confirmation: %w", err)

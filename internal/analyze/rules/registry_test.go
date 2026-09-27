@@ -29,9 +29,7 @@ func TestRegistryPopulated(t *testing.T) {
 			t.Errorf("rule %s has empty summary", m.ID)
 		}
 	}
-	// All eight categories should be represented now that we have rules in
-	// architecture, security, bugs, quality, performance, reliability,
-	// database, and style.
+	// Every one of the eight categories must have at least one rule.
 	wanted := []analyze.Category{
 		analyze.CategoryArchitecture, analyze.CategorySecurity,
 		analyze.CategoryBugs, analyze.CategoryQuality,

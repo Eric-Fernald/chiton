@@ -1,7 +1,6 @@
 package reliability
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"regexp"
@@ -10,10 +9,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// LogFatalInCode flags log.Fatal / Fatalf / Fatalln and log.Panic / Panicf /
-// Panicln in non-entrypoint Go code. log.Fatal* calls os.Exit(1) (skipping
-// deferred cleanup) and log.Panic* panics the goroutine — both rip control away
-// from callers. They belong in main(), not in library code.
+// LogFatalInCode flags log.Fatal* / log.Panic* in non-main Go code: Fatal calls os.Exit(1), skipping
+// deferred cleanup, and Panic panics the goroutine; both take control away from callers.
 type LogFatalInCode struct{}
 
 func (LogFatalInCode) Meta() analyze.Meta {
@@ -29,25 +26,21 @@ func (LogFatalInCode) Meta() analyze.Meta {
 	}
 }
 
-// Matches a `log` (or aliased *log) selector calling Fatal/Fatalf/Fatalln or
-// Panic/Panicf/Panicln. Anchoring on `log.` keeps it from matching unrelated
-// `.Fatal(` methods on non-logger receivers.
+// Anchoring on `log.` keeps unrelated `.Fatal(` methods on other receivers from matching.
 var logFatalRe = regexp.MustCompile(`\blog\.(Fatal|Fatalf|Fatalln|Panic|Panicf|Panicln)\s*\(`)
 
 func (LogFatalInCode) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	if isGoTestFile(t.Path) || isGoMainFile(t.Path) {
 		return nil
 	}
+	if !bytes.Contains(t.Content, []byte("log.")) {
+		return nil
+	}
 	// Per-file masking removes log.Fatal/Panic tokens inside string literals and
 	// //, /* */ (incl. multi-line) comments, so commented-out code is not flagged.
-	masked := maskGoLiteralsAndComments(t.Content)
+	masked := analyze.MaskedGoLiterals(t)
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(masked))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := sc.Text()
+	for line, text := range analyze.Lines(masked) {
 		if logFatalRe.MatchString(text) {
 			out = append(out, analyze.Finding{
 				RuleID:       "reliability/log-fatal-in-code",

@@ -99,9 +99,8 @@ func TestWebhookWithoutClientStateFailsClosed(t *testing.T) {
 		return nil
 	}, nil)
 
-	// A notification that carries no clientState — exactly what a forged
-	// callback would look like — must not be dispatched when we have no secret
-	// to compare it against.
+	// A notification without clientState (what a forged callback looks like) must not dispatch when we have
+	// no secret to compare against.
 	body := `{"value":[
 	  {"subscriptionId":"sub1","changeType":"created","clientState":"",
 	   "resource":"communications/onlineMeetings('MEET1')/transcripts('TID1')"},

@@ -1,11 +1,14 @@
 package meeting
 
 import (
+	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
+	"github.com/Eric-Fernald/chiton/internal/graph/store"
 )
 
 // URI schemes for meeting-domain nodes.
@@ -29,27 +32,17 @@ func PersonURI(name string) string {
 	return PersonURIScheme + slug(name)
 }
 
-// PersonID returns the stable node ID for a speaker, so other packages
-// (the linkage submit path) can resolve an action-item assignee to the same
-// node ToGraph created.
+// slug is model.Slug with this package's fallback, for readable meeting:// / person:// URIs and decision IDs.
+func slug(s string) string { return model.Slug(s, "meeting") }
+
+// PersonID returns the stable node ID for a speaker, so the linkage submit path resolves an action-item
+// assignee to the same node ToGraph created.
 func PersonID(name string) string {
 	return model.NewNodeID(PersonURI(name), name)
 }
 
-// ToGraph converts a parsed Transcript into graph nodes and edges.
-//
-// Everything emitted here is EXTRACTED with confidence 1.0: turns, speakers,
-// timings, and participants are read directly from the transcript, never
-// inferred. The meeting node and its meeting_turn children share the meeting's
-// source_uri, so a re-ingest can DeleteBySourceURI(meetingURI) then re-add the
-// whole meeting atomically (the same pattern the AST extractors use for a file
-// and its symbols). person nodes use a separate, shared person:// identity and
-// survive a re-ingest.
-//
-// The decision/rationale layer (DECIDED_IN, DISCUSSED_IN, …) is INFERRED and is
-// added later by LinkService — never here.
-//
-// now is injected for deterministic timestamps in tests.
+// ToGraph converts a Transcript into EXTRACTED meeting, meeting_turn, and person nodes (nodes[0] is the
+// meeting). Turns share the meeting's source_uri so a re-ingest replaces them; person nodes survive it.
 func ToGraph(t *Transcript, now time.Time) ([]model.Node, []model.Edge) {
 	uri := t.SourceURI
 	if uri == "" {
@@ -57,12 +50,12 @@ func ToGraph(t *Transcript, now time.Time) ([]model.Node, []model.Edge) {
 	}
 	meetingID := model.NewNodeID(uri, t.Title)
 
-	var nodes []model.Node
-	var edges []model.Edge
+	// Slot 0 is reserved for the meeting node, filled in once its attrs are known.
+	nodes := make([]model.Node, 1, 1+len(t.Turns))
+	edges := make([]model.Edge, 0, len(t.Turns))
 
 	personID := map[string]string{}
 	var participants []string
-	var fullText strings.Builder
 
 	for i, turn := range t.Turns {
 		speakerID := ""
@@ -93,7 +86,7 @@ func ToGraph(t *Transcript, now time.Time) ([]model.Node, []model.Edge) {
 
 		// One meeting_turn node per turn. ID is keyed on the turn index so a
 		// re-ingest of identical content reproduces the same IDs.
-		turnID := model.NewNodeID(uri, fmt.Sprintf("turn-%d", i))
+		turnID := model.NewNodeID(uri, "turn-"+strconv.Itoa(i))
 		attrs := map[string]any{
 			"index":    i,
 			"text":     turn.Text,
@@ -116,17 +109,10 @@ func ToGraph(t *Transcript, now time.Time) ([]model.Node, []model.Edge) {
 			UpdatedAt:  now,
 		})
 		edges = append(edges, containsEdge(meetingID, turnID, now))
-
-		if turn.Speaker != "" {
-			fullText.WriteString(turn.Speaker)
-			fullText.WriteString(": ")
-		}
-		fullText.WriteString(turn.Text)
-		fullText.WriteByte('\n')
 	}
 
 	meetingAttrs := map[string]any{
-		"text":         strings.TrimRight(fullText.String(), "\n"),
+		"text":         strings.TrimRight(t.Text(), "\n"),
 		"participants": participants,
 		"turn_count":   len(t.Turns),
 	}
@@ -137,7 +123,7 @@ func ToGraph(t *Transcript, now time.Time) ([]model.Node, []model.Edge) {
 		meetingAttrs["duration_ms"] = d.Milliseconds()
 	}
 
-	meeting := model.Node{
+	nodes[0] = model.Node{
 		ID:         meetingID,
 		Kind:       model.KindMeeting,
 		Label:      t.Title,
@@ -148,9 +134,20 @@ func ToGraph(t *Transcript, now time.Time) ([]model.Node, []model.Edge) {
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
-	// Prepend the meeting node so callers can rely on nodes[0] being it.
-	nodes = append([]model.Node{meeting}, nodes...)
 	return nodes, edges
+}
+
+// Upsert writes tr's ToGraph subgraph to gs and returns the node count; noun names it in errors ("upsert <noun>
+// nodes: ..."). Callers first delete the prior version under tr.SourceURI.
+func Upsert(ctx context.Context, gs store.GraphStore, tr *Transcript, now time.Time, noun string) (int, error) {
+	nodes, edges := ToGraph(tr, now)
+	if err := gs.UpsertNodes(ctx, nodes); err != nil {
+		return 0, fmt.Errorf("upsert %s nodes: %w", noun, err)
+	}
+	if err := gs.UpsertEdges(ctx, edges); err != nil {
+		return 0, fmt.Errorf("upsert %s edges: %w", noun, err)
+	}
+	return len(nodes), nil
 }
 
 // transcriptDuration returns the span from the first turn's start to the last
@@ -228,28 +225,4 @@ func mentionedEdge(meetingID, personID string, now time.Time) model.Edge {
 		Confidence: 1.0,
 		CreatedAt:  now,
 	}
-}
-
-// slug lowercases and collapses runs of non-alphanumerics to single hyphens,
-// for readable meeting:// / person:// URIs. Empty input yields "meeting".
-func slug(s string) string {
-	var b strings.Builder
-	lastHyphen := false
-	for _, r := range strings.ToLower(s) {
-		switch {
-		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
-			b.WriteRune(r)
-			lastHyphen = false
-		default:
-			if !lastHyphen {
-				b.WriteByte('-')
-				lastHyphen = true
-			}
-		}
-	}
-	out := strings.Trim(b.String(), "-")
-	if out == "" {
-		return "meeting"
-	}
-	return out
 }

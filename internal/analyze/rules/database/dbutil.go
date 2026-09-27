@@ -1,31 +1,27 @@
 package database
 
 import (
-	"path"
+	"bytes"
 	"strings"
+
+	"github.com/Eric-Fernald/chiton/internal/analyze"
 )
 
-// stripDBComment removes the line-comment tail from a source line, respecting
-// string literals so a comment marker inside a quoted string is preserved.
-// It strips the comment styles relevant to the file's language:
-//   - "//" for go/js/ts/java
-//   - "#" for python
-//   - "--" for SQL (recognised in every language, since these rules scan SQL
-//     embedded in string literals — but only outside of quotes)
-//
-// It also blanks out single-line "/* ... */" block-comment spans (the marker
-// opens and closes on the same line) so a keyword inside such a comment does not
-// match. Block comments that span multiple lines are handled separately by
-// maskDBBlocks, which the rules apply as a per-file pass before scanning.
-func stripDBComment(s, uri string) string {
-	ext := strings.ToLower(strings.TrimPrefix(path.Ext(uri), "."))
-	hash := ext == "py"
-	b := []byte(s)
+// stripDBComment cuts s at a line comment outside quotes (`//`, `--`, and `#` when py) and blanks
+// single-line /* */ spans; string contents are never touched, since the SQL rules match inside them.
+func stripDBComment(s string, py bool) string {
+	var b []byte // copy of s, made only once a /* */ span needs blanking
+	cut := func(i int) string {
+		if b == nil {
+			return s[:i]
+		}
+		return string(b[:i])
+	}
 	var inStr byte
-	for i := 0; i < len(b); i++ {
-		c := b[i]
+	for i := 0; i < len(s); i++ {
+		c := s[i]
 		if inStr != 0 {
-			if c == '\\' && i+1 < len(b) {
+			if c == '\\' && i+1 < len(s) {
 				i++
 				continue
 			}
@@ -38,15 +34,18 @@ func stripDBComment(s, uri string) string {
 		case '"', '\'', '`':
 			inStr = c
 		case '/':
-			if i+1 < len(b) && b[i+1] == '/' {
-				return string(b[:i])
+			if i+1 < len(s) && s[i+1] == '/' {
+				return cut(i)
 			}
-			if i+1 < len(b) && b[i+1] == '*' {
+			if i+1 < len(s) && s[i+1] == '*' {
 				// Single-line block comment: blank everything through "*/" if it
 				// closes on this line, otherwise blank to end of line.
-				end := strings.Index(string(b[i+2:]), "*/")
+				end := strings.Index(s[i+2:], "*/")
 				if end < 0 {
-					return string(b[:i])
+					return cut(i)
+				}
+				if b == nil {
+					b = []byte(s)
 				}
 				for j := i; j < i+2+end+2; j++ {
 					b[j] = 'x'
@@ -54,36 +53,41 @@ func stripDBComment(s, uri string) string {
 				i = i + 2 + end + 1
 			}
 		case '-':
-			if i+1 < len(b) && b[i+1] == '-' {
-				return string(b[:i])
+			if i+1 < len(s) && s[i+1] == '-' {
+				return cut(i)
 			}
 		case '#':
-			if hash {
-				return string(b[:i])
+			if py {
+				return cut(i)
 			}
 		}
+	}
+	if b == nil {
+		return s
 	}
 	return string(b)
 }
 
-// maskDBBlocks returns a copy of src with the bodies of multi-line constructs
-// blanked to the filler byte 'x' (newlines preserved so line numbers stay
-// accurate). This is a per-FILE pass that tracks open/close across lines:
-//   - "/* ... */" block comments (all languages)
-//   - Python triple-quoted strings (”'...”' and """...""") in .py files,
-//     which are routinely used as docstrings and may mention SQL keywords.
-//
-// Single-quoted and double-quoted single-line string literals are left intact
-// here — the rules need their contents to detect embedded SQL — they are
-// handled per line by stripDBComment instead.
-func maskDBBlocks(src []byte, uri string) []byte {
-	ext := strings.ToLower(strings.TrimPrefix(path.Ext(uri), "."))
-	py := ext == "py"
-	out := make([]byte, len(src))
-	copy(out, src)
+// maskedDB is maskDBBlocks(t.Content, py) computed once per file, shared by every database rule.
+func maskedDB(t analyze.FileTarget, py bool) []byte {
+	key := "database/maskDBBlocks"
+	if py {
+		key += "/py"
+	}
+	return analyze.Cached(t, key, func() []byte { return maskDBBlocks(t.Content, py) })
+}
+
+// maskDBBlocks overwrites /* */ comments and, when py, triple-quoted strings with 'x' (newlines kept),
+// leaving other strings intact for the SQL rules; it may return src itself, so never modify the result.
+func maskDBBlocks(src []byte, py bool) []byte {
+	if !bytes.Contains(src, []byte("/*")) &&
+		(!py || !bytes.Contains(src, []byte(`"""`)) && !bytes.Contains(src, []byte("'''"))) {
+		return src
+	}
+	out := bytes.Clone(src)
 	const filler = 'x'
 	inBlock := false  // inside /* ... */
-	var triple string // "" or `'''` or `"""` when inside a triple-quoted string
+	triple := byte(0) // quote char while inside a triple-quoted string
 	var inStr byte    // 0, '"' or '\'' for single-line string (so /* inside a string is ignored)
 	for i := 0; i < len(out); i++ {
 		c := out[i]
@@ -97,13 +101,13 @@ func maskDBBlocks(src []byte, uri string) []byte {
 			} else if c != '\n' {
 				out[i] = filler
 			}
-		case triple != "":
-			if i+len(triple) <= len(out) && string(out[i:i+len(triple)]) == triple {
-				for j := i; j < i+len(triple); j++ {
-					out[j] = filler
-				}
-				i += len(triple) - 1
-				triple = ""
+		case triple != 0:
+			if c == triple && i+2 < len(out) && out[i+1] == c && out[i+2] == c {
+				out[i] = filler
+				out[i+1] = filler
+				out[i+2] = filler
+				i += 2
+				triple = 0
 			} else if c != '\n' {
 				out[i] = filler
 			}
@@ -121,10 +125,10 @@ func maskDBBlocks(src []byte, uri string) []byte {
 				inBlock = true
 				out[i] = filler
 			case py && (c == '\'' || c == '"') && i+2 < len(out) && out[i+1] == c && out[i+2] == c:
-				triple = string([]byte{c, c, c})
-				for j := i; j < i+3; j++ {
-					out[j] = filler
-				}
+				triple = c
+				out[i] = filler
+				out[i+1] = filler
+				out[i+2] = filler
 				i += 2
 			case c == '"' || c == '\'' || c == '`':
 				inStr = c

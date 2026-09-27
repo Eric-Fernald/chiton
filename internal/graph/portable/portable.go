@@ -1,12 +1,5 @@
-// Package portable implements chiton's interchange format: the self-describing
-// JSON snapshot written by GraphStore.Snapshot, and the read/merge side that
-// loads one (or several) snapshots back into a store. This is the supported way
-// to back up, share, migrate, or merge graphs across repositories.
-//
-// Cross-repo merging falls out for free: node IDs are stable hashes of
-// (source_uri, label) (see model.NewNodeID), so re-importing the same graph is
-// idempotent and importing two repos' graphs into one store naturally dedups
-// the nodes they share (e.g. an external `fmt` package node).
+// Package portable reads and merges the JSON snapshots GraphStore.Snapshot writes. Node IDs hash
+// (source_uri, label), so re-imports are idempotent and merging two repos' graphs dedups shared nodes.
 package portable
 
 import (
@@ -20,9 +13,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
 )
 
-// Snapshot is the on-wire shape: every node (with its embedding inlined, when
-// present) and every edge of a graph. It matches the struct GraphStore.Snapshot
-// marshals, so a file written by `chiton export` round-trips through Read.
+// Snapshot is the on-wire shape: every node (embedding inlined when present) and every edge. It matches
+// what GraphStore.Snapshot marshals, so a `chiton export` file round-trips through Read.
 type Snapshot struct {
 	Nodes []model.Node `json:"nodes"`
 	Edges []model.Edge `json:"edges"`
@@ -53,16 +45,8 @@ type MergeStats struct {
 	Embeddings int `json:"embeddings"`
 }
 
-// Merge upserts a snapshot's nodes and edges into gs in batches of batch
-// (DefaultBatch when batch <= 0). Upserts are idempotent and keyed by the
-// snapshot's stable IDs, so merging is safe to re-run and dedups shared nodes
-// across graphs.
-//
-// Embeddings inlined on nodes are stripped from the node JSON (to keep the
-// store's node records lean, matching the build/embed layout) and written to
-// the dedicated embedding keyspace instead — but only when gs implements
-// store.EmbeddingStore. Against a store without embedding support, vectors are
-// silently dropped (the structural graph still merges correctly).
+// Merge idempotently upserts snap into gs in batches (DefaultBatch when batch <= 0). Inlined embeddings move
+// to the embedding keyspace when gs implements store.EmbeddingStore and are dropped otherwise.
 func Merge(ctx context.Context, gs store.GraphStore, snap *Snapshot, batch int) (MergeStats, error) {
 	if batch <= 0 {
 		batch = DefaultBatch

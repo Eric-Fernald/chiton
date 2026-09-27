@@ -1,20 +1,17 @@
 package report
 
 import (
+	"cmp"
 	"fmt"
 	"io"
-	"strings"
+	"strconv"
 
 	"github.com/Eric-Fernald/chiton/internal/graph/cluster"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// DashboardFinding is the render-ready projection of an analyze finding for the
-// dashboard's findings explorer. It mirrors analyze.FindingView but is declared
-// here so the report package stays free of an analyze dependency (report only
-// knows graph model + cluster, exactly like the other visual exports). The CLI
-// converts analyze.FindingView into this shape, supplying the community of the
-// affected node so the explorer can filter by it.
+// DashboardFinding is the dashboard's projection of analyze.FindingView, declared here so report
+// stays free of an analyze dependency; the CLI converts findings and supplies each one's community.
 type DashboardFinding struct {
 	ID         string
 	RuleID     string
@@ -48,22 +45,13 @@ type DashboardData struct {
 	MaxNodes int
 }
 
-// GenerateDashboard writes a self-contained, read-only dashboard page to w: an
-// interactive graph view (vis-network) and a findings explorer with severity /
-// category / community / file / provenance filters. As with GenerateHTML the
-// node, edge, and finding data are embedded inline (so the file opens straight
-// from disk over file://), and only the vis-network library is loaded from a
-// CDN. Findings cross-link into the graph: clicking a finding focuses its
-// affected node when that node survived the MaxNodes cap.
+// GenerateDashboard writes a self-contained, read-only page to w: a vis-network graph view plus a
+// filterable findings explorer whose rows focus their affected node if it survived the MaxNodes cap.
 func GenerateDashboard(w io.Writer, data DashboardData) error {
-	views, keptEdges := buildView(data.Nodes, data.Edges, data.Overlay, data.MaxNodes)
+	hn, he := toHTMLData(buildView(data.Nodes, data.Edges, data.Overlay, data.MaxNodes))
 
-	// Community count reflects the full scoped graph (pre-cap), not the rendered
-	// view: so a small --max-nodes doesn't shrink the reported total, and the
-	// header stays consistent with the graph-wide community each finding is
-	// tagged with in the explorer. A finding may still reference a community
-	// whose nodes were all trimmed from the rendered graph — its [graph] link
-	// then degrades gracefully (see focusNode).
+	// Count communities over the full pre-cap graph so a small --max-nodes doesn't shrink the total
+	// and it matches the graph-wide community each finding is tagged with.
 	commSet := map[int]struct{}{}
 	if data.Overlay != nil {
 		for _, n := range data.Nodes {
@@ -71,23 +59,6 @@ func GenerateDashboard(w io.Writer, data DashboardData) error {
 				commSet[r.CommunityID] = struct{}{}
 			}
 		}
-	}
-
-	hn := make([]htmlNode, len(views))
-	for i, v := range views {
-		hn[i] = htmlNode{
-			ID:    v.ID,
-			Label: v.Label,
-			Kind:  string(v.Kind),
-			URI:   v.SourceURI,
-			Comm:  v.Community,
-			Deg:   v.Degree,
-			Btw:   v.Betweenness,
-		}
-	}
-	he := make([]htmlEdge, 0, len(keptEdges))
-	for _, e := range keptEdges {
-		he = append(he, htmlEdge{From: e.Src, To: e.Dst, Kind: strings.ToLower(string(e.Kind))})
 	}
 
 	df := make([]dashFinding, 0, len(data.Findings))
@@ -107,37 +78,16 @@ func GenerateDashboard(w io.Writer, data DashboardData) error {
 		})
 	}
 
-	nodesJSON, err := marshalForScript(hn)
-	if err != nil {
-		return fmt.Errorf("marshal nodes: %w", err)
-	}
-	edgesJSON, err := marshalForScript(he)
-	if err != nil {
-		return fmt.Errorf("marshal edges: %w", err)
-	}
+	// dashFinding holds only strings and ints, so this can't fail before a graph marshal error would.
 	findingsJSON, err := marshalForScript(df)
 	if err != nil {
 		return fmt.Errorf("marshal findings: %w", err)
 	}
-
-	title := data.Title
-	if title == "" {
-		title = "chiton dashboard"
-	}
-
-	page := strings.NewReplacer(
-		"__TITLE__", htmlTextEscape(title),
-		"__NODE_COUNT__", fmt.Sprintf("%d", len(hn)),
-		"__EDGE_COUNT__", fmt.Sprintf("%d", len(he)),
-		"__COMM_COUNT__", fmt.Sprintf("%d", len(commSet)),
-		"__FINDING_COUNT__", fmt.Sprintf("%d", len(df)),
-		"__NODES__", nodesJSON,
-		"__EDGES__", edgesJSON,
+	return writePage(w, dashboardTemplate, cmp.Or(data.Title, "chiton dashboard"), hn, he,
+		"__COMM_COUNT__", strconv.Itoa(len(commSet)),
+		"__FINDING_COUNT__", strconv.Itoa(len(df)),
 		"__FINDINGS__", findingsJSON,
-	).Replace(dashboardTemplate)
-
-	_, err = io.WriteString(w, page)
-	return err
+	)
 }
 
 // dashFinding is the compact JSON shape embedded for the findings explorer.
@@ -156,12 +106,8 @@ type dashFinding struct {
 	Node string `json:"node,omitempty"`
 }
 
-// dashboardTemplate is the self-contained dashboard page. Placeholders
-// (__NODES__, __FINDINGS__, …) are substituted by GenerateDashboard. The
-// vis-network UMD bundle is the only external resource; all data, styling, and
-// interaction are inline. The data placeholders are filled with HTML-safe JSON
-// (see marshalForScript) so untrusted node/finding text cannot break out of the
-// <script> block.
+// dashboardTemplate is the self-contained page GenerateDashboard fills in; data placeholders get
+// HTML-safe JSON (marshalForScript) so untrusted node/finding text can't escape the <script> block.
 const dashboardTemplate = `<!DOCTYPE html>
 <html lang="en">
 <head>

@@ -1,8 +1,6 @@
 package security
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 	"strings"
@@ -34,12 +32,11 @@ func (InsecureHTTP) MatchFile(_ context.Context, t analyze.FileTarget) []analyze
 		return nil
 	}
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		match := insecureHTTPRe.FindString(sc.Text())
+	for line, text := range analyze.Lines(t.Content) {
+		if !strings.Contains(text, "http://") {
+			continue
+		}
+		match := insecureHTTPRe.FindString(text)
 		if match == "" {
 			continue
 		}
@@ -64,9 +61,8 @@ func (InsecureHTTP) MatchFile(_ context.Context, t analyze.FileTarget) []analyze
 	return out
 }
 
-// isTestFile is the heuristic that covers Go (_test.go), JS/TS (.test., .spec.),
-// and Python (test_*.py / *_test.py) test files. Centralised here so multiple
-// rules can call it.
+// isTestFile detects Go, JS/TS, and Python test files by path; unlike analyze.IsTestSource it also
+// matches test/ dirs and test_*.py / *_test.py.
 func isTestFile(path string) bool {
 	lp := strings.ToLower(path)
 	switch {
@@ -76,17 +72,21 @@ func isTestFile(path string) bool {
 		return true
 	case strings.Contains(lp, "/tests/"), strings.Contains(lp, "/test/"):
 		return true
-	case strings.HasPrefix(filenameOf(lp), "test_"), strings.HasSuffix(lp, "_test.py"):
+	case strings.HasPrefix(analyze.PathBase(lp), "test_"), strings.HasSuffix(lp, "_test.py"):
 		return true
 	}
 	return false
 }
 
-func filenameOf(p string) string {
-	if i := strings.LastIndexAny(p, "/\\"); i >= 0 {
-		return p[i+1:]
+// containsAny is a cheap exact pre-check for a regex set in which every pattern requires one of
+// lits case-sensitively; it skips the regex work on the vast majority of lines.
+func containsAny(s string, lits ...string) bool {
+	for _, l := range lits {
+		if strings.Contains(s, l) {
+			return true
+		}
 	}
-	return p
+	return false
 }
 
 func init() { analyze.Register(InsecureHTTP{}) }

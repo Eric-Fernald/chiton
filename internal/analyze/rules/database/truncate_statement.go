@@ -1,8 +1,6 @@
 package database
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 
@@ -10,9 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// TruncateStatement flags TRUNCATE TABLE in source. TRUNCATE empties a table
-// instantly and (on most engines) cannot be rolled back the way a DELETE can;
-// it belongs in a controlled migration or admin task, not application code.
+// TruncateStatement flags TRUNCATE TABLE in source: it empties a table and, on most engines,
+// cannot be rolled back like a DELETE.
 type TruncateStatement struct{}
 
 func (TruncateStatement) Meta() analyze.Meta {
@@ -34,12 +31,9 @@ var truncateStmtRe = regexp.MustCompile(`(?i)\bTRUNCATE\s+TABLE\b`)
 
 func (TruncateStatement) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(maskDBBlocks(t.Content, t.URI)))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := stripDBComment(sc.Text(), t.URI)
+	py := analyze.FileExt(t.URI) == "py"
+	for line, raw := range analyze.Lines(maskedDB(t, py)) {
+		text := stripDBComment(raw, py)
 		if truncateStmtRe.MatchString(text) {
 			out = append(out, analyze.Finding{
 				RuleID:       "database/truncate-statement",

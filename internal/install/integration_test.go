@@ -16,13 +16,8 @@ import (
 	badgerstore "github.com/Eric-Fernald/chiton/internal/graph/store/badger"
 )
 
-// TestInstallers_ServerLaunch is the Phase 3.5 per-installer integration test:
-// for each MCP-capable assistant it writes the config, recovers the launch
-// command FROM that config, starts the chiton MCP server exactly as the
-// assistant would, and verifies a real tools/call returns the seeded node.
-//
-// Aider is intentionally absent: it has no MCP support, so there is no server
-// to launch from its config (its wiring is covered by the unit round-trip).
+// TestInstallers_ServerLaunch launches the MCP server from the command each installer wrote into its
+// config and checks a real tools/call. Aider is absent: it has no MCP support.
 func TestInstallers_ServerLaunch(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the chiton binary and spawns subprocesses; skipped in -short")

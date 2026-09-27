@@ -2,13 +2,11 @@ package performance
 
 import "testing"
 
-// Regression tests for false positives fixed in the performance category.
-// Each test asserts the reported FP input now yields ZERO findings while a
-// genuine true-positive input still fires.
+// Regression tests for fixed false positives: each FP input must yield zero findings while a
+// genuine true positive still fires.
 
-// Fix 1: a balanced single-line loop must not leak its loop frame onto later
-// lines at the same brace depth. Covers regex-compile-in-loop, sleep-in-loop,
-// and await-in-loop, which all share braceLoopScanner.
+// Fix 1: a balanced single-line loop must not leak its frame onto later lines at the same depth
+// (regex, sleep, and await rules share braceLoopScanner).
 func TestSingleLineLoopDoesNotLeak(t *testing.T) {
 	// regex-compile-in-loop: single-line loop, then a compile OUTSIDE any loop.
 	{
@@ -82,9 +80,8 @@ func TestRegexCompileLeftBoundary(t *testing.T) {
 	}
 }
 
-// Fix 3: time.Sleep must have a left word boundary (uptime.sleep must not
-// match), and a for/while header sharing a line with a preceding token must be
-// recognized.
+// Fix 3: time.Sleep needs a left word boundary (uptime.sleep must not match), and a for/while
+// header sharing a line with a preceding token must still be recognized.
 func TestSleepBoundaryAndInlineHeader(t *testing.T) {
 	r := SleepInLoop{}
 

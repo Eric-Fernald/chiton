@@ -1,16 +1,20 @@
 // Package badger implements GraphStore using BadgerDB (pure Go, no CGo).
-// Used as the fallback when Kuzu CGo bindings are unavailable.
+// It is chiton's working backend; the kuzu package is only a stub.
 package badger
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
+	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	badgerdb "github.com/dgraph-io/badger/v4"
 
@@ -19,7 +23,7 @@ import (
 )
 
 // Key prefixes. Node IDs and edge IDs are 32-char lowercase hex strings,
-// so prefix bytes ('d','e','n','s') never collide with key content.
+// so prefix bytes ('d','e','n','s','v') never collide with key content.
 const (
 	pfxNode = "n:" // n:{nodeID}            → json(Node)
 	pfxEdge = "e:" // e:{edgeID}            → json(Edge)
@@ -36,23 +40,22 @@ type Store struct {
 
 // Compile-time checks that Store satisfies the store interfaces.
 var (
-	_ store.GraphStore     = (*Store)(nil)
-	_ store.EmbeddingStore = (*Store)(nil)
-	_ store.NodeDeleter    = (*Store)(nil)
-	_ store.ReadOnlyAware  = (*Store)(nil)
+	_ store.GraphStore        = (*Store)(nil)
+	_ store.EmbeddingStore    = (*Store)(nil)
+	_ store.NodeDeleter       = (*Store)(nil)
+	_ store.ReadOnlyAware     = (*Store)(nil)
+	_ store.NodeScanner       = (*Store)(nil)
+	_ store.EmbeddingIDLister = (*Store)(nil)
 )
 
-// ReadOnly reports whether the store was opened read-only. Callers use this to
-// fail write operations early with an actionable message instead of surfacing a
-// raw Badger "read-only transaction" error.
+// ReadOnly reports whether the store was opened read-only, so callers can fail writes early
+// with a clear message instead of a raw Badger error.
 func (s *Store) ReadOnly() bool { return s.readOnly }
 
 // Options configures store opens. The zero value is a plaintext store with
 // default Badger settings — historic callers can keep using Open/OpenReadOnly.
 type Options struct {
-	// EncryptionKey, when non-nil, enables Badger's at-rest encryption.
-	// Length must be 16, 24, or 32 bytes. Chiton's keyfile derives 32 bytes
-	// (AES-256) by default.
+	// EncryptionKey, when non-nil, enables Badger's at-rest encryption; it must be 16, 24, or 32 bytes.
 	EncryptionKey []byte
 }
 
@@ -86,9 +89,8 @@ func OpenReadOnlyWith(path string, opts Options) (*Store, error) {
 	return &Store{db: db, readOnly: true}, nil
 }
 
-// applyEncryption layers Badger encryption options on top of bopts when key
-// is non-nil. Badger requires a non-zero IndexCacheSize whenever encryption
-// is enabled; 64 MiB is a sane default for chiton's typical graph size.
+// applyEncryption enables Badger encryption when key is non-empty; Badger then
+// requires a non-zero IndexCacheSize.
 func applyEncryption(bopts badgerdb.Options, key []byte) badgerdb.Options {
 	if len(key) == 0 {
 		return bopts
@@ -116,124 +118,204 @@ func dstKey(e *model.Edge) []byte {
 
 // --- transaction helpers ---
 
-func loadNode(txn *badgerdb.Txn, id string) (*model.Node, error) {
-	item, err := txn.Get(nodeKey(id))
-	if err == badgerdb.ErrKeyNotFound {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var n model.Node
-	if err := item.Value(func(v []byte) error { return json.Unmarshal(v, &n) }); err != nil {
-		return nil, err
-	}
-	return &n, nil
+// errStopScan, returned from a scan callback, ends the scan early without error.
+var errStopScan = errors.New("stop scan")
+
+// prefixIterator iterates the keys under pfx without prefetching values: they are small and inline in the
+// LSM tree, so prefetching would only add overhead.
+func prefixIterator(txn *badgerdb.Txn, pfx string) *badgerdb.Iterator {
+	opts := badgerdb.DefaultIteratorOptions
+	opts.Prefix = []byte(pfx)
+	opts.PrefetchValues = false
+	return txn.NewIterator(opts)
 }
 
-func loadEdge(txn *badgerdb.Txn, id string) (*model.Edge, error) {
-	item, err := txn.Get(edgeKey(id))
-	if err == badgerdb.ErrKeyNotFound {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var e model.Edge
-	if err := item.Value(func(v []byte) error { return json.Unmarshal(v, &e) }); err != nil {
-		return nil, err
-	}
-	return &e, nil
-}
-
-// adjacentEdges returns all edges where nodeID appears as src or dst.
-// Each iterator is closed before the next is opened (Badger requirement).
-func adjacentEdges(txn *badgerdb.Txn, nodeID string) ([]*model.Edge, error) {
-	seen := map[string]bool{}
-	var edges []*model.Edge
-
-	for _, prefix := range []string{pfxSrc + nodeID + ":", pfxDst + nodeID + ":"} {
-		pfx := []byte(prefix)
-		it := txn.NewIterator(badgerdb.DefaultIteratorOptions)
-		for it.Seek(pfx); it.ValidForPrefix(pfx); it.Next() {
-			var edgeID string
-			if err := it.Item().Value(func(v []byte) error {
-				edgeID = string(v)
+// scan calls fn, in key order, with the key suffix and value of every entry under pfx; both are valid only
+// during the call.
+func scan(txn *badgerdb.Txn, pfx string, fn func(key, val []byte) error) error {
+	it := prefixIterator(txn, pfx)
+	defer it.Close()
+	for it.Rewind(); it.Valid(); it.Next() {
+		item := it.Item()
+		key := item.Key()[len(pfx):]
+		if err := item.Value(func(v []byte) error { return fn(key, v) }); err != nil {
+			if errors.Is(err, errStopScan) {
 				return nil
-			}); err != nil {
-				it.Close()
-				return nil, err
 			}
-			if seen[edgeID] {
-				continue
-			}
-			seen[edgeID] = true
-			e, err := loadEdge(txn, edgeID)
-			if err != nil {
-				it.Close()
-				return nil, err
-			}
-			if e != nil {
-				edges = append(edges, e)
-			}
+			return err
 		}
-		it.Close()
+	}
+	return nil
+}
+
+// scanAll decodes every JSON value under pfx, in key order.
+func scanAll[T any](txn *badgerdb.Txn, pfx string) ([]T, error) {
+	var out []T
+	err := scan(txn, pfx, func(_, v []byte) error {
+		var x T
+		if err := json.Unmarshal(v, &x); err != nil {
+			return err
+		}
+		out = append(out, x)
+		return nil
+	})
+	return out, err
+}
+
+// loadJSON decodes the value at key, returning (nil, nil) when the key is absent.
+func loadJSON[T any](txn *badgerdb.Txn, key []byte) (*T, error) {
+	item, err := txn.Get(key)
+	if errors.Is(err, badgerdb.ErrKeyNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var x T
+	if err := item.Value(func(v []byte) error { return json.Unmarshal(v, &x) }); err != nil {
+		return nil, err
+	}
+	return &x, nil
+}
+
+func loadNode(txn *badgerdb.Txn, id string) (*model.Node, error) {
+	return loadJSON[model.Node](txn, nodeKey(id))
+}
+
+// appendLoaded appends the records stored under pfx+id for each id to dst, skipping absent ones.
+func appendLoaded[T any](dst []T, txn *badgerdb.Txn, pfx string, ids []string) ([]T, error) {
+	for _, id := range ids {
+		x, err := loadJSON[T](txn, []byte(pfx+id))
+		if err != nil {
+			return dst, err
+		}
+		if x != nil {
+			dst = append(dst, *x)
+		}
+	}
+	return dst, nil
+}
+
+// adjacentEdgeKeys returns, deduplicated by edge ID, the edges touching nodeID as parsed from its adjacency
+// keys (ID, Src, Dst and Kind only): outgoing first, each direction in key order. A nil kinds keeps every kind.
+func adjacentEdgeKeys(txn *badgerdb.Txn, nodeID string, kinds map[model.EdgeKind]bool) ([]model.Edge, error) {
+	var edges []model.Edge
+	seen := map[string]bool{}
+	for _, out := range [...]bool{true, false} {
+		pfx := pfxDst + nodeID + ":"
+		if out {
+			pfx = pfxSrc + nodeID + ":"
+		}
+		// The key suffix is {kind}:{other endpoint}; edge kinds contain no ':'.
+		if err := scan(txn, pfx, func(k, v []byte) error {
+			kind, other, _ := strings.Cut(string(k), ":")
+			if (kinds != nil && !kinds[model.EdgeKind(kind)]) || seen[string(v)] {
+				return nil
+			}
+			seen[string(v)] = true
+			e := model.Edge{ID: string(v), Src: nodeID, Dst: other, Kind: model.EdgeKind(kind)}
+			if !out {
+				e.Src, e.Dst = other, nodeID
+			}
+			edges = append(edges, e)
+			return nil
+		}); err != nil {
+			return nil, err
+		}
 	}
 	return edges, nil
+}
+
+// adjacentEdges loads the edges adjacent to nodeID in adjacentEdgeKeys order, skipping missing records.
+func adjacentEdges(txn *badgerdb.Txn, nodeID string, kinds map[model.EdgeKind]bool) ([]model.Edge, error) {
+	keyed, err := adjacentEdgeKeys(txn, nodeID, kinds)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(keyed))
+	for i, e := range keyed {
+		ids[i] = e.ID
+	}
+	return appendLoaded[model.Edge](nil, txn, pfxEdge, ids)
+}
+
+// deleteNode queues deletion of node id, its embedding, and every adjacent edge with its adjacency keys.
+func deleteNode(txn *badgerdb.Txn, wb *badgerdb.WriteBatch, id string) error {
+	adj, err := adjacentEdgeKeys(txn, id, nil)
+	if err != nil {
+		return err
+	}
+	keys := make([][]byte, 0, 2+3*len(adj))
+	keys = append(keys, nodeKey(id), embKey(id))
+	for i := range adj {
+		keys = append(keys, edgeKey(adj[i].ID), srcKey(&adj[i]), dstKey(&adj[i]))
+	}
+	for _, k := range keys {
+		if err := wb.Delete(k); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// batch runs fill against a new write batch, flushing it on success and discarding it on error.
+func (s *Store) batch(fill func(wb *badgerdb.WriteBatch) error) error {
+	wb := s.db.NewWriteBatch()
+	if err := fill(wb); err != nil {
+		wb.Cancel()
+		return err
+	}
+	return wb.Flush()
 }
 
 // --- GraphStore implementation ---
 
 func (s *Store) UpsertNodes(_ context.Context, nodes []model.Node) error {
-	wb := s.db.NewWriteBatch()
 	now := time.Now()
-	for i := range nodes {
-		n := nodes[i]
-		if n.CreatedAt.IsZero() {
-			n.CreatedAt = now
+	return s.batch(func(wb *badgerdb.WriteBatch) error {
+		for i := range nodes {
+			n := nodes[i]
+			if n.CreatedAt.IsZero() {
+				n.CreatedAt = now
+			}
+			n.UpdatedAt = now
+			data, err := json.Marshal(n)
+			if err != nil {
+				return fmt.Errorf("marshal node %s: %w", n.ID, err)
+			}
+			if err := wb.Set(nodeKey(n.ID), data); err != nil {
+				return err
+			}
 		}
-		n.UpdatedAt = now
-		data, err := json.Marshal(n)
-		if err != nil {
-			wb.Cancel()
-			return fmt.Errorf("marshal node %s: %w", n.ID, err)
-		}
-		if err := wb.Set(nodeKey(n.ID), data); err != nil {
-			wb.Cancel()
-			return err
-		}
-	}
-	return wb.Flush()
+		return nil
+	})
 }
 
 func (s *Store) UpsertEdges(_ context.Context, edges []model.Edge) error {
-	wb := s.db.NewWriteBatch()
 	now := time.Now()
-	for i := range edges {
-		e := edges[i]
-		if e.CreatedAt.IsZero() {
-			e.CreatedAt = now
+	return s.batch(func(wb *badgerdb.WriteBatch) error {
+		for i := range edges {
+			e := edges[i]
+			if e.CreatedAt.IsZero() {
+				e.CreatedAt = now
+			}
+			data, err := json.Marshal(e)
+			if err != nil {
+				return fmt.Errorf("marshal edge %s: %w", e.ID, err)
+			}
+			eid := []byte(e.ID)
+			if err := wb.Set(edgeKey(e.ID), data); err != nil {
+				return err
+			}
+			if err := wb.Set(srcKey(&e), eid); err != nil {
+				return err
+			}
+			if err := wb.Set(dstKey(&e), eid); err != nil {
+				return err
+			}
 		}
-		data, err := json.Marshal(e)
-		if err != nil {
-			wb.Cancel()
-			return fmt.Errorf("marshal edge %s: %w", e.ID, err)
-		}
-		eid := []byte(e.ID)
-		if err := wb.Set(edgeKey(e.ID), data); err != nil {
-			wb.Cancel()
-			return err
-		}
-		if err := wb.Set(srcKey(&e), eid); err != nil {
-			wb.Cancel()
-			return err
-		}
-		if err := wb.Set(dstKey(&e), eid); err != nil {
-			wb.Cancel()
-			return err
-		}
-	}
-	return wb.Flush()
+		return nil
+	})
 }
 
 func (s *Store) GetNode(_ context.Context, id string) (*model.Node, error) {
@@ -249,43 +331,38 @@ func (s *Store) GetNode(_ context.Context, id string) (*model.Node, error) {
 // Neighbors returns all nodes reachable from id within depth hops,
 // traversing edges in both directions. Results are deduplicated.
 func (s *Store) Neighbors(_ context.Context, id string, depth int, edgeKinds []model.EdgeKind) (store.Subgraph, error) {
-	kindFilter := make(map[model.EdgeKind]bool, len(edgeKinds))
-	for _, k := range edgeKinds {
-		kindFilter[k] = true
-	}
-	filterByKind := len(kindFilter) > 0
-
-	visited := map[string]bool{id: true}
-	frontier := []string{id}
-	seenEdges := map[string]bool{}
-
-	var resultNodes []model.Node
-	var resultEdges []model.Edge
-
-	seed, err := s.GetNode(context.TODO(), id)
-	if err != nil {
-		return store.Subgraph{}, err
-	}
-	if seed != nil {
-		resultNodes = append(resultNodes, *seed)
+	var kindFilter map[model.EdgeKind]bool // nil traverses every kind
+	if len(edgeKinds) > 0 {
+		kindFilter = make(map[model.EdgeKind]bool, len(edgeKinds))
+		for _, k := range edgeKinds {
+			kindFilter[k] = true
+		}
 	}
 
-	for d := 0; d < depth && len(frontier) > 0; d++ {
-		var nextFrontier []string
+	var sub store.Subgraph
+	err := s.db.View(func(txn *badgerdb.Txn) error {
+		seed, err := loadNode(txn, id)
+		if err != nil {
+			return err
+		}
+		if seed != nil {
+			sub.Nodes = append(sub.Nodes, *seed)
+		}
 
-		if err := s.db.View(func(txn *badgerdb.Txn) error {
+		visited := map[string]bool{id: true}
+		seenEdges := map[string]bool{}
+		frontier := []string{id}
+		for d := 0; d < depth && len(frontier) > 0; d++ {
+			var nextFrontier []string
 			for _, nodeID := range frontier {
-				adjEdges, err := adjacentEdges(txn, nodeID)
+				adjEdges, err := adjacentEdges(txn, nodeID, kindFilter)
 				if err != nil {
 					return err
 				}
 				for _, e := range adjEdges {
-					if filterByKind && !kindFilter[e.Kind] {
-						continue
-					}
 					if !seenEdges[e.ID] {
 						seenEdges[e.ID] = true
-						resultEdges = append(resultEdges, *e)
+						sub.Edges = append(sub.Edges, e)
 					}
 					neighbor := e.Dst
 					if neighbor == nodeID {
@@ -297,51 +374,44 @@ func (s *Store) Neighbors(_ context.Context, id string, depth int, edgeKinds []m
 					}
 				}
 			}
-			return nil
-		}); err != nil {
-			return store.Subgraph{}, err
-		}
 
-		for _, nid := range nextFrontier {
-			n, err := s.GetNode(context.TODO(), nid)
-			if err != nil {
-				return store.Subgraph{}, err
+			if sub.Nodes, err = appendLoaded(sub.Nodes, txn, pfxNode, nextFrontier); err != nil {
+				return err
 			}
-			if n != nil {
-				resultNodes = append(resultNodes, *n)
-			}
+			frontier = nextFrontier
 		}
-		frontier = nextFrontier
+		return nil
+	})
+	if err != nil {
+		return store.Subgraph{}, err
 	}
-
-	return store.Subgraph{Nodes: resultNodes, Edges: resultEdges}, nil
+	return sub, nil
 }
 
 // ShortestPath returns the shortest undirected path between src and dst via BFS.
 // Returns an empty Path (no error) when no path exists.
 func (s *Store) ShortestPath(_ context.Context, src, dst string) (store.Path, error) {
-	if src == dst {
-		n, err := s.GetNode(context.TODO(), src)
-		if err != nil || n == nil {
-			return store.Path{}, err
+	var path store.Path
+	err := s.db.View(func(txn *badgerdb.Txn) error {
+		if src == dst {
+			n, err := loadNode(txn, src)
+			if err == nil && n != nil {
+				path.Nodes = []model.Node{*n}
+			}
+			return err
 		}
-		return store.Path{Nodes: []model.Node{*n}}, nil
-	}
 
-	type step struct {
-		parent string
-		edgeID string
-	}
-	seen := map[string]step{src: {}}
-	queue := []string{src}
-	found := false
-
-	for len(queue) > 0 && !found {
-		curr := queue[0]
-		queue = queue[1:]
-
-		if err := s.db.View(func(txn *badgerdb.Txn) error {
-			adjEdges, err := adjacentEdges(txn, curr)
+		type step struct {
+			parent string
+			edgeID string
+		}
+		seen := map[string]step{src: {}}
+		queue := []string{src}
+		found := false
+		for len(queue) > 0 && !found {
+			curr := queue[0]
+			queue = queue[1:]
+			adjEdges, err := adjacentEdges(txn, curr, nil)
 			if err != nil {
 				return err
 			}
@@ -356,157 +426,178 @@ func (s *Store) ShortestPath(_ context.Context, src, dst string) (store.Path, er
 				seen[neighbor] = step{parent: curr, edgeID: e.ID}
 				if neighbor == dst {
 					found = true
-					return nil
+					break
 				}
 				queue = append(queue, neighbor)
 			}
+		}
+		if !found {
 			return nil
-		}); err != nil {
-			return store.Path{}, err
 		}
-	}
 
-	if !found {
-		return store.Path{}, nil
-	}
-
-	// Reconstruct path backwards from dst.
-	var nodeIDs, edgeIDs []string
-	for curr := dst; curr != src; {
-		v := seen[curr]
-		nodeIDs = append([]string{curr}, nodeIDs...)
-		edgeIDs = append([]string{v.edgeID}, edgeIDs...)
-		curr = v.parent
-	}
-	nodeIDs = append([]string{src}, nodeIDs...)
-
-	var nodes []model.Node
-	var edges []model.Edge
-	err := s.db.View(func(txn *badgerdb.Txn) error {
-		for _, nid := range nodeIDs {
-			n, err := loadNode(txn, nid)
-			if err != nil {
-				return err
-			}
-			if n != nil {
-				nodes = append(nodes, *n)
-			}
+		// Reconstruct the path backwards from dst.
+		var nodeIDs, edgeIDs []string
+		for curr := dst; curr != src; curr = seen[curr].parent {
+			nodeIDs = append(nodeIDs, curr)
+			edgeIDs = append(edgeIDs, seen[curr].edgeID)
 		}
-		for _, eid := range edgeIDs {
-			e, err := loadEdge(txn, eid)
-			if err != nil {
-				return err
-			}
-			if e != nil {
-				edges = append(edges, *e)
-			}
+		nodeIDs = append(nodeIDs, src)
+		slices.Reverse(nodeIDs)
+		slices.Reverse(edgeIDs)
+
+		var err error
+		if path.Nodes, err = appendLoaded(path.Nodes, txn, pfxNode, nodeIDs); err != nil {
+			return err
 		}
-		return nil
+		path.Edges, err = appendLoaded(path.Edges, txn, pfxEdge, edgeIDs)
+		return err
 	})
-	return store.Path{Nodes: nodes, Edges: edges}, err
+	return path, err
+}
+
+// stringProbe returns s's JSON encoding, which appears verbatim in any node record with a string field or attr
+// equal to s, or nil when escaping could differ across Go versions (control chars, U+FFFD, invalid UTF-8).
+func stringProbe(s string) []byte {
+	if strings.ContainsRune(s, utf8.RuneError) || strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 }) {
+		return nil
+	}
+	b, err := json.Marshal(s)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+// nodeProbe prefilters raw node records for a store.NodeFilter without false negatives: a matching record
+// contains every probe in all and, when anyOf is non-empty, at least one probe in anyOf.
+type nodeProbe struct{ all, anyOf [][]byte }
+
+func newNodeProbe(f store.NodeFilter) nodeProbe {
+	var p nodeProbe
+	for _, k := range f.Kinds {
+		b := stringProbe(string(k))
+		if b == nil {
+			p.anyOf = nil // one unprobeable kind disables the any-of check
+			break
+		}
+		p.anyOf = append(p.anyOf, b)
+	}
+	vals := []string{f.SourceURI}
+	for _, v := range f.Attrs {
+		vals = append(vals, v)
+	}
+	for _, v := range vals {
+		// Empty SourceURI doesn't constrain, and an empty attr value also matches an absent attr: no probe.
+		if v == "" {
+			continue
+		}
+		if b := stringProbe(v); b != nil {
+			p.all = append(p.all, b)
+		}
+	}
+	return p
+}
+
+func (p nodeProbe) candidate(rec []byte) bool {
+	for _, b := range p.all {
+		if !bytes.Contains(rec, b) {
+			return false
+		}
+	}
+	if len(p.anyOf) == 0 {
+		return true
+	}
+	return slices.ContainsFunc(p.anyOf, func(b []byte) bool { return bytes.Contains(rec, b) })
+}
+
+// NodesMatching returns the nodes matching f in AllNodes order, decoding only records that pass the raw-bytes
+// probe. Implements store.NodeScanner.
+func (s *Store) NodesMatching(_ context.Context, f store.NodeFilter) ([]model.Node, error) {
+	probe := newNodeProbe(f)
+	var nodes []model.Node
+	err := s.db.View(func(txn *badgerdb.Txn) error {
+		return scan(txn, pfxNode, func(_, v []byte) error {
+			if !probe.candidate(v) {
+				return nil
+			}
+			var n model.Node
+			if err := json.Unmarshal(v, &n); err != nil {
+				return err
+			}
+			if f.Match(n) {
+				nodes = append(nodes, n)
+			}
+			return nil
+		})
+	})
+	return nodes, err
 }
 
 // DeleteBySourceURI removes all nodes whose source_uri matches uri and
 // all edges adjacent to those nodes. Returns the number of nodes deleted.
 func (s *Store) DeleteBySourceURI(_ context.Context, uri string) (int, error) {
-	var toDelete []model.Node
-	if err := s.db.View(func(txn *badgerdb.Txn) error {
-		pfx := []byte(pfxNode)
-		it := txn.NewIterator(badgerdb.DefaultIteratorOptions)
-		defer it.Close()
-		for it.Seek(pfx); it.ValidForPrefix(pfx); it.Next() {
-			var n model.Node
-			if err := it.Item().Value(func(v []byte) error {
-				return json.Unmarshal(v, &n)
+	probe := stringProbe(uri)
+	deleted := 0
+	err := s.batch(func(wb *badgerdb.WriteBatch) error {
+		return s.db.View(func(txn *badgerdb.Txn) error {
+			var ids []string
+			if err := scan(txn, pfxNode, func(_, v []byte) error {
+				if probe != nil && !bytes.Contains(v, probe) {
+					return nil
+				}
+				var n struct {
+					ID        string `json:"id"`
+					SourceURI string `json:"source_uri"`
+				}
+				if err := json.Unmarshal(v, &n); err != nil {
+					return err
+				}
+				if n.SourceURI == uri {
+					ids = append(ids, n.ID)
+				}
+				return nil
 			}); err != nil {
 				return err
 			}
-			if n.SourceURI == uri {
-				toDelete = append(toDelete, n)
+			for _, id := range ids {
+				if err := deleteNode(txn, wb, id); err != nil {
+					return err
+				}
 			}
-		}
-		return nil
-	}); err != nil {
-		return 0, err
-	}
-
-	wb := s.db.NewWriteBatch()
-	for _, n := range toDelete {
-		if err := wb.Delete(nodeKey(n.ID)); err != nil {
-			wb.Cancel()
-			return 0, err
-		}
-		if err := wb.Delete(embKey(n.ID)); err != nil {
-			wb.Cancel()
-			return 0, err
-		}
-		if err := s.db.View(func(txn *badgerdb.Txn) error {
-			adjEdges, err := adjacentEdges(txn, n.ID)
-			if err != nil {
-				return err
-			}
-			for _, e := range adjEdges {
-				_ = wb.Delete(edgeKey(e.ID))
-				_ = wb.Delete(srcKey(e))
-				_ = wb.Delete(dstKey(e))
-			}
+			deleted = len(ids)
 			return nil
-		}); err != nil {
-			wb.Cancel()
-			return 0, err
-		}
-	}
-	return len(toDelete), wb.Flush()
+		})
+	})
+	return deleted, err
 }
 
-// DeleteByIDs deletes nodes by their IDs, along with their embeddings and
-// adjacent edges. Unlike DeleteBySourceURI it does point lookups keyed by ID
-// (no full node-space scan per ID), so pruning K findings costs O(K) not
-// O(K·N). IDs that do not exist are skipped. Returns the number deleted.
+// DeleteByIDs deletes nodes by ID plus their embeddings and adjacent edges, skipping missing IDs.
+// Point lookups keep it O(K) in the number of IDs, unlike DeleteBySourceURI's full scan.
 func (s *Store) DeleteByIDs(_ context.Context, ids []string) (int, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	wb := s.db.NewWriteBatch()
 	deleted := 0
-	for _, id := range ids {
-		var present bool
-		if err := s.db.View(func(txn *badgerdb.Txn) error {
-			if _, err := txn.Get(nodeKey(id)); err != nil {
-				if err == badgerdb.ErrKeyNotFound {
-					return nil
+	err := s.batch(func(wb *badgerdb.WriteBatch) error {
+		return s.db.View(func(txn *badgerdb.Txn) error {
+			n := 0
+			for _, id := range ids {
+				if _, err := txn.Get(nodeKey(id)); err != nil {
+					if errors.Is(err, badgerdb.ErrKeyNotFound) {
+						continue
+					}
+					return err
 				}
-				return err
+				if err := deleteNode(txn, wb, id); err != nil {
+					return err
+				}
+				n++
 			}
-			present = true
-			adjEdges, err := adjacentEdges(txn, id)
-			if err != nil {
-				return err
-			}
-			for _, e := range adjEdges {
-				_ = wb.Delete(edgeKey(e.ID))
-				_ = wb.Delete(srcKey(e))
-				_ = wb.Delete(dstKey(e))
-			}
+			deleted = n
 			return nil
-		}); err != nil {
-			wb.Cancel()
-			return 0, err
-		}
-		if !present {
-			continue
-		}
-		if err := wb.Delete(nodeKey(id)); err != nil {
-			wb.Cancel()
-			return 0, err
-		}
-		if err := wb.Delete(embKey(id)); err != nil {
-			wb.Cancel()
-			return 0, err
-		}
-		deleted++
-	}
-	return deleted, wb.Flush()
+		})
+	})
+	return deleted, err
 }
 
 // SearchNodes returns all nodes whose label contains query (case-insensitive).
@@ -514,24 +605,27 @@ func (s *Store) SearchNodes(_ context.Context, query string, limit int) ([]model
 	q := strings.ToLower(query)
 	var results []model.Node
 	err := s.db.View(func(txn *badgerdb.Txn) error {
-		pfx := []byte(pfxNode)
-		it := txn.NewIterator(badgerdb.DefaultIteratorOptions)
-		defer it.Close()
-		for it.Seek(pfx); it.ValidForPrefix(pfx); it.Next() {
-			var n model.Node
-			if err := it.Item().Value(func(v []byte) error {
-				return json.Unmarshal(v, &n)
-			}); err != nil {
+		return scan(txn, pfxNode, func(_, v []byte) error {
+			// Decode just the label first; most nodes miss, so the full decode is skipped for them.
+			var probe struct {
+				Label string `json:"label"`
+			}
+			if err := json.Unmarshal(v, &probe); err != nil {
 				return err
 			}
-			if strings.Contains(strings.ToLower(n.Label), q) {
-				results = append(results, n)
-				if limit > 0 && len(results) >= limit {
-					return nil
-				}
+			if !strings.Contains(strings.ToLower(probe.Label), q) {
+				return nil
 			}
-		}
-		return nil
+			var n model.Node
+			if err := json.Unmarshal(v, &n); err != nil {
+				return err
+			}
+			results = append(results, n)
+			if limit > 0 && len(results) >= limit {
+				return errStopScan
+			}
+			return nil
+		})
 	})
 	return results, err
 }
@@ -540,19 +634,9 @@ func (s *Store) SearchNodes(_ context.Context, query string, limit int) ([]model
 func (s *Store) AllNodes(_ context.Context) ([]model.Node, error) {
 	var nodes []model.Node
 	err := s.db.View(func(txn *badgerdb.Txn) error {
-		pfx := []byte(pfxNode)
-		it := txn.NewIterator(badgerdb.DefaultIteratorOptions)
-		defer it.Close()
-		for it.Seek(pfx); it.ValidForPrefix(pfx); it.Next() {
-			var n model.Node
-			if err := it.Item().Value(func(v []byte) error {
-				return json.Unmarshal(v, &n)
-			}); err != nil {
-				return err
-			}
-			nodes = append(nodes, n)
-		}
-		return nil
+		var err error
+		nodes, err = scanAll[model.Node](txn, pfxNode)
+		return err
 	})
 	return nodes, err
 }
@@ -561,38 +645,42 @@ func (s *Store) AllNodes(_ context.Context) ([]model.Node, error) {
 func (s *Store) AllEdges(_ context.Context) ([]model.Edge, error) {
 	var edges []model.Edge
 	err := s.db.View(func(txn *badgerdb.Txn) error {
-		pfx := []byte(pfxEdge)
-		it := txn.NewIterator(badgerdb.DefaultIteratorOptions)
-		defer it.Close()
-		for it.Seek(pfx); it.ValidForPrefix(pfx); it.Next() {
-			var e model.Edge
-			if err := it.Item().Value(func(v []byte) error {
-				return json.Unmarshal(v, &e)
-			}); err != nil {
-				return err
-			}
-			edges = append(edges, e)
-		}
-		return nil
+		var err error
+		edges, err = scanAll[model.Edge](txn, pfxEdge)
+		return err
 	})
 	return edges, err
 }
 
-// UpsertEmbeddings inserts or replaces node embeddings in the v: keyspace.
-// Vectors are stored packed (little-endian float32) out of the node JSON so
-// graph traversals stay lean. Implements store.EmbeddingStore.
+// UpsertEmbeddings stores vectors packed (little-endian float32) in the v: keyspace, out of the node JSON,
+// so graph traversals stay lean. Implements store.EmbeddingStore.
 func (s *Store) UpsertEmbeddings(_ context.Context, embs []store.Embedding) error {
-	wb := s.db.NewWriteBatch()
-	for _, e := range embs {
-		if e.NodeID == "" {
-			continue
+	return s.batch(func(wb *badgerdb.WriteBatch) error {
+		for _, e := range embs {
+			if e.NodeID == "" {
+				continue
+			}
+			if err := wb.Set(embKey(e.NodeID), encodeVec(e.Vec)); err != nil {
+				return err
+			}
 		}
-		if err := wb.Set(embKey(e.NodeID), encodeVec(e.Vec)); err != nil {
-			wb.Cancel()
-			return err
+		return nil
+	})
+}
+
+// EmbeddingIDs returns the node ID of every stored embedding in key order, reading keys only.
+// Implements store.EmbeddingIDLister.
+func (s *Store) EmbeddingIDs(_ context.Context) ([]string, error) {
+	var ids []string
+	err := s.db.View(func(txn *badgerdb.Txn) error {
+		it := prefixIterator(txn, pfxEmb)
+		defer it.Close()
+		for it.Rewind(); it.Valid(); it.Next() {
+			ids = append(ids, string(it.Item().Key()[len(pfxEmb):]))
 		}
-	}
-	return wb.Flush()
+		return nil
+	})
+	return ids, err
 }
 
 // AllEmbeddings returns every stored embedding by scanning the v: keyspace.
@@ -600,22 +688,10 @@ func (s *Store) UpsertEmbeddings(_ context.Context, embs []store.Embedding) erro
 func (s *Store) AllEmbeddings(_ context.Context) ([]store.Embedding, error) {
 	var embs []store.Embedding
 	err := s.db.View(func(txn *badgerdb.Txn) error {
-		pfx := []byte(pfxEmb)
-		it := txn.NewIterator(badgerdb.DefaultIteratorOptions)
-		defer it.Close()
-		for it.Seek(pfx); it.ValidForPrefix(pfx); it.Next() {
-			item := it.Item()
-			id := string(item.Key()[len(pfxEmb):])
-			var vec []float32
-			if err := item.Value(func(v []byte) error {
-				vec = decodeVec(v)
-				return nil
-			}); err != nil {
-				return err
-			}
-			embs = append(embs, store.Embedding{NodeID: id, Vec: vec})
-		}
-		return nil
+		return scan(txn, pfxEmb, func(k, v []byte) error {
+			embs = append(embs, store.Embedding{NodeID: string(k), Vec: decodeVec(v)})
+			return nil
+		})
 	})
 	return embs, err
 }
@@ -650,49 +726,26 @@ func (s *Store) Snapshot(_ context.Context, w io.Writer) error {
 	var out snap
 
 	if err := s.db.View(func(txn *badgerdb.Txn) error {
-		it := txn.NewIterator(badgerdb.DefaultIteratorOptions)
-		defer it.Close()
-
-		// Load embeddings first so they can be attached to their nodes,
-		// keeping the export self-contained and portable.
+		// Embeddings are attached to their nodes, keeping the export self-contained and portable.
 		embByID := map[string][]float32{}
-		ep := []byte(pfxEmb)
-		for it.Seek(ep); it.ValidForPrefix(ep); it.Next() {
-			item := it.Item()
-			id := string(item.Key()[len(pfxEmb):])
-			if err := item.Value(func(v []byte) error {
-				embByID[id] = decodeVec(v)
-				return nil
-			}); err != nil {
-				return err
-			}
+		if err := scan(txn, pfxEmb, func(k, v []byte) error {
+			embByID[string(k)] = decodeVec(v)
+			return nil
+		}); err != nil {
+			return err
 		}
 
-		pfx := []byte(pfxNode)
-		for it.Seek(pfx); it.ValidForPrefix(pfx); it.Next() {
-			var n model.Node
-			if err := it.Item().Value(func(v []byte) error {
-				return json.Unmarshal(v, &n)
-			}); err != nil {
-				return err
-			}
-			if vec, ok := embByID[n.ID]; ok {
-				n.Embedding = vec
-			}
-			out.Nodes = append(out.Nodes, n)
+		var err error
+		if out.Nodes, err = scanAll[model.Node](txn, pfxNode); err != nil {
+			return err
 		}
-
-		pfx = []byte(pfxEdge)
-		for it.Seek(pfx); it.ValidForPrefix(pfx); it.Next() {
-			var e model.Edge
-			if err := it.Item().Value(func(v []byte) error {
-				return json.Unmarshal(v, &e)
-			}); err != nil {
-				return err
+		for i := range out.Nodes {
+			if vec, ok := embByID[out.Nodes[i].ID]; ok {
+				out.Nodes[i].Embedding = vec
 			}
-			out.Edges = append(out.Edges, e)
 		}
-		return nil
+		out.Edges, err = scanAll[model.Edge](txn, pfxEdge)
+		return err
 	}); err != nil {
 		return err
 	}

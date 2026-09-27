@@ -1,15 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"math/rand"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -31,7 +29,6 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/extract/meeting"
 	"github.com/Eric-Fernald/chiton/internal/extract/subagent"
 	"github.com/Eric-Fernald/chiton/internal/graph/cluster"
-	"github.com/Eric-Fernald/chiton/internal/graph/metrics"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 	"github.com/Eric-Fernald/chiton/internal/graph/retrieve"
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
@@ -41,7 +38,6 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/install"
 	mcpsrv "github.com/Eric-Fernald/chiton/internal/mcp"
 	"github.com/Eric-Fernald/chiton/internal/report"
-	"github.com/Eric-Fernald/chiton/internal/vector"
 	mcpsdk "github.com/mark3labs/mcp-go/server"
 )
 
@@ -113,13 +109,9 @@ func findingsListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List findings from the most recent analyze run",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := config.Load()
+			_, gs, err := loadStore(true)
 			if err != nil {
 				return err
-			}
-			gs, err := openGraphStore(cfg.GraphPath, true)
-			if err != nil {
-				return fmt.Errorf("open store: %w", err)
 			}
 			defer gs.Close()
 
@@ -136,24 +128,15 @@ func findingsListCmd() *cobra.Command {
 
 			out := cmd.OutOrStdout()
 			if asJSON {
-				b, err := json.MarshalIndent(views, "", "  ")
-				if err != nil {
-					return err
-				}
-				fmt.Fprintln(out, string(b))
-				return nil
+				return printJSON(out, views)
 			}
 			if len(views) == 0 {
 				fmt.Fprintln(out, "no findings match")
 				return nil
 			}
 			for _, v := range views {
-				loc := v.TargetURI
-				if v.Span != nil {
-					loc = fmt.Sprintf("%s:%d", loc, v.Span.StartLine)
-				}
 				fmt.Fprintf(out, "  %s  [%s] %-30s %s\n    %s\n    %s\n",
-					v.ID[:8], v.Severity, v.RuleID, loc, v.Message, "")
+					v.ID[:8], v.Severity, v.RuleID, loc(v), v.Message, "")
 			}
 			return nil
 		},
@@ -174,13 +157,9 @@ func findingsExplainCmd() *cobra.Command {
 		Short: "Show a finding and its rule + related findings",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load()
+			_, gs, err := loadStore(true)
 			if err != nil {
 				return err
-			}
-			gs, err := openGraphStore(cfg.GraphPath, true)
-			if err != nil {
-				return fmt.Errorf("open store: %w", err)
 			}
 			defer gs.Close()
 
@@ -190,12 +169,7 @@ func findingsExplainCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			if asJSON {
-				b, err := json.MarshalIndent(exp, "", "  ")
-				if err != nil {
-					return err
-				}
-				fmt.Fprintln(out, string(b))
-				return nil
+				return printJSON(out, exp)
 			}
 			f := exp.Finding
 			fmt.Fprintf(out, "Finding %s\n", f.ID)
@@ -361,13 +335,100 @@ After init, run "chiton build ." to populate the graph.`,
 func openGraphStore(graphPath string, readOnly bool) (*badgerstore.Store, error) {
 	key, _, err := chitoncrypto.ResolveKeyForGraph(graphPath)
 	if err != nil {
-		return nil, fmt.Errorf("resolve encryption key: %w", err)
+		return nil, fmt.Errorf("open store: resolve encryption key: %w", err)
 	}
-	opts := badgerstore.Options{EncryptionKey: key}
+	open := badgerstore.OpenWith
 	if readOnly {
-		return badgerstore.OpenReadOnlyWith(graphPath, opts)
+		open = badgerstore.OpenReadOnlyWith
 	}
-	return badgerstore.OpenWith(graphPath, opts)
+	gs, err := open(graphPath, badgerstore.Options{EncryptionKey: key})
+	if err != nil {
+		return nil, fmt.Errorf("open store: %w", err)
+	}
+	return gs, nil
+}
+
+// loadStore loads the config and opens its graph store; the caller must Close the store.
+func loadStore(readOnly bool) (*config.Config, *badgerstore.Store, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, nil, err
+	}
+	gs, err := openGraphStore(cfg.GraphPath, readOnly)
+	if err != nil {
+		return nil, nil, err
+	}
+	return cfg, gs, nil
+}
+
+// loadBuildCache loads the content-hash cache that build and sync share beside the graph store.
+func loadBuildCache(graphPath string) (*cache.Cache, error) {
+	ch, err := cache.Load(filepath.Join(filepath.Dir(graphPath), "cache.json"))
+	if err != nil {
+		return nil, fmt.Errorf("open cache: %w", err)
+	}
+	return ch, nil
+}
+
+// loadGraph reads every node and edge from gs.
+func loadGraph(ctx context.Context, gs store.GraphStore) ([]model.Node, []model.Edge, error) {
+	nodes, err := gs.AllNodes(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load nodes: %w", err)
+	}
+	edges, err := gs.AllEdges(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load edges: %w", err)
+	}
+	return nodes, edges, nil
+}
+
+// printJSON writes v to out as two-space-indented JSON plus a trailing newline.
+func printJSON(out io.Writer, v any) error {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(out, string(b))
+	return nil
+}
+
+// emitSpecs prints task specs as JSON, or writes them to outFile and prints "<summary> written to <outFile>".
+func emitSpecs(out io.Writer, specs any, outFile, summary string) error {
+	if outFile == "" {
+		return printJSON(out, specs)
+	}
+	b, err := json.MarshalIndent(specs, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(outFile, b, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", outFile, err)
+	}
+	fmt.Fprintf(out, "%s written to %s\n", summary, outFile)
+	return nil
+}
+
+// parseOneOrMany decodes a JSON array of T or a single T object, stripping a leading UTF-8 BOM
+// (common on Windows-authored files). what names T in the error, e.g. "an LLMResult".
+func parseOneOrMany[T any](data []byte, what string) ([]T, error) {
+	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
+	var arr []T
+	if err := json.Unmarshal(data, &arr); err == nil {
+		return arr, nil
+	}
+	var single T
+	if err := json.Unmarshal(data, &single); err != nil {
+		return nil, fmt.Errorf("parse results: expected %s object or array: %w", what, err)
+	}
+	return []T{single}, nil
+}
+
+// errLogf returns a printf-style logger that writes one line per call to cmd's stderr.
+func errLogf(cmd *cobra.Command) func(format string, args ...any) {
+	return func(format string, args ...any) {
+		fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", args...)
+	}
 }
 
 func buildCmd() *cobra.Command {
@@ -387,14 +448,13 @@ func buildCmd() *cobra.Command {
 
 			gs, err := openGraphStore(cfg.GraphPath, false)
 			if err != nil {
-				return fmt.Errorf("open store: %w", err)
+				return err
 			}
 			defer gs.Close()
 
-			cachePath := filepath.Join(filepath.Dir(cfg.GraphPath), "cache.json")
-			ch, err := cache.Load(cachePath)
+			ch, err := loadBuildCache(cfg.GraphPath)
 			if err != nil {
-				return fmt.Errorf("open cache: %w", err)
+				return err
 			}
 
 			start := time.Now()
@@ -408,9 +468,8 @@ func buildCmd() *cobra.Command {
 					return cerr
 				}
 				if err != nil {
-					// A traversal error (e.g. a permission-denied subdirectory)
-					// shouldn't abort the whole build and discard cache progress;
-					// log it and keep indexing the rest of the tree.
+					// A traversal error (e.g. permission denied) shouldn't abort the build and
+					// discard cache progress; log it and keep indexing.
 					fmt.Fprintf(os.Stderr, "chiton: skip %s: %v\n", path, err)
 					return nil
 				}
@@ -425,18 +484,15 @@ func buildCmd() *cobra.Command {
 					fmt.Fprintf(os.Stderr, "chiton: skip %s: %v\n", path, err)
 					return nil
 				}
-				sum := sha256.Sum256(content)
-				hexSum := fmt.Sprintf("%x", sum[:])
-
-				absPath, _ := filepath.Abs(path)
-				uri := "file://" + filepath.ToSlash(absPath)
+				hexSum := model.ContentSHA(content)
+				uri := model.FileURI(path)
 
 				if !ch.Changed(uri, hexSum) {
 					skipped++
 					return nil
 				}
 
-				nodes, edges, err := ex.ExtractFile(ctx, path)
+				nodes, edges, err := ex.ExtractSource(ctx, path, content)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "chiton: skip %s: %v\n", path, err)
 					return nil
@@ -483,46 +539,26 @@ func queryCmd() *cobra.Command {
 		Short: "Look up a node and its neighborhood",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load()
+			_, gs, err := loadStore(true)
 			if err != nil {
 				return err
-			}
-
-			gs, err := openGraphStore(cfg.GraphPath, true)
-			if err != nil {
-				return fmt.Errorf("open store: %w", err)
 			}
 			defer gs.Close()
 
 			ctx := cmd.Context()
 			label := args[0]
 
-			limit := 1
-			if file != "" {
-				limit = 20
-			}
-			nodes, err := gs.SearchNodes(ctx, label, limit)
+			seed, found, err := store.FindNode(ctx, gs, label, file)
 			if err != nil {
 				return fmt.Errorf("search: %w", err)
 			}
-			if len(nodes) == 0 {
+			if !found {
 				fmt.Fprintf(cmd.OutOrStdout(), "no node found matching %q\n", label)
 				return nil
 			}
 
-			seed := pickNodeByFile(nodes, file)
-
-			var kinds []model.EdgeKind
-			for _, k := range edgeKinds {
-				kinds = append(kinds, model.EdgeKind(strings.ToUpper(k)))
-			}
-
-			if depth < 1 {
-				depth = 1
-			} else if depth > 5 {
-				depth = 5
-			}
-			sub, err := gs.Neighbors(ctx, seed.ID, depth, kinds)
+			depth = min(max(depth, 1), 5)
+			sub, err := gs.Neighbors(ctx, seed.ID, depth, model.ParseEdgeKinds(edgeKinds))
 			if err != nil {
 				return fmt.Errorf("neighbors: %w", err)
 			}
@@ -534,7 +570,8 @@ func queryCmd() *cobra.Command {
 					noSelf = append(noSelf, n)
 				}
 			}
-			filteredNodes, filteredEdges := filterNodesByPrefix(seed, noSelf, sub.Edges, sourcePrefix)
+			// The seed stays kept so its edges survive the source-prefix filter.
+			filteredNodes, filteredEdges := scopeGraph(noSelf, sub.Edges, sourcePrefix, seed.ID)
 
 			out := cmd.OutOrStdout()
 
@@ -544,12 +581,7 @@ func queryCmd() *cobra.Command {
 					Nodes []model.Node `json:"nodes"`
 					Edges []model.Edge `json:"edges"`
 				}
-				b, err := json.MarshalIndent(result{Seed: seed, Nodes: filteredNodes, Edges: filteredEdges}, "", "  ")
-				if err != nil {
-					return err
-				}
-				fmt.Fprintln(out, string(b))
-				return nil
+				return printJSON(out, result{Seed: seed, Nodes: filteredNodes, Edges: filteredEdges})
 			}
 
 			printNodeLine := func(n model.Node, indent string) {
@@ -595,56 +627,6 @@ func queryCmd() *cobra.Command {
 	cmd.Flags().StringVar(&sourcePrefix, "source-prefix", "", "Only return neighbors whose source_uri contains this substring")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Output raw JSON")
 	return cmd
-}
-
-// pickNodeByFile mirrors the MCP server's pickByFile logic: among nodes
-// matching the file hint, symbol nodes are preferred over file nodes.
-func pickNodeByFile(nodes []model.Node, file string) model.Node {
-	if file == "" {
-		return nodes[0]
-	}
-	lower := strings.ToLower(file)
-	var firstMatch *model.Node
-	for i := range nodes {
-		n := &nodes[i]
-		if strings.Contains(strings.ToLower(n.SourceURI), lower) {
-			if firstMatch == nil {
-				firstMatch = n
-			}
-			if n.Kind == model.KindSymbol {
-				return *n
-			}
-		}
-	}
-	if firstMatch != nil {
-		return *firstMatch
-	}
-	return nodes[0]
-}
-
-// filterNodesByPrefix removes neighbor nodes whose source_uri does not contain
-// prefix, and removes edges where either endpoint is absent after filtering.
-// The seed is always retained so its edges survive.
-func filterNodesByPrefix(seed model.Node, nodes []model.Node, edges []model.Edge, prefix string) ([]model.Node, []model.Edge) {
-	if prefix == "" {
-		return nodes, edges
-	}
-	lower := strings.ToLower(prefix)
-	kept := map[string]bool{seed.ID: true}
-	var filteredNodes []model.Node
-	for _, n := range nodes {
-		if strings.Contains(strings.ToLower(n.SourceURI), lower) {
-			filteredNodes = append(filteredNodes, n)
-			kept[n.ID] = true
-		}
-	}
-	var filteredEdges []model.Edge
-	for _, e := range edges {
-		if kept[e.Src] && kept[e.Dst] {
-			filteredEdges = append(filteredEdges, e)
-		}
-	}
-	return filteredNodes, filteredEdges
 }
 
 func installCmd() *cobra.Command {
@@ -753,12 +735,7 @@ block are present in this workspace. Writes nothing.`,
 				reports = append(reports, rep)
 			}
 			if asJSON {
-				b, err := json.MarshalIndent(reports, "", "  ")
-				if err != nil {
-					return err
-				}
-				fmt.Fprintln(out, string(b))
-				return nil
+				return printJSON(out, reports)
 			}
 			for _, rep := range reports {
 				status := "not detected"
@@ -830,18 +807,13 @@ needed. Restart chiton serve after clustering to load the new results.`,
 			// Open read-only so this command can run while chiton serve is active.
 			gs, err := openGraphStore(cfg.GraphPath, true)
 			if err != nil {
-				return fmt.Errorf("open store: %w", err)
+				return err
 			}
 			defer gs.Close()
 
-			ctx := cmd.Context()
-			nodes, err := gs.AllNodes(ctx)
+			nodes, edges, err := loadGraph(cmd.Context(), gs)
 			if err != nil {
-				return fmt.Errorf("load nodes: %w", err)
-			}
-			edges, err := gs.AllEdges(ctx)
-			if err != nil {
-				return fmt.Errorf("load edges: %w", err)
+				return err
 			}
 			fmt.Fprintf(out, "cluster: loaded %d nodes, %d edges\n", len(nodes), len(edges))
 
@@ -851,33 +823,7 @@ needed. Restart chiton serve after clustering to load the new results.`,
 			}
 
 			start := time.Now()
-			rng := rand.New(rand.NewSource(seed))
-
-			commMap := cluster.Run(nodes, edges, resolution, rng)
-			metricsMap := metrics.Compute(nodes, edges)
-
-			// Build sidecar results.
-			commSet := map[int]struct{}{}
-			nodeResults := make(map[string]cluster.NodeResult, len(nodes))
-			for _, n := range nodes {
-				c := commMap[n.ID]
-				commSet[c] = struct{}{}
-				m := metricsMap[n.ID]
-				nodeResults[n.ID] = cluster.NodeResult{
-					Label:       n.Label,
-					SourceURI:   n.SourceURI,
-					CommunityID: c,
-					Betweenness: m.Betweenness,
-					Degree:      m.Degree,
-				}
-			}
-
-			results := &cluster.Results{
-				GeneratedAt:    time.Now(),
-				NodeCount:      len(nodes),
-				CommunityCount: len(commSet),
-				Nodes:          nodeResults,
-			}
+			results := cluster.Full(nodes, edges, resolution, rand.New(rand.NewSource(seed)))
 
 			sidecarPath := cluster.SidecarPath(cfg.GraphPath)
 			if err := cluster.WriteSidecar(sidecarPath, results); err != nil {
@@ -886,7 +832,7 @@ needed. Restart chiton serve after clustering to load the new results.`,
 
 			elapsed := time.Since(start).Round(time.Millisecond)
 			fmt.Fprintf(out, "cluster: done in %s - %d nodes in %d communities\n",
-				elapsed, len(nodes), len(commSet))
+				elapsed, len(nodes), results.CommunityCount)
 			fmt.Fprintf(out, "cluster: results written to %s\n", sidecarPath)
 			fmt.Fprintln(out, "cluster: restart chiton serve to load the new community data")
 
@@ -899,7 +845,7 @@ needed. Restart chiton serve after clustering to load the new results.`,
 			}
 			god := make([]godNode, 0, len(nodes))
 			for _, n := range nodes {
-				r := nodeResults[n.ID]
+				r := results.Nodes[n.ID]
 				god = append(god, godNode{n.Label, r.Betweenness, r.Degree, r.CommunityID})
 			}
 			sort.Slice(god, func(i, j int) bool {
@@ -909,7 +855,7 @@ needed. Restart chiton serve after clustering to load the new results.`,
 				topN = len(god)
 			}
 			fmt.Fprintf(out, "\nTop %d god nodes (highest betweenness):\n", topN)
-			for i := 0; i < topN; i++ {
+			for i := range topN {
 				g := god[i]
 				fmt.Fprintf(out, "  %-40s  betweenness=%.4f  degree=%d  community=%d\n",
 					g.label, g.betweenness, g.degree, g.community)
@@ -953,16 +899,15 @@ records in the MCP config so the server uses the same store as 'chiton build'.`,
 			if err != nil {
 				return err
 			}
-			// --graph overrides the configured/default store path so the MCP
-			// config written by `chiton install --graph <path>` resolves to the
-			// intended store regardless of the server's working directory.
+			// --graph wins so `chiton install --graph <path>` configs reach the intended store
+			// regardless of the server's working directory.
 			if graphPath != "" {
 				cfg.GraphPath = graphPath
 			}
 
 			gs, err := openGraphStore(cfg.GraphPath, !writable)
 			if err != nil {
-				return fmt.Errorf("open store: %w", err)
+				return err
 			}
 			defer gs.Close()
 
@@ -974,38 +919,19 @@ records in the MCP config so the server uses the same store as 'chiton build'.`,
 			deps := buildSemanticDeps(cmd, cfg, gs, clusterResults)
 			s := mcpsrv.New(gs, clusterResults, deps)
 
-			// Transport selection: stdio (assistant-launched), Unix socket
-			// (low-latency shared daemon), or HTTP/SSE (default; shared daemon
-			// across sessions / debugging). All expose the identical tool surface.
+			// All three transports expose the identical tool surface.
 			switch {
 			case stdio:
 				return mcpsdk.ServeStdio(s)
 			case unixPath != "":
 				return serveUnix(cmd, mcpsdk.NewSSEServer(s), unixPath)
 			default:
-				// The MCP server has no authentication: anything that can reach
-				// the port can read the whole graph. Warn loudly (don't block)
-				// when the bind address is not loopback-only.
+				// The MCP server has no authentication, so warn loudly (but don't block) on a wide bind.
 				warnIfNonLoopback(cmd.ErrOrStderr(),
 					addr, "the MCP server, which has NO authentication — the entire graph (code, meetings, emails, PII) would be readable by anyone on the network")
 				sse := mcpsdk.NewSSEServer(s)
 				fmt.Fprintf(cmd.OutOrStdout(), "serve: listening on %s (SSE)\n", addr)
-				errCh := make(chan error, 1)
-				go func() { errCh <- sse.Start(addr) }()
-				select {
-				case <-cmd.Context().Done():
-					// Ctrl-C: drain SSE sessions and stop the HTTP server so
-					// the deferred store Close() runs.
-					shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-					defer cancel()
-					_ = sse.Shutdown(shutdownCtx)
-					return nil
-				case err := <-errCh:
-					if err != nil && !errors.Is(err, http.ErrServerClosed) {
-						return err
-					}
-					return nil
-				}
+				return serveUntilDone(cmd.Context(), func() error { return sse.Start(addr) }, sse.Shutdown)
 			}
 		},
 	}
@@ -1018,19 +944,15 @@ records in the MCP config so the server uses the same store as 'chiton build'.`,
 	return cmd
 }
 
-// buildSemanticDeps assembles the Phase 2 MCP services. The retriever is wired
-// only when embeddings exist (semantic_search degrades gracefully otherwise);
-// the extractor is always available. Embedder construction failures are logged,
-// not fatal — the structural tools must still serve.
+// buildSemanticDeps assembles the semantic MCP services. Embedder failures are logged, not fatal, so the
+// structural tools still serve; the retriever is wired only when embeddings exist.
 func buildSemanticDeps(cmd *cobra.Command, cfg *config.Config, gs store.GraphStore, clusterResults *cluster.Results) mcpsrv.Deps {
 	errOut := cmd.ErrOrStderr()
 
-	// The LLM-rule and diff tools depend only on the graph store, never on the
-	// embedder, so wire them first — a misconfigured embedding provider must not
-	// take the Phase 2.5 analysis tools offline.
+	// Wire the store-only services first: a misconfigured embedder must not take them offline.
 	var deps mcpsrv.Deps
-	deps.LLM = analyze.NewLLMService(gs, nil, cfg.Semantic.ConfidenceThreshold, ".chiton")
-	deps.BaselineDir = analyze.BaselineDir(".chiton")
+	deps.LLM = analyze.NewLLMService(gs, nil, cfg.Semantic.ConfidenceThreshold, chitonDir)
+	deps.BaselineDir = analyze.BaselineDir(chitonDir)
 	// Phase 4: meeting→code linkage (read pending always; submit guarded by the
 	// store's read-only flag) and URL ingest (add_url; also read-only-guarded).
 	deps.MeetingLinker = meeting.NewLinkService(gs, cfg.Semantic.ConfidenceThreshold)
@@ -1056,11 +978,7 @@ func buildSemanticDeps(cmd *cobra.Command, cfg *config.Config, gs store.GraphSto
 		fmt.Fprintln(errOut, "serve: note: no embeddings indexed — semantic_search disabled (run 'chiton embed')")
 		return deps
 	}
-	idx := vector.NewFlat()
-	for _, e := range embs {
-		idx.Add([]vector.Item{{ID: e.NodeID, Vec: e.Vec}})
-	}
-	deps.Retriever = retrieve.New(gs, idx, emb, clusterResults)
+	deps.Retriever = retrieve.New(gs, newFlatIndex(embs), emb, clusterResults)
 	fmt.Fprintf(errOut, "serve: semantic_search enabled (%d embeddings)\n", len(embs))
 	return deps
 }
@@ -1092,7 +1010,7 @@ Requires a prior 'chiton cluster' run.`,
 
 			gs, err := openGraphStore(cfg.GraphPath, true)
 			if err != nil {
-				return fmt.Errorf("open store: %w", err)
+				return err
 			}
 			defer gs.Close()
 
@@ -1230,12 +1148,7 @@ func hooksStatusCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			if asJSON {
-				b, err := json.MarshalIndent(entries, "", "  ")
-				if err != nil {
-					return err
-				}
-				fmt.Fprintln(out, string(b))
-				return nil
+				return printJSON(out, entries)
 			}
 			for _, e := range entries {
 				state := "absent"
@@ -1280,13 +1193,9 @@ You usually don't invoke it directly.`,
 			}
 			stageCfg := cfg.For(stage)
 
-			runCfg, err := config.Load()
+			_, gs, err := loadStore(false)
 			if err != nil {
 				return err
-			}
-			gs, err := openGraphStore(runCfg.GraphPath, false)
-			if err != nil {
-				return fmt.Errorf("open store: %w", err)
 			}
 			defer gs.Close()
 

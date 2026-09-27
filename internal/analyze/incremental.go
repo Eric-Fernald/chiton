@@ -3,79 +3,57 @@ package analyze
 import (
 	"context"
 	"fmt"
-	"os"
+	"time"
 
-	extast "github.com/Eric-Fernald/chiton/internal/extract/ast"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
+	"github.com/Eric-Fernald/chiton/internal/graph/store"
 )
 
-// AnalyzeFile runs the deterministic FileRules over a single file and persists
-// the resulting findings, pruning any prior deterministic findings for that
-// file that no longer fire. It is the incremental counterpart of Analyze used
-// by the live-sync engine (Phase 3) when one file changes.
-//
-// GraphScope rules (architecture-level: circular-import, god-module,
-// dead-symbol) are intentionally NOT run here — they need the whole corpus and
-// are refreshed by a full `chiton analyze`. AnalyzeFile only re-evaluates the
-// file-local rules whose inputs actually changed, which is the cheap, common
-// case on a single-file edit.
-//
-// A path with no extractor (or that fails to read/extract) yields an empty
-// Result and no error, so callers can drive it from a file watcher without
-// special-casing unsupported files.
+// AnalyzeFile is the single-file counterpart of Analyze for live sync: it runs only FileRules
+// (GraphScope rules need the whole corpus), and an unsupported or unreadable path is a no-op.
 func (a *Analyzer) AnalyzeFile(ctx context.Context, path string) (*Result, error) {
 	start := a.now()
-	ex := extast.ForFile(path)
-	if ex == nil {
+	// A read or parse failure (e.g. removed mid-flight) leaves existing findings untouched.
+	ft, _, ok := loadFileTarget(ctx, path)
+	if !ok {
 		return &Result{}, nil
 	}
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return &Result{}, nil // unreadable (e.g. removed mid-flight) — nothing to do
-	}
-	nodes, edges, err := ex.ExtractFile(ctx, path)
-	if err != nil {
-		return &Result{}, nil // parse error — leave existing findings untouched
-	}
+	return a.analyzeTarget(ctx, ft, start)
+}
 
-	fileNode := findFileNode(nodes)
-	fileRules := a.fileRules()
+// AnalyzeExtracted is AnalyzeFile for a caller that already read path (content) and extracted it
+// (nodes and edges as ExtractSource returned them), so the file isn't read and parsed twice.
+func (a *Analyzer) AnalyzeExtracted(ctx context.Context, path string, content []byte, nodes []model.Node, edges []model.Edge) (*Result, error) {
+	start := a.now()
+	return a.analyzeTarget(ctx, newFileTarget(path, content, nodes, edges), start)
+}
 
-	ext := fileExt(path)
+// analyzeTarget runs the FileRules applicable to ft and replaces ft's findings from those rules.
+func (a *Analyzer) analyzeTarget(ctx context.Context, ft FileTarget, start time.Time) (*Result, error) {
+	ext := FileExt(ft.Path)
+	rs := a.fileRuleSet()
 	var findings []Finding
-	ft := FileTarget{
-		Path:     path,
-		URI:      fileNode.SourceURI,
-		Content:  content,
-		FileNode: fileNode,
-		Nodes:    nonFileNodes(nodes),
-		Edges:    edges,
-	}
 	var usedRules []Rule
-	for _, fr := range fileRules {
-		if !ruleApplies(fr.Meta().Languages, ext) {
+	ruleScope := map[string]bool{}
+	for i, fr := range rs.rules {
+		if !ruleApplies(rs.langs[i], ext) {
 			continue
 		}
 		usedRules = append(usedRules, fr)
+		ruleScope[rs.ids[i]] = true
 		findings = append(findings, fr.MatchFile(ctx, ft)...)
 	}
 
-	if err := a.persist(ctx, usedRules, findings); err != nil {
+	ids, err := a.persist(ctx, usedRules, findings)
+	if err != nil {
 		return nil, err
 	}
 	scanned := map[string]bool{}
-	if fileNode.SourceURI != "" {
-		scanned[fileNode.SourceURI] = true
+	if ft.URI != "" {
+		scanned[ft.URI] = true
 	}
-	// Only prune findings from the FileRules we actually ran. GraphScope rules
-	// (architecture/dead-symbol) are deliberately skipped here, so their findings
-	// — though DETERMINISTIC and targeting this same file — must survive a single-
-	// file edit rather than be wiped until the next full `chiton analyze`.
-	ruleScope := make(map[string]bool, len(usedRules))
-	for _, r := range usedRules {
-		ruleScope[r.Meta().ID] = true
-	}
-	if err := a.pruneResolved(ctx, scanned, findings, ruleScope); err != nil {
+	// Scope the prune to the rules just run: this file's GraphScope findings must survive the edit.
+	if err := a.pruneResolved(ctx, scanned, ids, ruleScope); err != nil {
 		return nil, err
 	}
 
@@ -87,44 +65,43 @@ func (a *Analyzer) AnalyzeFile(ctx context.Context, path string) (*Result, error
 	}, nil
 }
 
-// PruneFileURI removes every finding attached to the given file source_uri —
-// BOTH deterministic and LLM findings. The live-sync engine calls this when a
-// file is deleted so no findings linger after the code they flagged is gone.
-// (DeleteBySourceURI cannot do this: a finding node's source_uri is
-// "finding://<id>", not the file URI, so findings are only reachable via their
-// target_uri attribute.) Unlike the deterministic-only pruneResolved used on an
-// edit re-scan, a delete resolves the file's LLM findings too, since live-sync
-// never re-runs the LLM rules to supersede them.
+// fileRuleSet is the registry's FileRules in ID order, with each rule's Meta ID and languages.
+type fileRuleSet struct {
+	rules []FileRule
+	ids   []string
+	langs [][]string
+}
+
+// fileRuleSet builds the FileRule set on first use so AnalyzeFile needn't re-sort and re-query the registry.
+func (a *Analyzer) fileRuleSet() *fileRuleSet {
+	a.fileRulesOnce.Do(func() {
+		for _, r := range a.registry.All() {
+			if fr, ok := r.(FileRule); ok {
+				m := fr.Meta()
+				a.fileRules.rules = append(a.fileRules.rules, fr)
+				a.fileRules.ids = append(a.fileRules.ids, m.ID)
+				a.fileRules.langs = append(a.fileRules.langs, m.Languages)
+			}
+		}
+	})
+	return &a.fileRules
+}
+
+// PruneFileURI removes every finding (deterministic and LLM) whose target_uri is uri, for a deleted
+// file. Findings' own source_uri is "finding://<id>", so DeleteBySourceURI can't reach them.
 func (a *Analyzer) PruneFileURI(ctx context.Context, uri string) (int, error) {
 	if uri == "" {
 		return 0, nil
 	}
-	all, err := a.store.AllNodes(ctx)
+	stale, err := store.NodesMatching(ctx, a.store, store.NodeFilter{
+		Kinds: []model.NodeKind{model.KindFinding},
+		Attrs: map[string]string{"target_uri": uri},
+	})
 	if err != nil {
 		return 0, fmt.Errorf("load nodes for prune: %w", err)
-	}
-	var stale []model.Node
-	for _, n := range all {
-		if n.Kind != model.KindFinding {
-			continue
-		}
-		if turi, _ := n.Attrs["target_uri"].(string); turi == uri {
-			stale = append(stale, n)
-		}
 	}
 	if err := deleteFindingNodes(ctx, a.store, stale); err != nil {
 		return 0, err
 	}
 	return len(stale), nil
-}
-
-// fileRules returns the registry's FileRules.
-func (a *Analyzer) fileRules() []FileRule {
-	var out []FileRule
-	for _, r := range a.registry.All() {
-		if fr, ok := r.(FileRule); ok {
-			out = append(out, fr)
-		}
-	}
-	return out
 }

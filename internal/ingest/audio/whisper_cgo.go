@@ -1,17 +1,7 @@
 //go:build whisper_cgo
 
-// This file implements chiton's in-process whisper.cpp transcription backend.
-// It is EXCLUDED from the default build: it needs CGO_ENABLED=1, a C compiler,
-// a built libwhisper, and the binding module, none of which the pure-Go default
-// build requires. To use it:
-//
-//	go get github.com/ggerganov/whisper.cpp/bindings/go
-//	CGO_ENABLED=1 go build -tags whisper_cgo ./...
-//
-// then call audio.NewCgo(cfg). It accepts a 16 kHz mono PCM WAV file (convert
-// other formats first, e.g. `ffmpeg -i in.mp4 -ar 16000 -ac 1 out.wav`). The
-// exact whisper binding API drifts between whisper.cpp releases; adjust the
-// Process call if your pinned version differs.
+// In-process whisper.cpp backend; build with CGO_ENABLED=1 -tags whisper_cgo against a built libwhisper.
+// It accepts only 16 kHz mono PCM WAV, and the binding API drifts between whisper.cpp releases.
 package audio
 
 import (
@@ -96,9 +86,8 @@ func (c *CgoTranscriber) Transcribe(_ context.Context, audioPath string) (*meeti
 	return tr, nil
 }
 
-// readWAVMono16k decodes a 16-bit PCM, mono, 16 kHz WAV file to []float32 in
-// [-1,1]. It is intentionally minimal: convert other formats/rates with ffmpeg
-// before calling. A non-conforming file is rejected with a clear error.
+// readWAVMono16k decodes a 16-bit PCM, mono, 16 kHz WAV to []float32 in [-1,1], rejecting any other
+// format with a clear error (convert with ffmpeg first).
 func readWAVMono16k(path string) ([]float32, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -127,9 +116,7 @@ func readWAVMono16k(path string) ([]float32, error) {
 		}
 		id := string(hdr[0:4])
 		size := binary.LittleEndian.Uint32(hdr[4:8])
-		// Guard against a malformed/hostile header declaring a huge chunk: a
-		// 0xFFFFFFFF size would otherwise make([]byte, ~4GiB) and OOM before any
-		// format validation. 1 GiB bounds ~90 min of 16 kHz mono 16-bit audio.
+		// A hostile header declaring a huge chunk (0xFFFFFFFF) would OOM in make() before format validation.
 		if size > maxWAVChunkBytes {
 			return nil, fmt.Errorf("%s: WAV chunk %q declares %d bytes (> %d cap)", path, id, size, maxWAVChunkBytes)
 		}
@@ -173,7 +160,7 @@ func readWAVMono16k(path string) ([]float32, error) {
 
 	n := len(dataChunk) / 2
 	out := make([]float32, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		s := int16(binary.LittleEndian.Uint16(dataChunk[2*i : 2*i+2]))
 		out[i] = float32(s) / 32768.0
 	}

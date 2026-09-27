@@ -3,7 +3,7 @@ package analyze
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
@@ -17,29 +17,21 @@ type Finding struct {
 	Message  string
 	Fix      string // optional patch suggestion (free-form text for now)
 
-	// At least one of TargetURI or TargetNodeID must be set.
-	// TargetURI is the source_uri of the file the finding refers to.
-	// TargetNodeID points at the specific symbol/file node (if known).
+	// At least one must be set: TargetURI is the file's source_uri, TargetNodeID the symbol/file node.
 	TargetURI    string
 	TargetNodeID string
 
 	// Optional positional info; finding ID hashes Span to keep stability.
 	Span *model.SourceSpan
 
-	// The following are set only for LLM-rule findings; deterministic findings
-	// leave them zero and are treated as EXTRACTED / confidence 1.0 /
-	// DETERMINISTIC. NodeProvenance is INFERRED, or AMBIGUOUS below the
-	// confidence threshold; Confidence is the host-supplied score in [0,1];
-	// RuleProvenance distinguishes the rule that produced the finding.
+	// Set only for LLM-rule findings; deterministic findings leave them zero (see resolved).
 	NodeProvenance model.Provenance
 	Confidence     float32
 	RuleProvenance RuleProvenance
 }
 
-// resolved fills in defaults so deterministic findings (which leave the
-// provenance fields zero) render exactly as before: EXTRACTED, confidence 1.0,
-// DETERMINISTIC. Any finding that sets either NodeProvenance or RuleProvenance
-// is treated as LLM-sourced and keeps its supplied confidence.
+// resolved maps zero provenance fields to EXTRACTED/1.0/DETERMINISTIC; setting either
+// NodeProvenance or RuleProvenance marks the finding LLM-sourced, keeping its confidence.
 func (f Finding) resolved() (model.Provenance, float32, RuleProvenance) {
 	if f.NodeProvenance == "" && f.RuleProvenance == "" {
 		return model.ProvExtracted, 1.0, ProvenanceDeterministic
@@ -55,25 +47,23 @@ func (f Finding) resolved() (model.Provenance, float32, RuleProvenance) {
 	return prov, f.Confidence, ruleProv
 }
 
-// FindingID returns the stable ID for this finding.
-// Hash includes rule, target, and start line so the same offence at the
-// same place reuses its node across scans.
+// FindingID returns the stable ID: a hash of rule, target, and start line (not message), so the
+// same offence at the same place reuses its node across scans.
 func (f Finding) FindingID() string {
 	loc := f.TargetURI
 	if f.Span != nil {
-		loc = fmt.Sprintf("%s#L%d", loc, f.Span.StartLine)
+		loc += "#L" + strconv.Itoa(f.Span.StartLine)
 	}
 	h := sha256.Sum256([]byte(f.RuleID + "::" + loc))
 	return hex.EncodeToString(h[:16])
 }
 
-// AsNode renders the finding as a graph node.
-func (f Finding) AsNode(now time.Time) model.Node {
-	id := f.FindingID()
+// asNode renders the finding as a graph node; id is f.FindingID(), passed in so callers hash it once.
+func (f Finding) asNode(id string, now time.Time) model.Node {
 	uri := "finding://" + id
 	label := f.RuleID
 	if f.Span != nil {
-		label = fmt.Sprintf("%s@L%d", f.RuleID, f.Span.StartLine)
+		label += "@L" + strconv.Itoa(f.Span.StartLine)
 	}
 	prov, conf, ruleProv := f.resolved()
 	attrs := map[string]any{
@@ -105,13 +95,13 @@ func (f Finding) AsNode(now time.Time) model.Node {
 	}
 }
 
-// ViolatesEdge returns the finding→rule edge.
-func (f Finding) ViolatesEdge(now time.Time) model.Edge {
+// violatesEdge returns the finding→rule edge; id and rule are f.FindingID() and RuleNodeID(f.RuleID).
+func (f Finding) violatesEdge(id, rule string, now time.Time) model.Edge {
 	prov, conf, _ := f.resolved()
 	return model.Edge{
-		ID:         model.NewEdgeID(f.FindingID(), RuleNodeID(f.RuleID), model.EdgeViolates),
-		Src:        f.FindingID(),
-		Dst:        RuleNodeID(f.RuleID),
+		ID:         model.NewEdgeID(id, rule, model.EdgeViolates),
+		Src:        id,
+		Dst:        rule,
 		Kind:       model.EdgeViolates,
 		Provenance: prov,
 		Confidence: conf,
@@ -119,23 +109,34 @@ func (f Finding) ViolatesEdge(now time.Time) model.Edge {
 	}
 }
 
-// AffectsEdge returns the finding→target edge, or a zero Edge if no target
-// node is set (callers should check Edge.ID != "").
-func (f Finding) AffectsEdge(now time.Time) model.Edge {
+// affectsEdge returns the finding→target edge, or a zero Edge if no target node is set (callers should
+// check Edge.ID != ""); id is f.FindingID().
+func (f Finding) affectsEdge(id string, now time.Time) model.Edge {
 	target := f.TargetNodeID
 	if target == "" {
 		return model.Edge{}
 	}
 	prov, conf, _ := f.resolved()
 	return model.Edge{
-		ID:         model.NewEdgeID(f.FindingID(), target, model.EdgeAffects),
-		Src:        f.FindingID(),
+		ID:         model.NewEdgeID(id, target, model.EdgeAffects),
+		Src:        id,
 		Dst:        target,
 		Kind:       model.EdgeAffects,
 		Provenance: prov,
 		Confidence: conf,
 		CreatedAt:  now,
 	}
+}
+
+// appendGraph appends f's node, VIOLATES edge, and AFFECTS edge (when it has a target node); id and rule
+// are f.FindingID() and RuleNodeID(f.RuleID).
+func (f Finding) appendGraph(nodes []model.Node, edges []model.Edge, id, rule string, now time.Time) ([]model.Node, []model.Edge) {
+	nodes = append(nodes, f.asNode(id, now))
+	edges = append(edges, f.violatesEdge(id, rule, now))
+	if ae := f.affectsEdge(id, now); ae.ID != "" {
+		edges = append(edges, ae)
+	}
+	return nodes, edges
 }
 
 // RuleNodeID returns the stable graph-node ID for a rule.

@@ -28,9 +28,8 @@ func TestJSONCToJSON(t *testing.T) {
 	}
 }
 
-// TestWriteMCPConfigAcceptsJSONC verifies an existing comment-laden config (the
-// documented OpenCode/VS Code JSONC format) is merged rather than rejected, and
-// that unrelated servers are preserved.
+// TestWriteMCPConfigAcceptsJSONC verifies a JSONC config (as OpenCode/VS Code document) is merged rather
+// than rejected, preserving unrelated servers.
 func TestWriteMCPConfigAcceptsJSONC(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mcp.json")
 	jsonc := "{\n" +
@@ -43,11 +42,11 @@ func TestWriteMCPConfigAcceptsJSONC(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, _, err := WriteMCPConfig(path, ChitonServerEntry("chiton", "")); err != nil {
-		t.Fatalf("WriteMCPConfig on JSONC config: %v", err)
+	if _, _, err := mcpServersTable.write(path, ChitonServerEntry("chiton", "")); err != nil {
+		t.Fatalf("write on JSONC config: %v", err)
 	}
 
-	has, err := MCPConfigHasChiton(path)
+	has, err := mcpServersTable.has(path)
 	if err != nil || !has {
 		t.Fatalf("chiton entry missing after write (has=%v err=%v)", has, err)
 	}
@@ -62,8 +61,7 @@ func TestWriteMCPConfigAcceptsJSONC(t *testing.T) {
 	}
 }
 
-// TestWriteMCPConfigRejectsNonObject verifies a present-but-non-object
-// "mcpServers" value is refused (error) rather than silently discarded, so a
+// TestWriteMCPConfigRejectsNonObject verifies a non-object "mcpServers" is refused with an error, so a
 // malformed config is never clobbered.
 func TestWriteMCPConfigRejectsNonObject(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mcp.json")
@@ -71,7 +69,7 @@ func TestWriteMCPConfigRejectsNonObject(t *testing.T) {
 		t.Fatal(err)
 	}
 	original, _ := os.ReadFile(path)
-	if _, _, err := WriteMCPConfig(path, ChitonServerEntry("chiton", "")); err == nil {
+	if _, _, err := mcpServersTable.write(path, ChitonServerEntry("chiton", "")); err == nil {
 		t.Fatal("expected an error when mcpServers is not an object")
 	}
 	// The original file must be untouched (no clobber).
@@ -121,10 +119,10 @@ func TestWriteOpenCodeConfigAcceptsJSONC(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, _, err := WriteOpenCodeConfig(path, "chiton", ""); err != nil {
-		t.Fatalf("WriteOpenCodeConfig on JSONC config: %v", err)
+	if _, _, err := openCodeTable.write(path, chitonOpenCodeEntry("chiton", "")); err != nil {
+		t.Fatalf("write on JSONC config: %v", err)
 	}
-	has, err := OpenCodeConfigHasChiton(path)
+	has, err := openCodeTable.has(path)
 	if err != nil || !has {
 		t.Fatalf("chiton entry missing after write (has=%v err=%v)", has, err)
 	}

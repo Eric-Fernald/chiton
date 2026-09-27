@@ -1,8 +1,6 @@
 package performance
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 
@@ -10,10 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// IndexOfNotIncludes flags the `.indexOf(x) !== -1` membership-test idiom in
-// JS/TS, where `.includes(x)` is clearer and conveys intent directly. Only the
-// comparison forms that mean "is present" are matched, so `.indexOf(x) > 5` and
-// uses of the returned index are not touched.
+// IndexOfNotIncludes flags the JS/TS `.indexOf(x) !== -1` membership idiom; only "is present"
+// comparisons match, so `.indexOf(x) > 5` and uses of the returned index are left alone.
 type IndexOfNotIncludes struct{}
 
 func (IndexOfNotIncludes) Meta() analyze.Meta {
@@ -29,10 +25,8 @@ func (IndexOfNotIncludes) Meta() analyze.Meta {
 	}
 }
 
-// Matches `.indexOf(...)` immediately followed by a present-membership
-// comparison: `!== -1`, `!= -1`, `>= 0`, or `> -1`. The argument matcher allows
-// one level of nested parentheses (e.g. `indexOf(fn(x))`) so a membership test
-// on a function-call argument is not missed.
+// `.indexOf(...)` followed by `!== -1`, `!= -1`, `>= 0`, or `> -1`; the argument may contain one
+// level of nested parens (`indexOf(fn(x))`).
 var indexOfMembershipRe = regexp.MustCompile(
 	`\.indexOf\s*\([^()]*(?:\([^()]*\)[^()]*)*\)\s*(?:!==?\s*-\s*1|>=\s*0|>\s*-\s*1)`,
 )
@@ -40,12 +34,8 @@ var indexOfMembershipRe = regexp.MustCompile(
 func (IndexOfNotIncludes) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	const ruleID = "performance/indexof-not-includes"
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		stripped := stripLineComment(sc.Text())
+	for line, raw := range analyze.Lines(t.Content) {
+		stripped := analyze.StripLineComment(raw, true)
 		if indexOfMembershipRe.MatchString(stripped) {
 			out = append(out, analyze.Finding{
 				RuleID:       ruleID,

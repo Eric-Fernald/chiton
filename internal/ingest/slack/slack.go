@@ -1,18 +1,5 @@
-// Package slack ingests Slack channel and thread conversations into chiton's
-// graph. Slack is the chat-shaped sibling of the Phase 4 meeting sources: where
-// Teams hands you a linear WebVTT transcript, Slack hands you threaded,
-// already-structured JSON. So Slack is the deliberate exception to the WebVTT
-// convergence point — it does NOT ride the transcript parser (there is no
-// transcript to parse). Instead a thin adapter (conversationToTranscript) maps
-// Slack's structured messages straight into the same meeting.Transcript shape
-// meeting.ToGraph consumes, so a Slack channel/thread becomes a
-// meeting/meeting_turn/person subgraph and the meeting→code linkage
-// (DECIDED_IN / DISCUSSED_IN) applies unchanged.
-//
-// The Web API wiring lives behind the ConversationSource interface in
-// web_client.go (a thin net/http client, no vendor SDK — mirroring the Gmail
-// email source); the orchestration here and the Events API receiver (events.go)
-// are pure-Go and unit-testable with a fake source.
+// Package slack ingests Slack channels and threads as meeting subgraphs, mapping messages straight to a
+// meeting.Transcript (no WebVTT parse) so meeting→code linkage applies unchanged.
 package slack
 
 import (
@@ -26,9 +13,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
 )
 
-// Message is one Slack message, already resolved to a display name where the
-// token's scopes allow. It is the provider-neutral unit a ConversationSource
-// returns.
+// Message is one Slack message, with the author resolved to a display name where the token's scopes allow.
 type Message struct {
 	User     string // Slack user id (e.g. "U0123"); "" for some bot/system msgs
 	Name     string // resolved display name (falls back to the user id)
@@ -39,14 +24,10 @@ type Message struct {
 
 // speaker returns the best available human label for the message author.
 func (m Message) speaker() string {
-	switch {
-	case m.Name != "":
+	if m.Name != "" {
 		return m.Name
-	case m.User != "":
-		return m.User
-	default:
-		return ""
 	}
+	return m.User
 }
 
 // Conversation is a fetched Slack channel (or a single thread within it).
@@ -67,15 +48,8 @@ type ConversationSource interface {
 	Name() string
 }
 
-// ConversationURI is the stable source_uri for a Slack conversation, so a
-// re-ingest replaces exactly that channel/thread's nodes. Form:
-//
-//	slack://<channel>[/<thread-ts>]
-//
-// The channel id is the stable identifier; it is keyed on alone (the workspace
-// is intentionally NOT part of the key) so the URI never shifts between runs —
-// a shifting key would defeat the DeleteBySourceURI replace-not-duplicate
-// guarantee the ingester relies on.
+// ConversationURI returns the stable source_uri slack://<channel>[/<thread-ts>]. The workspace is deliberately
+// omitted so the key never shifts between runs, which would break DeleteBySourceURI replacement.
 func ConversationURI(channelID, threadTS string) string {
 	uri := "slack://" + channelID
 	if threadTS != "" {
@@ -105,12 +79,10 @@ type Report struct {
 	NodesUpserted int    `json:"nodes_upserted"`
 }
 
-// IngestConversation fetches a channel (threadTS == "") or a single thread and
-// upserts it as a meeting subgraph (meeting + turns + persons), keyed on a
-// stable slack:// URI so re-ingest replaces rather than duplicates. Read-only
-// stores are rejected up front.
+// IngestConversation fetches a channel (threadTS == "") or one thread and upserts it as a meeting subgraph
+// keyed on its slack:// URI, so re-ingest replaces rather than duplicates.
 func (i *Ingester) IngestConversation(ctx context.Context, channelID, threadTS string) (Report, error) {
-	if ro, ok := i.store.(store.ReadOnlyAware); ok && ro.ReadOnly() {
+	if store.IsReadOnly(i.store) {
 		return Report{}, fmt.Errorf("slack: store is read-only — restart 'chiton serve --writable' or use the 'chiton slack fetch' CLI")
 	}
 	if strings.TrimSpace(channelID) == "" {
@@ -148,24 +120,17 @@ func (i *Ingester) ingestOne(ctx context.Context, conv Conversation) (Report, er
 		// delete above already cleared any stale prior version.
 		return rep, nil
 	}
-	ns, es := meeting.ToGraph(tr, i.now())
-	if err := i.store.UpsertNodes(ctx, ns); err != nil {
-		return rep, fmt.Errorf("upsert conversation nodes: %w", err)
-	}
-	if err := i.store.UpsertEdges(ctx, es); err != nil {
-		return rep, fmt.Errorf("upsert conversation edges: %w", err)
+	n, err := meeting.Upsert(ctx, i.store, tr, i.now(), "conversation")
+	if err != nil {
+		return rep, err
 	}
 	rep.Turns = len(tr.Turns)
-	rep.NodesUpserted = len(ns)
+	rep.NodesUpserted = n
 	return rep, nil
 }
 
-// conversationToTranscript adapts a Slack conversation into the meeting
-// Transcript shape meeting.ToGraph consumes. Each message becomes one Turn
-// (chat has no speaker "turns" to coalesce — every message stands alone), with
-// Start/End set to the message's offset from the first message so the graph
-// keeps relative timing. Messages with empty text are skipped (file shares,
-// reactions, and join/leave notices carry no prose worth linking to code).
+// conversationToTranscript maps each message to one Turn timed as its offset from the first message.
+// Empty-text messages (file shares, join/leave notices) are skipped.
 func conversationToTranscript(conv Conversation, uri string) *meeting.Transcript {
 	tr := &meeting.Transcript{
 		Title:     conversationTitle(conv),
@@ -198,10 +163,8 @@ func conversationToTranscript(conv Conversation, uri string) *meeting.Transcript
 	return tr
 }
 
-// conversationTitle builds a human label for a Slack conversation. Thread
-// titles carry a date discriminator (derived from the parent ts) so two
-// threads in the same channel don't collapse to an identical label — the same
-// disambiguation the Teams transcript title uses.
+// conversationTitle labels a conversation; thread titles include the parent's date so two threads in one
+// channel don't collapse to the same label.
 func conversationTitle(conv Conversation) string {
 	name := conv.ChannelName
 	if name == "" {
@@ -217,10 +180,8 @@ func conversationTitle(conv Conversation) string {
 	return fmt.Sprintf("Slack #%s", name)
 }
 
-// parseSlackTS parses a Slack message timestamp ("1735689600.000600") into a
-// UTC time. The fractional component is Slack's per-second message counter; we
-// treat it as microseconds, which preserves ordering and yields a sensible
-// sub-second time.
+// parseSlackTS parses a Slack ts ("1735689600.000600") as UTC; the fraction is a per-second counter, treated
+// as microseconds to preserve ordering.
 func parseSlackTS(ts string) (time.Time, error) {
 	ts = strings.TrimSpace(ts)
 	if ts == "" {
@@ -237,9 +198,7 @@ func parseSlackTS(ts string) (time.Time, error) {
 		if len(fracStr) > 6 {
 			fracStr = fracStr[:6]
 		}
-		for len(fracStr) < 6 {
-			fracStr += "0"
-		}
+		fracStr += strings.Repeat("0", 6-len(fracStr))
 		if micros, err := strconv.ParseInt(fracStr, 10, 64); err == nil {
 			nsec = micros * 1000
 		}

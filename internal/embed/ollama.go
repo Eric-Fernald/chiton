@@ -17,12 +17,8 @@ const (
 	defaultOllamaDim      = 768
 )
 
-// Ollama is a thin client over a local Ollama server's /api/embed endpoint.
-// It pulls in no SDK — just net/http — to keep chiton a single static binary.
-//
-// dim is atomic because Embed self-corrects it to the model's true dimension,
-// and a single *Ollama is shared across the live-sync worker pool (concurrent
-// Embed calls would otherwise race the write against Dim()'s read).
+// Ollama is a thin net/http client over a local Ollama server's /api/embed endpoint. dim is atomic because
+// Embed self-corrects it while the live-sync worker pool shares one *Ollama and reads Dim() concurrently.
 type Ollama struct {
 	endpoint string
 	model    string
@@ -30,9 +26,8 @@ type Ollama struct {
 	client   *http.Client
 }
 
-// NewOllama builds an Ollama embedder from cfg, applying defaults for any
-// empty/zero field (endpoint http://localhost:11434, model nomic-embed-text,
-// dim 768).
+// NewOllama builds an Ollama embedder from cfg, defaulting empty fields to endpoint
+// http://localhost:11434, model nomic-embed-text, dim 768.
 func NewOllama(cfg Config) *Ollama {
 	endpoint := strings.TrimRight(cfg.Endpoint, "/")
 	if endpoint == "" {

@@ -1,8 +1,6 @@
 package style
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"strings"
 
@@ -10,14 +8,12 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// MaxConsecutiveBlankLines is the number of consecutive blank lines that
-// triggers a finding once exceeded. Two blanks are common and idiomatic
-// (e.g. between Go top-level decls); three or more are almost always accidental.
+// MaxConsecutiveBlankLines is the longest allowed run of blank lines: two are idiomatic (e.g.
+// between Go top-level decls); three or more are almost always accidental.
 const MaxConsecutiveBlankLines = 2
 
-// MultipleBlankLines flags runs of 3 or more consecutive blank (empty or
-// whitespace-only) lines. Reports one finding per run, anchored at the first
-// excess blank line, to stay low-noise.
+// MultipleBlankLines flags runs of 3+ blank (empty or whitespace-only) lines, once per run at
+// the first excess line, to stay low-noise.
 type MultipleBlankLines struct{}
 
 func (MultipleBlankLines) Meta() analyze.Meta {
@@ -26,7 +22,7 @@ func (MultipleBlankLines) Meta() analyze.Meta {
 		Category:   analyze.CategoryStyle,
 		Severity:   analyze.SeverityLow,
 		Scope:      analyze.FileScope,
-		Languages:  []string{"go", "py", "js", "ts", "jsx", "tsx", "rs", "java"},
+		Languages:  sourceLangs,
 		Summary:    "Three or more consecutive blank lines.",
 		Fix:        "Collapse the run down to a single blank line.",
 		Provenance: analyze.ProvenanceDeterministic,
@@ -35,13 +31,9 @@ func (MultipleBlankLines) Meta() analyze.Meta {
 
 func (MultipleBlankLines) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
 	blankRun := 0
-	for sc.Scan() {
-		line++
-		if strings.TrimSpace(sc.Text()) == "" {
+	for line, text := range analyze.Lines(t.Content) {
+		if strings.TrimSpace(text) == "" {
 			blankRun++
 			// Fire exactly once per run, at the first line beyond the limit.
 			if blankRun == MaxConsecutiveBlankLines+1 {

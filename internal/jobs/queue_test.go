@@ -219,10 +219,8 @@ func TestDrainProcessesRequeuedWork(t *testing.T) {
 	}
 }
 
-// TestStressEnqueueDuringFire hammers Enqueue concurrently with timer fires on a
-// tiny debounce — the exact interleaving that made the old time.Timer.Reset
-// design double-fire its callback and panic with a negative WaitGroup counter.
-// The test passing (no panic) is the regression guard.
+// TestStressEnqueueDuringFire hammers Enqueue against timer fires on a tiny debounce, the interleaving
+// that once double-fired a callback and panicked on a negative WaitGroup; not panicking is the guard.
 func TestStressEnqueueDuringFire(t *testing.T) {
 	var runs int32
 	q := New(func(_ context.Context, _ string) error {
@@ -260,11 +258,8 @@ func TestStressEnqueueDuringFire(t *testing.T) {
 	}
 }
 
-// TestNoConcurrentSelfRun guards the documented invariant that a single key
-// never runs concurrently with itself. The handler holds each run open briefly
-// to widen the window in which the old launch() could start a second handler for
-// a key already in flight (the timer-fires-then-Enqueue-re-arms race lands the
-// same key in `ready` twice). Run with -race for full coverage.
+// TestNoConcurrentSelfRun guards that a key never runs concurrently with itself; each run is held open
+// to widen the race that lands a key in ready twice. Run with -race for full coverage.
 func TestNoConcurrentSelfRun(t *testing.T) {
 	var mu sync.Mutex
 	inFlight := map[string]int{}

@@ -10,27 +10,20 @@ import (
 	"runtime"
 	"time"
 
+	mcpsdk "github.com/mark3labs/mcp-go/server"
 	"github.com/spf13/cobra"
 )
 
-// serveUnix serves the MCP HTTP handler (SSE transport) over a Unix domain
-// socket. This is the lowest-latency shared-daemon transport for Linux/macOS
-// power users — no TCP port to manage, and filesystem permissions gate access.
-//
-// A stale socket from a previous unclean shutdown is removed before binding;
-// Ctrl-C triggers a graceful HTTP shutdown and removes the socket file.
-func serveUnix(cmd *cobra.Command, handler http.Handler, path string) error {
-	// AF_UNIX support and socket-file cleanup semantics are unreliable across
-	// Windows versions; the flag is documented as Linux/macOS. Fail fast with a
-	// clear message instead of an opaque listen error.
+// serveUnix serves the MCP SSE transport over a Unix domain socket, a low-latency shared-daemon
+// transport where filesystem permissions gate access. A stale socket is removed before binding.
+func serveUnix(cmd *cobra.Command, sse *mcpsdk.SSEServer, path string) error {
+	// AF_UNIX and socket-file cleanup are unreliable on Windows; fail fast instead of an opaque listen error.
 	if runtime.GOOS == "windows" {
 		return fmt.Errorf("the --unix transport is supported on Linux/macOS; on Windows use --http or --stdio")
 	}
 
-	// Remove a stale socket left by a hard kill so the bind doesn't fail with
-	// "address already in use" — but ONLY if it is actually a socket. The path
-	// is user-supplied via --unix; a typo pointing at a real file must not cause
-	// us to delete that file. Lstat so a symlink is inspected, not its target.
+	// Remove a stale socket only if it IS a socket: --unix is user-supplied and a typo must not delete
+	// a real file. Lstat so a symlink is inspected, not its target.
 	if info, err := os.Lstat(path); err == nil {
 		if info.Mode()&os.ModeSocket == 0 {
 			return fmt.Errorf("--unix path %s already exists and is not a socket; refusing to overwrite it", path)
@@ -47,19 +40,29 @@ func serveUnix(cmd *cobra.Command, handler http.Handler, path string) error {
 	// os.Remove on shutdown; the listener also unlinks on Close for "unix".
 	defer os.Remove(path)
 
-	srv := &http.Server{Handler: handler}
+	srv := &http.Server{Handler: sse}
+	fmt.Fprintf(cmd.OutOrStdout(), "serve: listening on unix:%s (SSE)\n", path)
+	return serveUntilDone(cmd.Context(), func() error { return srv.Serve(ln) }, func(ctx context.Context) error {
+		sse.CloseSessions() // as SSEServer.Shutdown does, so open SSE streams don't stall the drain
+		return srv.Shutdown(ctx)
+	})
+}
 
-	// cmd.Context() is cancelled by the root signal handler on Ctrl-C.
-	go func() {
-		<-cmd.Context().Done()
+// serveUntilDone runs serve until it fails or ctx is cancelled (Ctrl-C). On cancel it waits for shutdown
+// (bounded to 5s) so in-flight handlers finish before the caller's deferred store Close runs.
+func serveUntilDone(ctx context.Context, serve func() error, shutdown func(context.Context) error) error {
+	errCh := make(chan error, 1)
+	go func() { errCh <- serve() }()
+	select {
+	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
-	}()
-
-	fmt.Fprintf(cmd.OutOrStdout(), "serve: listening on unix:%s (SSE)\n", path)
-	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
+		_ = shutdown(shutdownCtx)
+		return nil
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
 	}
-	return nil
 }

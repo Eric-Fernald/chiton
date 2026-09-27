@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -13,35 +12,26 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Eric-Fernald/chiton/internal/ingest/bearer"
 )
 
 // slackAPIBase is the Slack Web API root.
 const slackAPIBase = "https://slack.com/api"
 
-// maxMessages caps how many messages a single channel fetch pulls, so a busy
-// channel can't run unbounded. Full-history backfill is out of scope (Phase
-// 4.5 deferred); a thread fetch is naturally bounded by the thread size.
+// maxMessages caps one conversation fetch so a busy channel can't run unbounded.
 const maxMessages = 1000
 
 // pageLimit is the per-request message count requested from Slack (the
 // documented sweet spot for conversations.history; the hard max is 1000).
 const pageLimit = 200
 
-// userNegativeTTL bounds how long a failed users.info resolution is cached
-// before it is retried, so a transient failure (a 429, a network blip) does not
-// permanently degrade a user's name in the long-lived Events receiver while
-// still avoiding a per-message refetch storm within one ingest.
+// userNegativeTTL expires a failed users.info lookup so a transient error (429, network blip) doesn't
+// permanently degrade a name in the long-lived Events receiver.
 const userNegativeTTL = time.Minute
 
-// WebClient is a thin net/http Slack Web API client implementing
-// ConversationSource. Like the email GmailSource it deliberately avoids the
-// vendor SDK (github.com/slack-go/slack) — keeping the dependency surface
-// pure-Go and minimal — and talks to the documented JSON endpoints directly
-// with a bot/user OAuth token. Messages are fetched via conversations.history
-// (or conversations.replies for a thread) and authors resolved via users.info.
-//
-// A WebClient is safe for concurrent use: the user-name cache is mutex-guarded
-// so the Events receiver can share one client across concurrent HTTP handlers.
+// WebClient is a net/http Slack Web API client implementing ConversationSource. It is safe for concurrent use:
+// the user-name cache is mutex-guarded because the Events receiver shares one client across handlers.
 type WebClient struct {
 	token  string
 	client *http.Client
@@ -125,10 +115,8 @@ func (c *WebClient) FetchConversation(ctx context.Context, channelID, threadTS s
 	return conv, nil
 }
 
-// fetchRaw pages through conversations.history (or conversations.replies for a
-// thread), honouring the cursor until exhausted or the message cap is hit.
-// Messages are de-duplicated by ts because conversations.replies repeats the
-// thread's parent message at the top of every page.
+// fetchRaw pages through conversations.history (or .replies for a thread) up to maxMessages, de-duplicating by
+// ts because conversations.replies repeats the parent message on every page.
 func (c *WebClient) fetchRaw(ctx context.Context, channelID, threadTS string) ([]rawMessage, error) {
 	method := "conversations.history"
 	if threadTS != "" {
@@ -177,9 +165,8 @@ func (c *WebClient) fetchRaw(ctx context.Context, channelID, threadTS string) ([
 	return all, nil
 }
 
-// resolveUser returns an author's display name, caching the result. On any
-// failure it falls back to the raw user id and caches that negatively (with a
-// TTL) so a transient error self-heals on the next ingest.
+// resolveUser returns an author's display name, cached; on failure it returns the user id, cached negatively
+// for userNegativeTTL.
 func (c *WebClient) resolveUser(ctx context.Context, userID string) string {
 	c.mu.Lock()
 	ce, hit := c.userCache[userID]
@@ -229,27 +216,19 @@ func (c *WebClient) resolveChannelName(ctx context.Context, channelID string) (s
 	return resp.Channel.Name, nil
 }
 
-// apiGet performs an authenticated GET and decodes a Slack JSON response. Slack
-// returns HTTP 200 with {"ok":false,"error":"…"} on logical failures, so the
-// envelope's ok flag is checked in addition to the HTTP status.
+// apiGet performs an authenticated GET and decodes the response. Slack reports logical failures as HTTP 200
+// with "ok":false, so the envelope is checked too.
 func (c *WebClient) apiGet(ctx context.Context, method string, params url.Values, out slackResult) error {
 	reqURL := c.base + "/" + method
 	if enc := params.Encode(); enc != "" {
 		reqURL += "?" + enc
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	status, body, err := bearer.Get(ctx, c.client, reqURL, c.token)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("slack API %s: http %d: %s", method, resp.StatusCode, strings.TrimSpace(string(body)))
+	if status < 200 || status >= 300 {
+		return fmt.Errorf("slack API %s: http %d: %s", method, status, strings.TrimSpace(string(body)))
 	}
 	if err := json.Unmarshal(body, out); err != nil {
 		return fmt.Errorf("slack API %s: decode: %w", method, err)
@@ -260,11 +239,12 @@ func (c *WebClient) apiGet(ctx context.Context, method string, params url.Values
 	return nil
 }
 
+var slackEntities = strings.NewReplacer("&amp;", "&", "&lt;", "<", "&gt;", ">")
+
 // cleanText unescapes the &amp;/&lt;/&gt; entities Slack puts in message text.
 // Mention/link unwrapping (<@U…>, <http://…|text>) is left for a later pass.
 func cleanText(s string) string {
-	r := strings.NewReplacer("&amp;", "&", "&lt;", "<", "&gt;", ">")
-	return strings.TrimSpace(r.Replace(s))
+	return strings.TrimSpace(slackEntities.Replace(s))
 }
 
 // tsLess orders two Slack ts strings chronologically.

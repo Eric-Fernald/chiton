@@ -31,15 +31,14 @@ type ListOptions struct {
 	MinSeverity Severity // empty = all
 	Scope       string   // substring match against target_uri; empty = all
 	Limit       int      // 0 = no cap
-	// IncludeAmbiguous controls whether low-confidence AMBIGUOUS findings
-	// (LLM findings below the confidence threshold) are returned. They are
-	// excluded by default so they never masquerade as confirmed findings.
+	// IncludeAmbiguous returns below-threshold AMBIGUOUS LLM findings, hidden by default so they
+	// never masquerade as confirmed findings.
 	IncludeAmbiguous bool
 }
 
 // List returns findings in the store, filtered by opts.
 func List(ctx context.Context, gs store.GraphStore, opts ListOptions) ([]FindingView, error) {
-	all, err := gs.AllNodes(ctx)
+	findings, err := store.NodesMatching(ctx, gs, store.NodeFilter{Kinds: []model.NodeKind{model.KindFinding}})
 	if err != nil {
 		return nil, fmt.Errorf("load nodes: %w", err)
 	}
@@ -50,10 +49,7 @@ func List(ctx context.Context, gs store.GraphStore, opts ListOptions) ([]Finding
 	}
 
 	var out []FindingView
-	for _, n := range all {
-		if n.Kind != model.KindFinding {
-			continue
-		}
+	for _, n := range findings {
 		if !opts.IncludeAmbiguous && n.Provenance == model.ProvAmbiguous {
 			continue
 		}
@@ -76,8 +72,7 @@ func List(ctx context.Context, gs store.GraphStore, opts ListOptions) ([]Finding
 	return out, nil
 }
 
-// Explain returns the finding plus its rule metadata and any related findings
-// on the same target.
+// Explanation is a finding plus its rule metadata and any related findings on the same target.
 type Explanation struct {
 	Finding FindingView   `json:"finding"`
 	Rule    *RuleView     `json:"rule,omitempty"`
@@ -132,12 +127,15 @@ func Explain(ctx context.Context, gs store.GraphStore, idOrLabel string) (*Expla
 
 	// "Related" = other findings on the same target URI.
 	if exp.Finding.TargetURI != "" {
-		all, err := gs.AllNodes(ctx)
+		siblings, err := store.NodesMatching(ctx, gs, store.NodeFilter{
+			Kinds: []model.NodeKind{model.KindFinding},
+			Attrs: map[string]string{"target_uri": exp.Finding.TargetURI},
+		})
 		if err != nil {
 			return nil, fmt.Errorf("load nodes: %w", err)
 		}
-		for _, n := range all {
-			if n.Kind != model.KindFinding || n.ID == node.ID {
+		for _, n := range siblings {
+			if n.ID == node.ID {
 				continue
 			}
 			// Hide AMBIGUOUS siblings, matching List's default so they never
@@ -145,10 +143,7 @@ func Explain(ctx context.Context, gs store.GraphStore, idOrLabel string) (*Expla
 			if n.Provenance == model.ProvAmbiguous {
 				continue
 			}
-			fv := nodeToFindingView(n)
-			if fv.TargetURI == exp.Finding.TargetURI {
-				exp.Related = append(exp.Related, fv)
-			}
+			exp.Related = append(exp.Related, nodeToFindingView(n))
 		}
 		sortFindings(exp.Related)
 	}
@@ -156,12 +151,6 @@ func Explain(ctx context.Context, gs store.GraphStore, idOrLabel string) (*Expla
 }
 
 func nodeToFindingView(n model.Node) FindingView {
-	get := func(k string) string {
-		if v, ok := n.Attrs[k].(string); ok {
-			return v
-		}
-		return ""
-	}
 	var conf float32
 	switch v := n.Attrs["confidence_score"].(type) {
 	case float64:
@@ -171,32 +160,26 @@ func nodeToFindingView(n model.Node) FindingView {
 	}
 	return FindingView{
 		ID:             n.ID,
-		RuleID:         get("rule_id"),
-		Category:       get("category"),
-		Severity:       get("severity"),
-		Message:        get("message"),
-		TargetURI:      get("target_uri"),
+		RuleID:         model.AttrString(n.Attrs, "rule_id"),
+		Category:       model.AttrString(n.Attrs, "category"),
+		Severity:       model.AttrString(n.Attrs, "severity"),
+		Message:        model.AttrString(n.Attrs, "message"),
+		TargetURI:      model.AttrString(n.Attrs, "target_uri"),
 		Span:           n.Span,
-		Fix:            get("fix_suggestion"),
+		Fix:            model.AttrString(n.Attrs, "fix_suggestion"),
 		Provenance:     string(n.Provenance),
-		RuleProvenance: get("rule_provenance"),
+		RuleProvenance: model.AttrString(n.Attrs, "rule_provenance"),
 		Confidence:     conf,
 	}
 }
 
 func nodeToRuleView(n model.Node) RuleView {
-	get := func(k string) string {
-		if v, ok := n.Attrs[k].(string); ok {
-			return v
-		}
-		return ""
-	}
 	return RuleView{
-		ID:       get("rule_id"),
-		Category: get("category"),
-		Severity: get("severity"),
-		Summary:  get("summary"),
-		Fix:      get("fix_hint"),
+		ID:       model.AttrString(n.Attrs, "rule_id"),
+		Category: model.AttrString(n.Attrs, "category"),
+		Severity: model.AttrString(n.Attrs, "severity"),
+		Summary:  model.AttrString(n.Attrs, "summary"),
+		Fix:      model.AttrString(n.Attrs, "fix_hint"),
 	}
 }
 

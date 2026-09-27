@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -10,8 +9,6 @@ import (
 
 	"github.com/Eric-Fernald/chiton/internal/analyze"
 	_ "github.com/Eric-Fernald/chiton/internal/analyze/rules"
-	"github.com/Eric-Fernald/chiton/internal/cache"
-	"github.com/Eric-Fernald/chiton/internal/config"
 	"github.com/Eric-Fernald/chiton/internal/embed"
 	"github.com/Eric-Fernald/chiton/internal/ingest"
 	gitpkg "github.com/Eric-Fernald/chiton/internal/ingest/git"
@@ -66,19 +63,14 @@ func (f *syncEngineFlags) bind(cmd *cobra.Command, watch bool) {
 // openSyncEngine opens the store read-write, loads the cache, and wires the
 // optional embedder/analyzer per flags. The returned closer must be called.
 func openSyncEngine(cmd *cobra.Command, f *syncEngineFlags) (*ingest.Engine, func() error, error) {
-	cfg, err := config.Load()
+	cfg, gs, err := loadStore(false)
 	if err != nil {
 		return nil, nil, err
 	}
-	gs, err := openGraphStore(cfg.GraphPath, false)
-	if err != nil {
-		return nil, nil, fmt.Errorf("open store: %w", err)
-	}
-	cachePath := filepath.Join(filepath.Dir(cfg.GraphPath), "cache.json")
-	ch, err := cache.Load(cachePath)
+	ch, err := loadBuildCache(cfg.GraphPath)
 	if err != nil {
 		gs.Close()
-		return nil, nil, fmt.Errorf("open cache: %w", err)
+		return nil, nil, err
 	}
 
 	var embedder embed.Embedder
@@ -103,9 +95,7 @@ func openSyncEngine(cmd *cobra.Command, f *syncEngineFlags) (*ingest.Engine, fun
 		Workers:         f.workers,
 		Debounce:        time.Duration(f.debounceMS) * time.Millisecond,
 		ClusterDebounce: time.Duration(f.clusterMS) * time.Millisecond,
-	}, embedder, analyzer, func(format string, args ...any) {
-		fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", args...)
-	})
+	}, embedder, analyzer, errLogf(cmd))
 
 	return eng, gs.Close, nil
 }
@@ -192,8 +182,7 @@ With no flag, defaults to the files in HEAD (post-commit semantics).`,
 }
 
 // resolveGitChanges turns the stage/since/args into a change set. skip is true
-// when a post-checkout was a file checkout (no branch switch) and should be a
-// no-op.
+// when a post-checkout was a file checkout (no branch switch), which is a no-op.
 func resolveGitChanges(root, since, stage string, args []string) (changes []gitpkg.Change, skip bool, err error) {
 	switch {
 	case since != "":
@@ -203,9 +192,8 @@ func resolveGitChanges(root, since, stage string, args []string) (changes []gitp
 		if len(args) >= 3 && args[2] == "0" {
 			return nil, true, nil // file checkout, not a branch switch
 		}
-		// On the first checkout after clone / `git worktree add`, prev-HEAD is
-		// the all-zero null SHA, which `git diff` rejects ("bad object"). Index
-		// the new tree's HEAD instead of diffing against nothing.
+		// After a clone / `git worktree add`, prev-HEAD is the null SHA, which `git diff`
+		// rejects ("bad object"); index the new HEAD instead.
 		if len(args) >= 2 && !isNullSHA(args[0]) {
 			changes, err = gitpkg.RangeChanges(root, args[0], args[1])
 		} else {

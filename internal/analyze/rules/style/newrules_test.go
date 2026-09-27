@@ -74,9 +74,8 @@ func TestMissingFinalNewline(t *testing.T) {
 	}
 }
 
-// ruleApplies mirrors analyze.ruleApplies (unexported) so language-filter
-// regressions can be asserted from this external-ish test without exporting it.
-// nil/empty filter accepts everything; otherwise the extension must match.
+// ruleApplies mirrors the unexported analyze.ruleApplies: an empty filter accepts everything,
+// otherwise the extension must match case-insensitively.
 func ruleApplies(langs []string, ext string) bool {
 	if len(langs) == 0 {
 		return true
@@ -89,10 +88,8 @@ func ruleApplies(langs []string, ext string) bool {
 	return false
 }
 
-// TestTrailingWhitespaceLanguageFilter pins the fix for the false positive where
-// style/trailing-whitespace ran on Markdown (two trailing spaces is a valid hard
-// line break) and on image binaries. The Meta must now carry a Languages filter
-// that excludes md/png/jpg while still accepting source files.
+// TestTrailingWhitespaceLanguageFilter pins the Languages filter that keeps the rule off Markdown
+// (two trailing spaces is a hard line break) and image binaries.
 func TestTrailingWhitespaceLanguageFilter(t *testing.T) {
 	langs := (TrailingWhitespace{}).Meta().Languages
 	if len(langs) == 0 {

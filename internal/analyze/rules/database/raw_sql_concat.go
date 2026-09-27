@@ -1,12 +1,8 @@
-// Package database contains deterministic rules in the database category.
-//
-// These rules are deliberately conservative: they only fire on patterns that
-// are unambiguous (e.g. SELECT/INSERT keywords adjacent to interpolation).
+// Package database contains deterministic rules in the database category; they fire only on
+// unambiguous patterns to keep false positives low.
 package database
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 
@@ -35,12 +31,9 @@ var selectStarRe = regexp.MustCompile(`(?i)SELECT\s+\*\s+FROM\s+[\w."` + "`" + `
 
 func (SelectStarFromUnbounded) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(maskDBBlocks(t.Content, t.URI)))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := stripDBComment(sc.Text(), t.URI)
+	py := analyze.FileExt(t.URI) == "py"
+	for line, raw := range analyze.Lines(maskedDB(t, py)) {
+		text := stripDBComment(raw, py)
 		if !selectStarRe.MatchString(text) {
 			continue
 		}

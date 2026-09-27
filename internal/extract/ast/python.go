@@ -2,10 +2,6 @@ package ast
 
 import (
 	"context"
-	"crypto/sha256"
-	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -16,6 +12,7 @@ var (
 	rePyImport     = regexp.MustCompile(`^import\s+(\S+)`)
 	rePyFromImport = regexp.MustCompile(`^from\s+(\S+)\s+import\b`)
 	rePyClassDef   = regexp.MustCompile(`^(\s*)class\s+(\w+)`)
+	rePyClassBases = regexp.MustCompile(`^class\s+\w+\s*\(([^)]+)\):`)
 	rePyFuncDef    = regexp.MustCompile(`^(\s*)(?:async\s+)?def\s+(\w+)\s*\(`)
 	rePyCall       = regexp.MustCompile(`\b(\w+)\s*\(`)
 )
@@ -23,61 +20,18 @@ var (
 // PythonExtractor parses Python source files using regex-based line scanning.
 type PythonExtractor struct{}
 
-func (p *PythonExtractor) ExtractFile(_ context.Context, path string) ([]model.Node, []model.Edge, error) {
-	src, err := os.ReadFile(path)
-	if err != nil {
-		return nil, nil, fmt.Errorf("read %s: %w", path, err)
-	}
+func (p *PythonExtractor) ExtractFile(ctx context.Context, path string) ([]model.Node, []model.Edge, error) {
+	return extractFile(ctx, p, path)
+}
 
-	absPath, _ := filepath.Abs(path)
-	uri := "file://" + filepath.ToSlash(absPath)
-	sum := sha256.Sum256(src)
-
-	fileNode := model.Node{
-		ID:            model.NewNodeID(uri, uri),
-		Kind:          model.KindFile,
-		Label:         filepath.Base(path),
-		SourceURI:     uri,
-		Provenance:    model.ProvExtracted,
-		Confidence:    1.0,
-		ContentSHA256: fmt.Sprintf("%x", sum[:]),
-		Attrs:         map[string]any{"language": "python"},
-	}
-
-	nodes := []model.Node{fileNode}
-	var edges []model.Edge
-	seenEdge := map[string]bool{}
-
-	addEdge := func(e model.Edge) {
-		if !seenEdge[e.ID] {
-			seenEdge[e.ID] = true
-			edges = append(edges, e)
-		}
-	}
-	seenNode := map[string]bool{fileNode.ID: true}
-	addNode := func(n model.Node) {
-		if !seenNode[n.ID] {
-			seenNode[n.ID] = true
-			nodes = append(nodes, n)
-		}
-	}
-
-	// symbols maps bare name and qualified name → nodeID for CALLS resolution.
-	symbols := map[string]string{}
-
-	lines := strings.Split(strings.ReplaceAll(string(src), "\r\n", "\n"), "\n")
+func (p *PythonExtractor) ExtractSource(_ context.Context, path string, src []byte) ([]model.Node, []model.Edge, error) {
+	g := newFileGraph(newFileNode(path, src, map[string]any{"language": "python"}))
+	lines := splitLines(src)
 
 	type stackEntry struct {
 		indent int
 		kind   string // "class" or "func"
 		name   string
-	}
-
-	// funcRecord tracks where each function was defined for body scanning.
-	type funcRecord struct {
-		lineStart int
-		indent    int
-		id        string
 	}
 
 	var stack []stackEntry
@@ -97,36 +51,16 @@ func (p *PythonExtractor) ExtractFile(_ context.Context, path string) ([]model.N
 		}
 
 		if m := rePyClassDef.FindStringSubmatch(line); m != nil {
-			indent := len(m[1])
-			className := m[2]
-			sym := model.Node{
-				ID:         model.NewNodeID(uri, className),
-				Kind:       model.KindSymbol,
-				Label:      className,
-				SourceURI:  uri,
-				Span:       &model.SourceSpan{StartLine: lineNum + 1},
-				Provenance: model.ProvExtracted,
-				Confidence: 1.0,
-				Attrs:      map[string]any{"lang_kind": "class"},
-			}
-			addNode(sym)
-			symbols[className] = sym.ID
-			addEdge(containsEdge(fileNode.ID, sym.ID))
-
+			id := g.declare(m[2], "class", lineNum+1)
 			// EXTENDS edge: class Foo(Bar):
-			if reBase := regexp.MustCompile(`^class\s+\w+\s*\(([^)]+)\):`).FindStringSubmatch(line); reBase != nil {
-				for _, base := range strings.Split(reBase[1], ",") {
-					base = strings.TrimSpace(base)
-					if base == "" || base == "object" {
-						continue
+			if reBase := rePyClassBases.FindStringSubmatch(line); reBase != nil {
+				for base := range strings.SplitSeq(reBase[1], ",") {
+					if base = strings.TrimSpace(base); base != "" && base != "object" {
+						g.addExternal(id, base, extendsEdge)
 					}
-					bn := importNode(base)
-					addNode(bn)
-					addEdge(extendsEdge(sym.ID, bn.ID))
 				}
 			}
-
-			stack = append(stack, stackEntry{indent: indent, kind: "class", name: className})
+			stack = append(stack, stackEntry{indent: len(m[1]), kind: "class", name: m[2]})
 			continue
 		}
 
@@ -148,22 +82,8 @@ func (p *PythonExtractor) ExtractFile(_ context.Context, path string) ([]model.N
 				label = classCtx + "." + funcName
 			}
 
-			sym := model.Node{
-				ID:         model.NewNodeID(uri, label),
-				Kind:       model.KindSymbol,
-				Label:      label,
-				SourceURI:  uri,
-				Span:       &model.SourceSpan{StartLine: lineNum + 1},
-				Provenance: model.ProvExtracted,
-				Confidence: 1.0,
-				Attrs:      map[string]any{"lang_kind": "func"},
-			}
-			addNode(sym)
-			symbols[funcName] = sym.ID
-			symbols[label] = sym.ID
-			addEdge(containsEdge(fileNode.ID, sym.ID))
-
-			funcs = append(funcs, funcRecord{lineStart: lineNum, indent: indent, id: sym.ID})
+			id := g.declare(label, "func", lineNum+1, funcName)
+			funcs = append(funcs, funcRecord{lineStart: lineNum, indent: indent, id: id})
 			stack = append(stack, stackEntry{indent: indent, kind: "func", name: funcName})
 			continue
 		}
@@ -171,21 +91,17 @@ func (p *PythonExtractor) ExtractFile(_ context.Context, path string) ([]model.N
 		// Imports at module level (indent == 0).
 		if cur == 0 {
 			if m := rePyImport.FindStringSubmatch(line); m != nil {
-				n := importNode(m[1])
-				addNode(n)
-				addEdge(importEdge(fileNode.ID, n.ID))
+				g.addImport(m[1])
 				continue
 			}
 			if m := rePyFromImport.FindStringSubmatch(line); m != nil {
-				n := importNode(m[1])
-				addNode(n)
-				addEdge(importEdge(fileNode.ID, n.ID))
+				g.addImport(m[1])
 				continue
 			}
 		}
 	}
 
-	ambiguous := ambiguousBareNames(symbols)
+	ambiguous := ambiguousBareNames(g.symbols)
 
 	// Pass 2: CALLS edges — scan each function's body lines for calls.
 	for _, fr := range funcs {
@@ -198,16 +114,9 @@ func (p *PythonExtractor) ExtractFile(_ context.Context, path string) ([]model.N
 			if indentLen(bodyLine) <= fr.indent {
 				break // exited function body
 			}
-			for _, m := range rePyCall.FindAllStringSubmatch(bodyLine, -1) {
-				calleeName := m[1]
-				calleeID, ok := symbols[calleeName]
-				if !ok || calleeID == fr.id || ambiguous[calleeName] {
-					continue
-				}
-				addEdge(callsEdge(fr.id, calleeID))
-			}
+			g.addLineCalls(bodyLine, fr.id, rePyCall, nil, ambiguous)
 		}
 	}
 
-	return nodes, edges, nil
+	return g.nodes, g.edges, nil
 }

@@ -1,24 +1,16 @@
 package bugs
 
-// Per-file masking helpers for the bugs rules. The older strip* helpers in this
-// package only TRUNCATE a line at the first comment marker outside a string;
-// they leave string/template/regex bodies in place, so an operator or keyword
-// that lives INSIDE a literal still reaches the rule regex (a false positive).
-//
-// The functions below replace the BODIES of string/template/regex literals and
-// comments with a neutral filler byte ('x'), preserving newlines so line
-// numbers stay accurate. Block comments and multi-line strings are tracked
-// across lines, so callers must mask the whole file once (not line-by-line).
+import (
+	"strings"
 
-const bugsMaskFiller = 'x'
+	"github.com/Eric-Fernald/chiton/internal/analyze"
+)
 
-// maskJSLiteralsAndComments masks the bodies of JS/TS string ("..."/'...'),
-// template (`...`), and regex (/.../ ) literals plus // line and /* */ block
-// comments. Regex detection is heuristic: a `/` only opens a regex when the
-// previous non-space byte is one that cannot terminate an expression (operator,
-// open bracket, comma, etc.) or is absent (start of input). This avoids
-// mistaking the division operator `a / b` for a regex while still masking
-// genuine literals like `/a==b/`.
+// The maskers below replace literal and comment bodies with 'x', keeping newlines so line numbers hold.
+// They track block comments and multi-line strings across lines, so mask the whole file once.
+
+// maskJSLiteralsAndComments masks JS/TS string, template, and regex literal bodies plus comments. A `/`
+// opens a regex only where regexCanStart says an operand cannot end, so division in `a / b` is left alone.
 func maskJSLiteralsAndComments(src []byte) []byte {
 	out := make([]byte, len(src))
 	copy(out, src)
@@ -35,37 +27,37 @@ func maskJSLiteralsAndComments(src []byte) []byte {
 			if c == '\n' {
 				inLine = false
 			} else {
-				out[i] = bugsMaskFiller
+				out[i] = analyze.MaskFiller
 			}
 		case inBlock:
 			if c == '*' && i+1 < len(out) && out[i+1] == '/' {
-				out[i] = bugsMaskFiller
-				out[i+1] = bugsMaskFiller
+				out[i] = analyze.MaskFiller
+				out[i+1] = analyze.MaskFiller
 				i++
 				inBlock = false
 			} else if c != '\n' {
-				out[i] = bugsMaskFiller
+				out[i] = analyze.MaskFiller
 			}
 		case inStr != 0:
 			if c == '\\' {
 				if i+1 < len(out) && out[i+1] != '\n' {
-					out[i] = bugsMaskFiller
-					out[i+1] = bugsMaskFiller
+					out[i] = analyze.MaskFiller
+					out[i+1] = analyze.MaskFiller
 				}
 				i++ // skip escaped char
 				continue
 			}
 			if c == inStr {
 				inStr = 0
-				out[i] = bugsMaskFiller
+				out[i] = analyze.MaskFiller
 			} else if c != '\n' {
-				out[i] = bugsMaskFiller
+				out[i] = analyze.MaskFiller
 			}
 		case inRegex:
 			if c == '\\' {
 				if i+1 < len(out) && out[i+1] != '\n' {
-					out[i] = bugsMaskFiller
-					out[i+1] = bugsMaskFiller
+					out[i] = analyze.MaskFiller
+					out[i+1] = analyze.MaskFiller
 				}
 				i++
 				continue
@@ -77,33 +69,33 @@ func maskJSLiteralsAndComments(src []byte) []byte {
 				inClass = false
 			case c == '[':
 				inClass = true
-				out[i] = bugsMaskFiller
+				out[i] = analyze.MaskFiller
 			case c == ']':
 				inClass = false
-				out[i] = bugsMaskFiller
+				out[i] = analyze.MaskFiller
 			case c == '/' && !inClass:
 				inRegex = false
-				out[i] = bugsMaskFiller
+				out[i] = analyze.MaskFiller
 			default:
-				out[i] = bugsMaskFiller
+				out[i] = analyze.MaskFiller
 			}
 		default:
 			switch {
 			case c == '/' && i+1 < len(out) && out[i+1] == '/':
 				inLine = true
-				out[i] = bugsMaskFiller
+				out[i] = analyze.MaskFiller
 			case c == '/' && i+1 < len(out) && out[i+1] == '*':
 				inBlock = true
-				out[i] = bugsMaskFiller
+				out[i] = analyze.MaskFiller
 			case c == '/' && regexCanStart(lastSig):
 				inRegex = true
-				out[i] = bugsMaskFiller
-				lastSig = bugsMaskFiller
+				out[i] = analyze.MaskFiller
+				lastSig = analyze.MaskFiller
 				continue
 			case c == '"' || c == '\'' || c == '`':
 				inStr = c
-				out[i] = bugsMaskFiller
-				lastSig = bugsMaskFiller
+				out[i] = analyze.MaskFiller
+				lastSig = analyze.MaskFiller
 				continue
 			}
 			if c != ' ' && c != '\t' && c != '\n' && c != '\r' {
@@ -114,10 +106,8 @@ func maskJSLiteralsAndComments(src []byte) []byte {
 	return out
 }
 
-// regexCanStart reports whether a `/` following the given previous significant
-// byte should be treated as the start of a regex literal rather than division.
-// A regex can begin at the start of input (prev == 0) or after a byte that
-// cannot end an expression operand (operators, open brackets, separators).
+// regexCanStart reports whether a `/` after the significant byte prev opens a regex literal rather than
+// division: prev is absent (start of input) or cannot end an expression operand.
 func regexCanStart(prev byte) bool {
 	switch prev {
 	case 0,
@@ -129,15 +119,8 @@ func regexCanStart(prev byte) bool {
 	return false
 }
 
-// maskPyStringsAndComments masks the BODIES of Python string literals — single
-// and double quoted ('...'/"...") and triple-quoted (”'...”'/"""...""") — plus
-// `#` line comments, replacing them with the filler byte. The opening and
-// closing quote DELIMITERS are intentionally left intact so that a genuine
-// identity-vs-literal comparison such as `x is "foo"` still presents an `is "`
-// signal to the rule regex, while text INSIDE the string (e.g. the words
-// "...is 42...") is neutralised. Triple-quoted strings are tracked across lines,
-// so a multi-line docstring is masked in full; the single-line triple-quoted
-// case (a one-line docstring) is therefore also handled. Newlines are preserved.
+// maskPyStringsAndComments masks Python string bodies (including multi-line triple-quoted) and # comments.
+// Quote delimiters stay intact so a real `x is "foo"` still shows the rule regex its `is "` signal.
 func maskPyStringsAndComments(src []byte) []byte {
 	out := make([]byte, len(src))
 	copy(out, src)
@@ -149,24 +132,24 @@ func maskPyStringsAndComments(src []byte) []byte {
 		case triple != nil:
 			if c == '\\' {
 				if i+1 < len(out) && out[i+1] != '\n' {
-					out[i] = bugsMaskFiller
-					out[i+1] = bugsMaskFiller
+					out[i] = analyze.MaskFiller
+					out[i+1] = analyze.MaskFiller
 				}
 				i++
 				continue
 			}
-			if c == triple[0] && hasTripleAt(out, i, triple[0]) {
+			if c == triple[0] && analyze.HasTripleAt(out, i, triple[0]) {
 				// Leave the closing delimiter intact.
 				i += 2
 				triple = nil
 			} else if c != '\n' {
-				out[i] = bugsMaskFiller
+				out[i] = analyze.MaskFiller
 			}
 		case inStr != 0:
 			if c == '\\' {
 				if i+1 < len(out) && out[i+1] != '\n' {
-					out[i] = bugsMaskFiller
-					out[i+1] = bugsMaskFiller
+					out[i] = analyze.MaskFiller
+					out[i+1] = analyze.MaskFiller
 				}
 				i++
 				continue
@@ -176,11 +159,11 @@ func maskPyStringsAndComments(src []byte) []byte {
 			} else if c == '\n' {
 				inStr = 0 // unterminated; reset at line end
 			} else {
-				out[i] = bugsMaskFiller
+				out[i] = analyze.MaskFiller
 			}
 		default:
 			switch {
-			case (c == '"' || c == '\'') && hasTripleAt(out, i, c):
+			case (c == '"' || c == '\'') && analyze.HasTripleAt(out, i, c):
 				triple = []byte{c} // leave the opening delimiter intact
 				i += 2
 			case c == '"' || c == '\'':
@@ -188,7 +171,7 @@ func maskPyStringsAndComments(src []byte) []byte {
 			case c == '#':
 				// Mask the rest of the line as a comment.
 				for j := i; j < len(out) && out[j] != '\n'; j++ {
-					out[j] = bugsMaskFiller
+					out[j] = analyze.MaskFiller
 				}
 			}
 		}
@@ -196,17 +179,12 @@ func maskPyStringsAndComments(src []byte) []byte {
 	return out
 }
 
-// hasTripleAt reports whether out[i:i+3] is three consecutive q bytes.
-func hasTripleAt(out []byte, i int, q byte) bool {
-	return i+2 < len(out) && out[i] == q && out[i+1] == q && out[i+2] == q
-}
-
-// stripInlineBlockComment removes single-line `/* ... */` block comments from a
-// line (the `/*` and matching `*/` both present on this line), ignoring markers
-// inside string literals. Used by the self-assignment rule so a trailing block
-// comment like `x = x /* note */` does not defeat its end-of-line anchor. Lines
-// with an unterminated `/*` are returned truncated at the marker.
+// stripInlineBlockComment removes same-line /* ... */ comments outside string literals, so
+// `x = x /* note */` keeps its end-of-line anchor. An unterminated `/*` truncates the line.
 func stripInlineBlockComment(s string) string {
+	if !strings.Contains(s, "/*") {
+		return s
+	}
 	var inStr byte
 	b := []byte(s)
 	for i := 0; i < len(b); i++ {

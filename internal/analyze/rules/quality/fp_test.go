@@ -8,10 +8,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// -----------------------------------------------------------------------------
-// quality/high-complexity: Python docstrings and Rust lifetimes must not inflate
-// the branch count; a genuinely complex function still fires.
-// -----------------------------------------------------------------------------
+// ---- quality/high-complexity: docstrings and Rust lifetimes must not inflate the branch count ----
 
 func TestHighComplexity_PythonDocstringFP(t *testing.T) {
 	// A simple function whose docstring is full of branch keywords in prose.
@@ -29,9 +26,7 @@ func TestHighComplexity_PythonDocstringFP(t *testing.T) {
 }
 
 func TestHighComplexity_RustLifetimeFP(t *testing.T) {
-	// Rust lifetimes (`&'a`) used to open fake string state, swallowing the rest
-	// of the body so branch keywords were mis-handled. A lifetime-heavy but
-	// simple function must not fire.
+	// A lifetime (`&'a`) must not open a fake string that swallows the body; this simple func must not fire.
 	body := "fn render<'a>(buf: &'a mut Vec<u8>, label: &'a str) {\n" +
 		"    let x: &'a str = label;\n" +
 		"    let y: &'a str = label;\n" +
@@ -59,9 +54,7 @@ func TestHighComplexity_StillFiresTP(t *testing.T) {
 	}
 }
 
-// -----------------------------------------------------------------------------
-// quality/too-many-returns: returns inside a Python docstring must not count.
-// -----------------------------------------------------------------------------
+// ---- quality/too-many-returns: returns inside a Python docstring must not count ----
 
 func TestTooManyReturns_DocstringFP(t *testing.T) {
 	body := "def f(x):\n" +
@@ -75,10 +68,7 @@ func TestTooManyReturns_DocstringFP(t *testing.T) {
 	}
 }
 
-// -----------------------------------------------------------------------------
-// quality/nested-ternary: independent sibling ternaries on one line must not
-// fire; a genuinely nested ternary still does.
-// -----------------------------------------------------------------------------
+// ---- quality/nested-ternary: sibling ternaries on one line must not fire; a nested one must ----
 
 func TestNestedTernary_SiblingsFP(t *testing.T) {
 	fp := `const a = x ? 1 : 2; const b = y ? 3 : 4;
@@ -98,10 +88,7 @@ func TestNestedTernary_GenuineTP(t *testing.T) {
 	}
 }
 
-// -----------------------------------------------------------------------------
-// quality/too-many-params: Go receiver methods and angle-bracket generics must
-// now fire (previously missed); Python self/cls is not counted.
-// -----------------------------------------------------------------------------
+// ---- quality/too-many-params: Go receivers and <...> generics fire; Python self/cls is not counted ----
 
 func TestTooManyParams_GoReceiverTP(t *testing.T) {
 	src := `package x
@@ -154,9 +141,7 @@ func TestTooManyParams_PythonSelfNotCounted(t *testing.T) {
 	}
 }
 
-// -----------------------------------------------------------------------------
-// Masking helper: directly exercise the literal/comment/lifetime masking.
-// -----------------------------------------------------------------------------
+// ---- masking helper: literals, comments, and lifetimes ----
 
 func TestQMaskLiteralsAndComments(t *testing.T) {
 	in := "a := \"if for while\"\n" +

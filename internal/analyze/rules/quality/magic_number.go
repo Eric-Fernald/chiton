@@ -1,8 +1,6 @@
 package quality
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 	"strings"
@@ -11,9 +9,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// MagicNumber flags integer literals >= 100 that don't sit on a const/let/=
-// declaration. Heuristic, conservative — only fires when the line looks like
-// "expression with a multi-digit literal that isn't bound to a name."
+// MagicNumber flags 3+-digit integer literals on lines that bind no name (no const/var/let/`= `...);
+// a conservative heuristic.
 type MagicNumber struct{}
 
 func (MagicNumber) Meta() analyze.Meta {
@@ -37,12 +34,7 @@ var (
 
 func (MagicNumber) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := sc.Text()
+	for line, text := range analyze.Lines(t.Content) {
 		trimmed := strings.TrimSpace(text)
 		if trimmed == "" || strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "*") {
 			continue

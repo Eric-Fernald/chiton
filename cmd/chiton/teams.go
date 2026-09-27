@@ -9,7 +9,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Eric-Fernald/chiton/internal/config"
 	"github.com/Eric-Fernald/chiton/internal/ingest/teams"
 )
 
@@ -49,13 +48,9 @@ func teamsFetchCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cfg, err := config.Load()
+			_, gs, err := loadStore(false)
 			if err != nil {
 				return err
-			}
-			gs, err := openGraphStore(cfg.GraphPath, false)
-			if err != nil {
-				return fmt.Errorf("open store: %w", err)
 			}
 			defer gs.Close()
 
@@ -100,21 +95,15 @@ public URL for the subscription itself.`,
 			if err != nil {
 				return err
 			}
-			cfg, err := config.Load()
+			_, gs, err := loadStore(false)
 			if err != nil {
 				return err
-			}
-			gs, err := openGraphStore(cfg.GraphPath, false)
-			if err != nil {
-				return fmt.Errorf("open store: %w", err)
 			}
 			defer gs.Close()
 
 			ing := teams.NewIngester(gs, src)
 			out := cmd.OutOrStdout()
-			logf := func(format string, args ...any) {
-				fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", args...)
-			}
+			logf := errLogf(cmd)
 			handler := teams.NewWebhookHandler(clientState, func(ctx context.Context, c teams.ChangeItem) error {
 				meetingID, _, ok := teams.ParseTranscriptResource(c.Resource)
 				if !ok {
@@ -134,20 +123,8 @@ public URL for the subscription itself.`,
 			mux.Handle("/notifications", handler)
 			srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 
-			// Shut down cleanly on Ctrl-C so the store closes BadgerDB properly;
-			// cmd.Context() is cancelled by the root signal handler.
-			go func() {
-				<-cmd.Context().Done()
-				shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				_ = srv.Shutdown(shutCtx)
-			}()
-
 			fmt.Fprintf(out, "teams: webhook listening on %s/notifications (Ctrl-C to stop)\n", addr)
-			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				return err
-			}
-			return nil
+			return serveUntilDone(cmd.Context(), srv.ListenAndServe, srv.Shutdown)
 		},
 	}
 	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8444", "HTTP listen address (loopback by default; put a tunnel or reverse proxy in front)")

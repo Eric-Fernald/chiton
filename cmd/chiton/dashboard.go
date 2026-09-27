@@ -8,16 +8,13 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Eric-Fernald/chiton/internal/analyze"
-	"github.com/Eric-Fernald/chiton/internal/config"
 	"github.com/Eric-Fernald/chiton/internal/graph/cluster"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 	"github.com/Eric-Fernald/chiton/internal/report"
 )
 
-// dashboardCmd groups the static dashboard commands. The dashboard is a
-// read-only artifact generated from the graph + findings — explicitly NOT a
-// server (Phase 5.5). `build` writes a self-contained index.html into an output
-// directory that opens straight from disk.
+// dashboardCmd groups the static dashboard commands. The dashboard is a read-only
+// artifact generated from the graph + findings, deliberately not a server.
 func dashboardCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "dashboard",
@@ -45,24 +42,16 @@ colours and betweenness sizing when a prior 'chiton cluster' has run; findings
 come from the most recent 'chiton analyze'. Use --scope to restrict to a
 subtree and --max-nodes to cap dense graphs.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := config.Load()
+			cfg, gs, err := loadStore(true)
 			if err != nil {
 				return err
-			}
-			gs, err := openGraphStore(cfg.GraphPath, true)
-			if err != nil {
-				return fmt.Errorf("open store: %w", err)
 			}
 			defer gs.Close()
 
 			ctx := cmd.Context()
-			nodes, err := gs.AllNodes(ctx)
+			nodes, edges, err := loadGraph(ctx, gs)
 			if err != nil {
-				return fmt.Errorf("load nodes: %w", err)
-			}
-			edges, err := gs.AllEdges(ctx)
-			if err != nil {
-				return fmt.Errorf("load edges: %w", err)
+				return err
 			}
 			if len(nodes) == 0 {
 				return fmt.Errorf("graph is empty — run 'chiton build' first")
@@ -75,10 +64,8 @@ subtree and --max-nodes to cap dense graphs.`,
 				fmt.Fprintf(cmd.ErrOrStderr(), "dashboard: warning: could not load cluster sidecar: %v\n", err)
 			}
 
-			// Findings for the explorer: all of them (the explorer filters
-			// client-side), scoped to match the graph and respecting the
-			// AMBIGUOUS default so low-confidence LLM findings don't masquerade
-			// as confirmed unless explicitly included.
+			// All findings (the explorer filters client-side), but AMBIGUOUS ones only on request
+			// so low-confidence LLM findings don't masquerade as confirmed.
 			views, err := analyze.List(ctx, gs, analyze.ListOptions{
 				Scope:            scope,
 				IncludeAmbiguous: includeAmbiguous,
@@ -132,12 +119,8 @@ subtree and --max-nodes to cap dense graphs.`,
 	return cmd
 }
 
-// buildDashboardFindings projects analyze findings into the report layer's lean
-// shape, resolving each finding's community from its affected node. The affected
-// node id (target_node_id) is read off the raw finding node; its community comes
-// from the cluster overlay. When the finding has no resolvable target node, we
-// fall back to the community of any node sharing the finding's target_uri
-// (preferring the file node), and -1 when nothing is known.
+// buildDashboardFindings projects findings into the report shape, taking each one's community from its
+// target_node_id, else from a node sharing its target_uri (file node preferred), else -1.
 func buildDashboardFindings(views []analyze.FindingView, allNodes []model.Node, overlay *cluster.Results) []report.DashboardFinding {
 	nodeComm := func(string) int { return -1 }
 	if overlay != nil {
@@ -156,7 +139,7 @@ func buildDashboardFindings(views []analyze.FindingView, allNodes []model.Node, 
 	for _, n := range allNodes {
 		switch n.Kind {
 		case model.KindFinding:
-			if tn, ok := n.Attrs["target_node_id"].(string); ok && tn != "" {
+			if tn := model.AttrString(n.Attrs, "target_node_id"); tn != "" {
 				findingTarget[n.ID] = tn
 			}
 		default:

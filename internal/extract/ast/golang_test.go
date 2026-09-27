@@ -58,3 +58,49 @@ func fetch(url string) string {
 		t.Error("expected CALLS edge main → fetch but none found")
 	}
 }
+
+func TestGoExtractorSameNamedMethods(t *testing.T) {
+	src := `package p
+
+type A struct{}
+
+func (A) String() string { return helper() }
+
+type B struct{}
+
+func (B) String() string { return "" }
+
+func Close() {}
+
+func (B) Close() {}
+
+func run() { Close() }
+
+func helper() string { return "" }
+`
+	f := writeTempFile(t, "p.go", src)
+	nodes, edges, err := (&GoExtractor{}).ExtractFile(context.Background(), f)
+	if err != nil {
+		t.Fatalf("ExtractFile: %v", err)
+	}
+	labels := make(map[string]string, len(nodes))
+	for _, n := range nodes {
+		labels[n.ID] = n.Label
+	}
+	calls := map[string]bool{}
+	for _, e := range edges {
+		if e.Kind == model.EdgeCalls {
+			calls[labels[e.Src]+"->"+labels[e.Dst]] = true
+		}
+	}
+	for _, want := range []string{"A.String->helper", "run->Close"} {
+		if !calls[want] {
+			t.Errorf("missing CALLS %s; got %v", want, calls)
+		}
+	}
+	for _, bad := range []string{"B.String->helper", "run->B.Close"} {
+		if calls[bad] {
+			t.Errorf("unexpected CALLS %s", bad)
+		}
+	}
+}

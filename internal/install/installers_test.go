@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	toml "github.com/pelletier/go-toml/v2"
@@ -21,10 +22,8 @@ func setHome(t *testing.T, dir string) {
 	t.Setenv("COPILOT_HOME", "")
 }
 
-// TestAllInstallers_InstallDoctorUninstall exercises the core contract for
-// every registered installer (the two pre-existing ones and the seven added in
-// Phase 3.5): Install registers, Doctor confirms, re-Install is idempotent, and
-// Uninstall fully deregisters.
+// TestAllInstallers_InstallDoctorUninstall checks every installer's contract: Install registers, Doctor
+// confirms, re-Install is idempotent, and Uninstall fully deregisters.
 func TestAllInstallers_InstallDoctorUninstall(t *testing.T) {
 	for _, in := range Available() {
 		t.Run(in.Name(), func(t *testing.T) {
@@ -91,7 +90,7 @@ func TestCodexConfig_PreservesAndRoundTrips(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	created, pre, err := WriteCodexConfig(path, "/abs/chiton", "./g/graph.badger")
+	created, pre, err := codexTable.write(path, chitonCodexEntry("/abs/chiton", "./g/graph.badger"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,18 +116,18 @@ func TestCodexConfig_PreservesAndRoundTrips(t *testing.T) {
 	}
 
 	// Idempotent: second write reports preexisted.
-	if _, pre2, _ := WriteCodexConfig(path, "/abs/chiton", ""); !pre2 {
+	if _, pre2, _ := codexTable.write(path, chitonCodexEntry("/abs/chiton", "")); !pre2 {
 		t.Errorf("expected preexisted=true on second write")
 	}
-	if has, _ := CodexConfigHasChiton(path); !has {
-		t.Errorf("CodexConfigHasChiton=false after write")
+	if has, _ := codexTable.has(path); !has {
+		t.Errorf("has=false after write")
 	}
 
-	changed, err := RemoveCodexEntry(path)
+	changed, err := codexTable.remove(path)
 	if err != nil || !changed {
-		t.Fatalf("RemoveCodexEntry: changed=%v err=%v", changed, err)
+		t.Fatalf("remove: changed=%v err=%v", changed, err)
 	}
-	if has, _ := CodexConfigHasChiton(path); has {
+	if has, _ := codexTable.has(path); has {
 		t.Errorf("chiton still present after remove")
 	}
 	doc = readTOML(t, path)
@@ -142,10 +141,10 @@ func TestCodexConfig_PreservesAndRoundTrips(t *testing.T) {
 
 func TestCodexConfig_DeletesEmptyFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
-	if _, _, err := WriteCodexConfig(path, "/abs/chiton", ""); err != nil {
+	if _, _, err := codexTable.write(path, chitonCodexEntry("/abs/chiton", "")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := RemoveCodexEntry(path); err != nil {
+	if _, err := codexTable.remove(path); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -162,7 +161,7 @@ func TestOpenCodeConfig_PreservesAndRoundTrips(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, _, err := WriteOpenCodeConfig(path, "/abs/chiton", "./g"); err != nil {
+	if _, _, err := openCodeTable.write(path, chitonOpenCodeEntry("/abs/chiton", "./g")); err != nil {
 		t.Fatal(err)
 	}
 	doc := readJSON(t, path)
@@ -191,13 +190,13 @@ func TestOpenCodeConfig_PreservesAndRoundTrips(t *testing.T) {
 		}
 	}
 
-	if has, _ := OpenCodeConfigHasChiton(path); !has {
-		t.Errorf("OpenCodeConfigHasChiton=false after write")
+	if has, _ := openCodeTable.has(path); !has {
+		t.Errorf("has=false after write")
 	}
-	if _, err := RemoveOpenCodeEntry(path); err != nil {
+	if _, err := openCodeTable.remove(path); err != nil {
 		t.Fatal(err)
 	}
-	if has, _ := OpenCodeConfigHasChiton(path); has {
+	if has, _ := openCodeTable.has(path); has {
 		t.Errorf("chiton still present after remove")
 	}
 	doc = readJSON(t, path)
@@ -208,10 +207,10 @@ func TestOpenCodeConfig_PreservesAndRoundTrips(t *testing.T) {
 
 func TestOpenCodeConfig_DeletesSchemaOnlyFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "opencode.json")
-	if _, _, err := WriteOpenCodeConfig(path, "/abs/chiton", ""); err != nil {
+	if _, _, err := openCodeTable.write(path, chitonOpenCodeEntry("/abs/chiton", "")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := RemoveOpenCodeEntry(path); err != nil {
+	if _, err := openCodeTable.remove(path); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -282,14 +281,13 @@ func TestSharedAGENTSFile(t *testing.T) {
 	}
 	agents := filepath.Join(repo, "AGENTS.md")
 	body, _ := os.ReadFile(agents)
-	if c := countOccurrences(string(body), ChitonBlockStart); c != 1 {
+	if c := strings.Count(string(body), ChitonBlockStart); c != 1 {
 		t.Fatalf("expected exactly one chiton block in shared AGENTS.md, got %d", c)
 	}
 }
 
-// TestSharedAGENTS_UninstallReferenceCounted verifies that uninstalling one
-// AGENTS.md-using assistant keeps the shared chiton block for the others, and
-// only the last uninstall removes it.
+// TestSharedAGENTS_UninstallReferenceCounted verifies the shared AGENTS.md block survives until the last
+// AGENTS.md-using assistant is uninstalled.
 func TestSharedAGENTS_UninstallReferenceCounted(t *testing.T) {
 	repo := t.TempDir()
 	setHome(t, t.TempDir())
@@ -324,16 +322,6 @@ func TestSharedAGENTS_UninstallReferenceCounted(t *testing.T) {
 	if _, err := os.Stat(agents); !os.IsNotExist(err) {
 		t.Errorf("expected chiton-only AGENTS.md removed; err=%v", err)
 	}
-}
-
-func countOccurrences(s, sub string) int {
-	n := 0
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			n++
-		}
-	}
-	return n
 }
 
 // --- helpers ---

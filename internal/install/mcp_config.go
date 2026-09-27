@@ -2,23 +2,19 @@ package install
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 )
 
-// ServerEntry is one MCP server's command line, as it appears in any MCP
-// config JSON file (.mcp.json, .vscode/mcp.json, etc.). All known assistants
-// use this same shape, so one struct serves all installers.
+// ServerEntry is the {command, args} MCP server entry used under "mcpServers" in JSON configs
+// (.mcp.json, .vscode/mcp.json, ...).
 type ServerEntry struct {
 	Command string   `json:"command"`
 	Args    []string `json:"args"`
 }
 
-// ChitonServeArgs returns the argv (after the binary) that launches chiton's
-// stdio MCP server. graphPath may be empty (the server then uses its
-// configured/default graph_path). Shared by every installer so all assistants
-// launch the server identically, regardless of their config file format.
+// ChitonServeArgs returns the argv after the binary that launches chiton's stdio MCP server, shared by
+// every installer so all assistants launch it identically. graphPath may be empty.
 func ChitonServeArgs(graphPath string) []string {
 	args := []string{"serve", "--stdio"}
 	if graphPath != "" {
@@ -33,126 +29,85 @@ func ChitonServerEntry(exe, graphPath string) ServerEntry {
 	return ServerEntry{Command: exe, Args: ChitonServeArgs(graphPath)}
 }
 
-// WriteMCPConfig writes (or merges) the chiton entry into an MCP config file
-// at path. If the file already exists, the chiton entry is upserted under
-// "mcpServers" and any unrelated keys are preserved.
-//
-// entry is any JSON-serialisable value: most assistants want a ServerEntry
-// (command + args), but some (e.g. Copilot CLI) carry extra fields like
-// type/env/tools, so the entry type is left open.
-//
-// Returns whether the file was created (true) or updated in place (false),
-// plus whether a chiton entry was already present before this call.
-func WriteMCPConfig(path string, entry any) (created, preexisted bool, err error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return false, false, fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
+// serverTable is a config format holding MCP servers in a map under one top-level key; its helpers
+// touch only the "chiton" entry and preserve every other server and setting.
+type serverTable struct {
+	key       string // top-level key holding the server map
+	kind      string // what that key must hold, for the refusal error
+	unmarshal func([]byte, any) error
+	marshal   func(any) ([]byte, error)
+	seed      func(doc map[string]any)      // optional: defaults added on write
+	shell     func(doc map[string]any) bool // optional: a non-empty doc that still counts as empty
+}
+
+// mcpServersTable is the JSON/JSONC "mcpServers" format shared by most assistants.
+var mcpServersTable = serverTable{
+	key:       "mcpServers",
+	kind:      "JSON object",
+	unmarshal: unmarshalJSONC,
+	marshal:   marshalJSON,
+}
+
+func unmarshalJSONC(b []byte, v any) error { return json.Unmarshal(jsoncToJSON(b), v) }
+
+func marshalJSON(v any) ([]byte, error) {
+	out, err := json.MarshalIndent(v, "", "  ")
+	return append(out, '\n'), err
+}
+
+// write upserts entry as the chiton server at path, creating the file if needed. It refuses to replace
+// a server key that is not a map, so a malformed config is never clobbered.
+func (t serverTable) write(path string, entry any) (created, preexisted bool, err error) {
+	doc, created, err := openDoc(path, t.unmarshal)
+	if err != nil {
+		return false, false, err
+	}
+	if t.seed != nil {
+		t.seed(doc)
 	}
 
-	existing, readErr := os.ReadFile(path)
-	if readErr != nil && !os.IsNotExist(readErr) {
-		return false, false, fmt.Errorf("read %s: %w", path, readErr)
-	}
-
-	var doc map[string]any
-	if len(existing) > 0 {
-		if err := json.Unmarshal(jsoncToJSON(existing), &doc); err != nil {
-			return false, false, fmt.Errorf("parse %s: %w", path, err)
-		}
-	}
-	if doc == nil {
-		doc = map[string]any{}
-	}
-
-	raw, present := doc["mcpServers"]
+	raw, present := doc[t.key]
 	servers, ok := raw.(map[string]any)
 	if present && !ok {
-		return false, false, fmt.Errorf("refusing to overwrite %s: \"mcpServers\" is not a JSON object", path)
+		return false, false, fmt.Errorf("refusing to overwrite %s: %q is not a %s", path, t.key, t.kind)
 	}
 	if servers == nil {
 		servers = map[string]any{}
 	}
 	_, preexisted = servers["chiton"]
 	servers["chiton"] = entry
-	doc["mcpServers"] = servers
+	doc[t.key] = servers
 
-	out, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
-		return false, false, fmt.Errorf("marshal %s: %w", path, err)
-	}
-	created = len(existing) == 0
-	if err := writeFileAtomic(path, append(out, '\n'), 0o644); err != nil {
-		return false, false, fmt.Errorf("write %s: %w", path, err)
+	if err := saveDoc(path, doc, t.marshal); err != nil {
+		return false, false, err
 	}
 	return created, preexisted, nil
 }
 
-// RemoveMCPConfigEntry removes the chiton entry from an MCP config file at
-// path. If the file is left with no entries under "mcpServers" and no other
-// keys, the file itself is deleted to avoid leaving an empty shell behind.
-//
-// Returns whether anything was changed (false if no chiton entry existed).
-func RemoveMCPConfigEntry(path string) (changed bool, err error) {
-	existing, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return false, nil
+// remove deletes the chiton server from path, deleting the file if nothing else is left in it.
+func (t serverTable) remove(path string) (changed bool, err error) {
+	doc, found, err := readDoc(path, t.unmarshal)
+	if !found || err != nil {
+		return false, err
 	}
-	if err != nil {
-		return false, fmt.Errorf("read %s: %w", path, err)
-	}
-
-	var doc map[string]any
-	if err := json.Unmarshal(jsoncToJSON(existing), &doc); err != nil {
-		return false, fmt.Errorf("parse %s: %w", path, err)
-	}
-	servers, _ := doc["mcpServers"].(map[string]any)
-	if servers == nil {
-		return false, nil
-	}
+	servers, _ := doc[t.key].(map[string]any)
 	if _, ok := servers["chiton"]; !ok {
 		return false, nil
 	}
 	delete(servers, "chiton")
 	if len(servers) == 0 {
-		delete(doc, "mcpServers")
-	} else {
-		doc["mcpServers"] = servers
+		delete(doc, t.key)
 	}
-
-	if len(doc) == 0 {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return true, fmt.Errorf("remove empty %s: %w", path, err)
-		}
-		return true, nil
-	}
-
-	out, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
-		return true, fmt.Errorf("marshal %s: %w", path, err)
-	}
-	if err := writeFileAtomic(path, append(out, '\n'), 0o644); err != nil {
-		return true, fmt.Errorf("write %s: %w", path, err)
-	}
-	return true, nil
+	return true, saveOrRemove(path, doc, len(doc) == 0 || (t.shell != nil && t.shell(doc)), t.marshal)
 }
 
-// MCPConfigHasChiton reports whether path exists and already has a chiton
-// entry under mcpServers. Missing/unreadable file → false, nil.
-func MCPConfigHasChiton(path string) (bool, error) {
-	existing, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return false, nil
-	}
+// has reports whether path registers a chiton server. A missing file is false, nil.
+func (t serverTable) has(path string) (bool, error) {
+	doc, _, err := readDoc(path, t.unmarshal)
 	if err != nil {
-		return false, err
+		return false, errors.Unwrap(err) // bare cause: Doctor prefixes the path itself
 	}
-	var doc map[string]any
-	if err := json.Unmarshal(jsoncToJSON(existing), &doc); err != nil {
-		return false, err
-	}
-	servers, _ := doc["mcpServers"].(map[string]any)
-	if servers == nil {
-		return false, nil
-	}
+	servers, _ := doc[t.key].(map[string]any)
 	_, ok := servers["chiton"]
 	return ok, nil
 }

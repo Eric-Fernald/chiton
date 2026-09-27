@@ -15,17 +15,13 @@ func ResolveKeyfilePath(chitonDir string) string {
 	return filepath.Join(chitonDir, KeyfileName)
 }
 
-// ResolveKeyForGraph looks up the keyfile next to graphPath's containing
-// directory (and the conventional <repo>/.chiton location). If no keyfile is
-// found anywhere, returns (nil, nil, nil) — the store should open in plaintext.
-//
-// When a keyfile is found, GetPassphrase is invoked (env var or interactive
-// prompt) and the derived key is returned alongside the keyfile.
+// ResolveKeyForGraph finds a keyfile in graphPath's directory, a .chiton beside that directory, or
+// ./.chiton, then derives the key via GetPassphrase. None found → (nil, nil, nil): open in plaintext.
 func ResolveKeyForGraph(graphPath string) ([]byte, *KeyFile, error) {
 	candidates := []string{
 		ResolveKeyfilePath(filepath.Dir(graphPath)),
 		ResolveKeyfilePath(filepath.Join(filepath.Dir(graphPath), "..", ".chiton")),
-		ResolveKeyfilePath(filepath.Join(".chiton")),
+		ResolveKeyfilePath(".chiton"),
 	}
 	var found string
 	var kf *KeyFile

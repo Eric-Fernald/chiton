@@ -3,6 +3,7 @@ package ast
 import (
 	"context"
 	"os"
+	"reflect"
 	"testing"
 
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
@@ -159,9 +160,8 @@ func TestCountLineBraces(t *testing.T) {
 	}
 }
 
-// TestBlockCommentsDoNotCorruptScope verifies a stray brace inside a /* */ block
-// comment does not prematurely pop the enclosing class/impl scope, which used to
-// mis-attribute (or drop) methods declared after the comment.
+// TestBlockCommentsDoNotCorruptScope verifies a stray brace inside a /* */ block comment does not pop the
+// enclosing class/impl scope and mis-attribute (or drop) methods declared after it.
 func TestBlockCommentsDoNotCorruptScope(t *testing.T) {
 	t.Run("javascript", func(t *testing.T) {
 		src := `class Widget {
@@ -221,9 +221,8 @@ impl S {
 	})
 }
 
-// TestAmbiguousBareCallsAreSkipped verifies that when two classes define a
-// method with the same bare name, a bare-name call is not misdirected to the
-// wrong class's method — the extractor skips the ambiguous edge entirely.
+// TestAmbiguousBareCallsAreSkipped verifies a bare call to a method name two classes share emits no CALLS
+// edge rather than one to the wrong class's method.
 func TestAmbiguousBareCallsAreSkipped(t *testing.T) {
 	src := `class A {
     parse() {
@@ -277,6 +276,34 @@ func TestForFile(t *testing.T) {
 		}
 		if tc.wantNil == "" && ex == nil {
 			t.Errorf("ForFile(%q) = nil, want extractor", tc.path)
+		}
+	}
+}
+
+func TestExtractSourceMatchesExtractFile(t *testing.T) {
+	srcs := map[string]string{
+		"a.go":   "package a\n\nimport \"fmt\"\n\nfunc F() { G(); fmt.Println() }\n\nfunc G() {}\n",
+		"a.py":   "import os\n\nclass A(B):\n    def f(self):\n        g()\n\ndef g():\n    pass\n",
+		"a.ts":   "import x from 'y';\nexport class A extends B implements C {\n  m() { n(); }\n  n() {}\n}\n",
+		"A.java": "import java.util.List;\nclass A extends B implements C, D {\n  void m() { n(); }\n  void n() {}\n}\n",
+		"a.rs":   "use std::fs;\nstruct S;\nimpl T for S {\n    fn m(&self) { f(); }\n}\nfn f() {}\n",
+		"a.md":   "\xef\xbb\xbf# Title\nbody\n## Sub\nmore\n",
+		"a.png":  "\x89PNG\r\n",
+	}
+	ctx := context.Background()
+	for name, src := range srcs {
+		f := writeTempFile(t, name, src)
+		ex := ForFile(f)
+		wantN, wantE, err := ex.ExtractFile(ctx, f)
+		if err != nil {
+			t.Fatalf("%s ExtractFile: %v", name, err)
+		}
+		gotN, gotE, err := ex.ExtractSource(ctx, f, []byte(src))
+		if err != nil {
+			t.Fatalf("%s ExtractSource: %v", name, err)
+		}
+		if !reflect.DeepEqual(gotN, wantN) || !reflect.DeepEqual(gotE, wantE) {
+			t.Errorf("%s: ExtractSource differs from ExtractFile", name)
 		}
 	}
 }

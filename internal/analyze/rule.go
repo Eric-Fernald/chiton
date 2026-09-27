@@ -52,7 +52,6 @@ const (
 )
 
 // RuleProvenance distinguishes deterministic Go rules from LLM-driven rules.
-// All rules in Phase 1.5 are DETERMINISTIC.
 type RuleProvenance string
 
 const (
@@ -60,9 +59,8 @@ const (
 	ProvenanceLLM           RuleProvenance = "LLM"
 )
 
-// Scope determines how the analyzer dispatches a rule.
-// FileScope rules run once per matching file. GraphScope rules run once over
-// the entire extracted graph.
+// Scope declares whether a rule runs once per matching file or once over the whole graph. Dispatch
+// actually uses the implemented interface (FileRule/GraphRule), so the two must agree.
 type Scope int
 
 const (
@@ -91,6 +89,7 @@ type FileTarget struct {
 	FileNode model.Node   // file node already in the graph
 	Nodes    []model.Node // symbols extracted from this file (excluding the file node)
 	Edges    []model.Edge // edges whose Src or Dst is in this file
+	memo     *fileMemo    // per-file cache behind Cached; set by loadFileTarget
 }
 
 // GraphTarget is the input to a GraphScope rule.
@@ -99,14 +98,13 @@ type GraphTarget struct {
 	Edges []model.Edge
 }
 
-// Rule is the unified rule interface. The analyzer calls Meta() once at
-// registration time to learn the rule's category/scope/languages, then calls
-// either MatchFile or MatchGraph depending on Meta.Scope.
+// Rule is the unified rule interface; whether a rule implements FileRule, GraphRule, or LLMRule
+// decides how it is dispatched.
 type Rule interface {
 	Meta() Meta
 }
 
-// FileRule is a rule with FileScope. Match returns zero or more findings.
+// FileRule is a rule with FileScope. MatchFile returns zero or more findings.
 type FileRule interface {
 	Rule
 	MatchFile(ctx context.Context, t FileTarget) []Finding
@@ -118,22 +116,11 @@ type GraphRule interface {
 	MatchGraph(ctx context.Context, t GraphTarget) []Finding
 }
 
-// LLMRule is a rule evaluated by a host-assistant LLM via subagent dispatch
-// rather than by Go code — for the cases deterministic AST rules can't cover
-// (design-rationale mismatch, abstraction leaks, undocumented side effects,
-// contract-vs-comment violations, etc.). chiton never calls an LLM itself:
-// analyze emits one task spec per (rule, file) and ingests the structured
-// findings the host returns, tagged INFERRED (or AMBIGUOUS below the
-// confidence threshold).
-//
-// Its Meta must set Provenance=ProvenanceLLM and Scope=FileScope. Languages
-// filters which files the rule applies to; Severity is the default severity
-// for the findings it produces. An LLMRule does NOT implement FileRule or
-// GraphRule, so the deterministic analyzer skips it.
+// LLMRule is evaluated by the host assistant via subagent dispatch, never by chiton itself. Its
+// Meta sets Provenance=ProvenanceLLM and Scope=FileScope; it must not implement FileRule/GraphRule.
 type LLMRule interface {
 	Rule
-	// Prompt returns the instruction block describing what to look for. The
-	// code under inspection is supplied separately as the task input, so the
-	// prompt must never reference a specific file or smuggle in input.
+	// Prompt says what to look for; the code arrives separately as task input, so it must never
+	// reference a specific file or embed input.
 	Prompt() string
 }

@@ -5,23 +5,20 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/Eric-Fernald/chiton/internal/ingest/bearer"
 )
 
 // gmailBase is the Gmail REST endpoint for the authenticated user ("me").
 const gmailBase = "https://gmail.googleapis.com/gmail/v1/users/me"
 
-// GmailSource reads mail via the Gmail REST API using a user-supplied OAuth2
-// access token. It is deliberately a thin net/http client rather than the
-// google.golang.org/api SDK — keeping the dependency surface minimal, the same
-// way the embed layer talks to Ollama directly. Messages are fetched in raw
-// RFC 5322 form (format=raw) and handed to the same parser the local source
-// uses, so MIME decoding and thread headers are handled in one place.
+// GmailSource reads mail via the Gmail REST API with an OAuth2 access token, fetching raw RFC 5322 messages
+// so they go through the same parser as LocalSource.
 type GmailSource struct {
 	token  string
 	client *http.Client
@@ -52,16 +49,16 @@ func (s *GmailSource) Name() string { return "gmail" }
 // Messages implements Source: it lists message ids matching the query window,
 // then fetches and parses each raw message.
 func (s *GmailSource) Messages(ctx context.Context, opts Query) ([]Message, error) {
-	max := opts.Max
-	if max <= 0 {
-		max = 50
+	limit := opts.Max
+	if limit <= 0 {
+		limit = 50
 	}
 	q := strings.TrimSpace(opts.Mailbox)
 	if !opts.Since.IsZero() {
 		q = strings.TrimSpace(q + " after:" + opts.Since.Format("2006/01/02"))
 	}
 
-	listURL := fmt.Sprintf("%s/messages?maxResults=%d", s.base, max)
+	listURL := fmt.Sprintf("%s/messages?maxResults=%d", s.base, limit)
 	if q != "" {
 		listURL += "&q=" + url.QueryEscape(q)
 	}
@@ -76,7 +73,7 @@ func (s *GmailSource) Messages(ctx context.Context, opts Query) ([]Message, erro
 
 	var msgs []Message
 	for _, ref := range list.Messages {
-		if len(msgs) >= max {
+		if len(msgs) >= limit {
 			break
 		}
 		var raw struct {
@@ -104,19 +101,12 @@ func (s *GmailSource) Messages(ctx context.Context, opts Query) ([]Message, erro
 
 // getJSON performs an authenticated GET and decodes a JSON response.
 func (s *GmailSource) getJSON(ctx context.Context, reqURL string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	status, body, err := bearer.Get(ctx, s.client, reqURL, s.token)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+s.token)
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("gmail API %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	if status < 200 || status >= 300 {
+		return fmt.Errorf("gmail API %d: %s", status, strings.TrimSpace(string(body)))
 	}
 	return json.Unmarshal(body, out)
 }

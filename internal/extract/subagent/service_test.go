@@ -2,7 +2,9 @@ package subagent
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -199,9 +201,8 @@ func TestSubmitDefaultsEdgesToDescribes(t *testing.T) {
 	}
 }
 
-// TestSubmitDescribesWhenAllEdgesUnresolved verifies that when every declared
-// edge references a concept that was never created, the source still gets a
-// DESCRIBES edge to each concept rather than leaving them orphaned.
+// TestSubmitDescribesWhenAllEdgesUnresolved verifies that when every declared edge targets an uncreated
+// concept, the source still gets a DESCRIBES edge to each concept rather than orphaning them.
 func TestSubmitDescribesWhenAllEdgesUnresolved(t *testing.T) {
 	gs := newStore(t)
 	ctx := context.Background()
@@ -238,9 +239,8 @@ func TestSubmitDescribesWhenAllEdgesUnresolved(t *testing.T) {
 	}
 }
 
-// TestSubmitRejectsReadOnlyStore verifies submit fails fast with an actionable
-// message on a read-only store, instead of a raw backend write error after the
-// per-concept embed round-trips.
+// TestSubmitRejectsReadOnlyStore verifies submit fails fast with an actionable message on a read-only
+// store, instead of a raw backend write error after the embed round-trip.
 func TestSubmitRejectsReadOnlyStore(t *testing.T) {
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "graph.badger")
@@ -277,18 +277,100 @@ func TestSubmitEmbedsConceptsWhenEmbedderPresent(t *testing.T) {
 	ctx := context.Background()
 	_ = gs.UpsertNodes(ctx, []model.Node{docSection("d1", "Auth", "jwt auth")})
 
-	svc := New(gs, embed.NewHashEmbedder(64), 0.5)
+	emb := embed.NewHashEmbedder(64)
+	svc := New(gs, emb, 0.5)
 	if _, err := svc.Submit(ctx, SubmitResult{
-		TaskID:   "d1",
-		Concepts: []ConceptResult{{Label: "JWT", Description: "token", Confidence: 0.9}},
+		TaskID: "d1",
+		Concepts: []ConceptResult{
+			{Label: "JWT", Description: "token", Confidence: 0.9},
+			{Label: "Session", Description: "server-side login state", Confidence: 0.8},
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	es := store.GraphStore(gs).(store.EmbeddingStore)
 	embs, _ := es.AllEmbeddings(ctx)
-	if len(embs) != 1 {
-		t.Fatalf("expected 1 concept embedding, got %d", len(embs))
+	if len(embs) != 2 {
+		t.Fatalf("expected 2 concept embeddings, got %d", len(embs))
+	}
+	// Each stored vector must belong to its own concept's text.
+	for _, e := range embs {
+		n, err := gs.GetNode(ctx, e.NodeID)
+		if err != nil || n == nil {
+			t.Fatalf("embedding for unknown node %q: %v", e.NodeID, err)
+		}
+		want, _ := emb.Embed(ctx, []string{embed.TextFor(*n)})
+		if !slices.Equal(e.Vec, want[0]) {
+			t.Fatalf("embedding for %q does not match its concept text", n.Label)
+		}
+	}
+}
+
+// flakyEmbedder fails any call whose batch contains "poison", and with short set drops the last vector of any
+// multi-text batch.
+type flakyEmbedder struct {
+	embed.Embedder
+	short bool
+}
+
+func (f flakyEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+	for _, t := range texts {
+		if strings.Contains(t, "poison") {
+			return nil, errors.New("embedder rejected batch")
+		}
+	}
+	vecs, err := f.Embedder.Embed(ctx, texts)
+	if f.short && len(vecs) > 1 {
+		vecs = vecs[:len(vecs)-1]
+	}
+	return vecs, err
+}
+
+// TestSubmitEmbedFallsBackPerConcept verifies that when the batch embed fails or comes back short, only the
+// concepts that fail on their own lose their inline vectors.
+func TestSubmitEmbedFallsBackPerConcept(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		emb      flakyEmbedder
+		concepts []string
+		want     []string
+	}{
+		{"batch error", flakyEmbedder{}, []string{"JWT", "poison pill", "Session"}, []string{"JWT", "Session"}},
+		{"short batch", flakyEmbedder{short: true}, []string{"JWT", "Session"}, []string{"JWT", "Session"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gs := newStore(t)
+			ctx := context.Background()
+			_ = gs.UpsertNodes(ctx, []model.Node{docSection("d1", "Auth", "jwt auth")})
+			tc.emb.Embedder = embed.NewHashEmbedder(64)
+
+			res := SubmitResult{TaskID: "d1"}
+			for _, c := range tc.concepts {
+				res.Concepts = append(res.Concepts, ConceptResult{Label: c, Confidence: 0.9})
+			}
+			if _, err := New(gs, tc.emb, 0.5).Submit(ctx, res); err != nil {
+				t.Fatal(err)
+			}
+
+			embs, _ := store.GraphStore(gs).(store.EmbeddingStore).AllEmbeddings(ctx)
+			var got []string
+			for _, e := range embs {
+				n, err := gs.GetNode(ctx, e.NodeID)
+				if err != nil || n == nil {
+					t.Fatalf("embedding for unknown node %q: %v", e.NodeID, err)
+				}
+				want, _ := tc.emb.Embedder.Embed(ctx, []string{embed.TextFor(*n)})
+				if !slices.Equal(e.Vec, want[0]) {
+					t.Fatalf("embedding for %q does not match its concept text", n.Label)
+				}
+				got = append(got, n.Label)
+			}
+			slices.Sort(got)
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("embedded concepts = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

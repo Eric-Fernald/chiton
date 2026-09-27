@@ -1,40 +1,21 @@
 package install
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/Eric-Fernald/chiton/internal/install/manifests"
 )
 
-// Cursor installs chiton for the Cursor editor (and its CLI, which shares the
-// same config).
-//
-// Per-repo layout:
-//
-//	.cursor/mcp.json                 ← MCP server registration (mcpServers key)
-//	.cursor/rules/chiton.mdc         ← always-on project rule (MDC + frontmatter)
-//
-// With --user-scope the MCP config is written to ~/.cursor/mcp.json instead;
-// the project rule is always written into the repo.
+// Cursor installs chiton for the Cursor editor and CLI: .cursor/mcp.json (~/.cursor/mcp.json with
+// --user-scope) plus an always-on .cursor/rules/chiton.mdc, which is always written into the repo.
 type Cursor struct{}
 
 func (Cursor) Name() string        { return "cursor" }
 func (Cursor) Description() string { return "Cursor editor + CLI" }
 
 func (Cursor) Detect(dir string) bool {
-	for _, rel := range []string{
-		filepath.Join(".cursor", "mcp.json"),
-		filepath.Join(".cursor", "rules"),
-		".cursorrules",
-		".cursor",
-	} {
-		if _, err := os.Stat(filepath.Join(dir, rel)); err == nil {
-			return true
-		}
-	}
-	return false
+	return anyExists(dir, filepath.Join(".cursor", "mcp.json"), filepath.Join(".cursor", "rules"), ".cursorrules", ".cursor")
 }
 
 func (c Cursor) mcpPath(opts Options) (string, error) {
@@ -60,21 +41,13 @@ func (c Cursor) Install(opts Options) (Report, error) {
 	if err != nil {
 		return rep, err
 	}
-	created, preexisted, err := WriteMCPConfig(mcpPath, ChitonServerEntry(exe, opts.GraphPath))
-	if err != nil {
+	if err := rep.writeServer(mcpServersTable, mcpPath, ChitonServerEntry(exe, opts.GraphPath)); err != nil {
 		return rep, err
-	}
-	rep.Wrote = append(rep.Wrote, mcpPath)
-	if !created && preexisted {
-		rep.Notes = append(rep.Notes, fmt.Sprintf("%s: refreshed existing chiton entry", mcpPath))
 	}
 
 	rulePath := c.rulePath(opts)
-	if err := os.MkdirAll(filepath.Dir(rulePath), 0o755); err != nil {
-		return rep, fmt.Errorf("mkdir %s: %w", filepath.Dir(rulePath), err)
-	}
-	if err := os.WriteFile(rulePath, []byte(cursorRuleContent()), 0o644); err != nil {
-		return rep, fmt.Errorf("write %s: %w", rulePath, err)
+	if err := writeFile(rulePath, []byte(cursorRuleContent())); err != nil {
+		return rep, err
 	}
 	rep.Wrote = append(rep.Wrote, rulePath)
 
@@ -89,24 +62,12 @@ func (c Cursor) Uninstall(opts Options) (Report, error) {
 	if err != nil {
 		return rep, err
 	}
-	changed, err := RemoveMCPConfigEntry(mcpPath)
-	if err != nil {
+	if err := rep.removeServer(mcpServersTable, mcpPath); err != nil {
 		return rep, err
 	}
-	if changed {
-		rep.Wrote = append(rep.Wrote, mcpPath)
-	} else {
-		rep.Skipped = append(rep.Skipped, mcpPath)
-	}
 
-	rulePath := c.rulePath(opts)
-	if _, err := os.Stat(rulePath); err == nil {
-		if err := os.Remove(rulePath); err != nil {
-			return rep, fmt.Errorf("remove %s: %w", rulePath, err)
-		}
-		rep.Wrote = append(rep.Wrote, rulePath)
-	} else {
-		rep.Skipped = append(rep.Skipped, rulePath)
+	if err := rep.removeIfExists(c.rulePath(opts), os.Remove); err != nil {
+		return rep, err
 	}
 	return rep, nil
 }
@@ -118,31 +79,15 @@ func (c Cursor) Doctor(opts Options) (DoctorReport, error) {
 	if err != nil {
 		return rep, err
 	}
-	hasMCP, err := MCPConfigHasChiton(mcpPath)
-	if err != nil {
-		rep.Issues = append(rep.Issues, fmt.Sprintf("%s: %v", mcpPath, err))
-	} else if hasMCP {
-		rep.OK = append(rep.OK, mcpPath+": chiton server registered")
-	} else {
-		rep.Issues = append(rep.Issues, mcpPath+": no chiton entry (run `chiton install --assistant cursor`)")
-	}
-
-	rulePath := c.rulePath(opts)
-	hasRule := false
-	if _, err := os.Stat(rulePath); err == nil {
-		hasRule = true
-		rep.OK = append(rep.OK, rulePath+": chiton project rule present")
-	} else {
-		rep.Issues = append(rep.Issues, rulePath+": no chiton rule")
-	}
+	hasMCP := rep.checkMCP(mcpPath, mcpServersTable.has)
+	hasRule := rep.check(c.rulePath(opts), fileExists, ": chiton project rule present", ": no chiton rule")
 
 	rep.Registered = hasMCP && hasRule
 	return rep, nil
 }
 
-// cursorRuleContent wraps the shared rules prompt in the MDC frontmatter Cursor
-// requires. A .cursor/rules file without frontmatter is silently ignored;
-// alwaysApply:true keeps the rule in context for every request.
+// cursorRuleContent wraps RulesPrompt in the MDC frontmatter Cursor requires: a rule without frontmatter
+// is silently ignored, and alwaysApply keeps it in context for every request.
 func cursorRuleContent() string {
 	return "---\n" +
 		"description: chiton knowledge-graph context — call chiton MCP tools before grep/file reads for architecture and navigation questions\n" +

@@ -1,7 +1,6 @@
 package install
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,9 +11,9 @@ func TestWriteMCPConfig_CreatesFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".mcp.json")
 
-	created, pre, err := WriteMCPConfig(path, ServerEntry{Command: "chiton", Args: []string{"serve", "--stdio"}})
+	created, pre, err := mcpServersTable.write(path, ServerEntry{Command: "chiton", Args: []string{"serve", "--stdio"}})
 	if err != nil {
-		t.Fatalf("WriteMCPConfig: %v", err)
+		t.Fatalf("write: %v", err)
 	}
 	if !created {
 		t.Errorf("expected created=true on first write")
@@ -23,7 +22,7 @@ func TestWriteMCPConfig_CreatesFile(t *testing.T) {
 		t.Errorf("expected preexisted=false on first write")
 	}
 
-	doc := readMCPDoc(t, path)
+	doc := readJSON(t, path)
 	servers, _ := doc["mcpServers"].(map[string]any)
 	if _, ok := servers["chiton"]; !ok {
 		t.Errorf("expected mcpServers.chiton, got %v", doc)
@@ -46,11 +45,11 @@ func TestWriteMCPConfig_PreservesOtherServers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, _, err := WriteMCPConfig(path, ServerEntry{Command: "chiton", Args: []string{"serve"}}); err != nil {
-		t.Fatalf("WriteMCPConfig: %v", err)
+	if _, _, err := mcpServersTable.write(path, ServerEntry{Command: "chiton", Args: []string{"serve"}}); err != nil {
+		t.Fatalf("write: %v", err)
 	}
 
-	doc := readMCPDoc(t, path)
+	doc := readJSON(t, path)
 	servers, _ := doc["mcpServers"].(map[string]any)
 	if _, ok := servers["filesystem"]; !ok {
 		t.Errorf("filesystem entry was removed; got %v", servers)
@@ -70,14 +69,14 @@ func TestRemoveMCPConfigEntry_RemovesOnlyChiton(t *testing.T) {
 	if err := os.WriteFile(path, []byte(existing), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	changed, err := RemoveMCPConfigEntry(path)
+	changed, err := mcpServersTable.remove(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !changed {
 		t.Errorf("expected changed=true")
 	}
-	doc := readMCPDoc(t, path)
+	doc := readJSON(t, path)
 	servers, _ := doc["mcpServers"].(map[string]any)
 	if _, ok := servers["chiton"]; ok {
 		t.Errorf("chiton not removed")
@@ -94,7 +93,7 @@ func TestRemoveMCPConfigEntry_DeletesEmptyFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte(existing), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := RemoveMCPConfigEntry(path); err != nil {
+	if _, err := mcpServersTable.remove(path); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -330,17 +329,4 @@ func names(is []Installer) []string {
 		out[i] = x.Name()
 	}
 	return out
-}
-
-func readMCPDoc(t *testing.T, path string) map[string]any {
-	t.Helper()
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var doc map[string]any
-	if err := json.Unmarshal(b, &doc); err != nil {
-		t.Fatalf("unmarshal %s: %v", path, err)
-	}
-	return doc
 }

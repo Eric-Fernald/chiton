@@ -1,10 +1,5 @@
-// Package llm holds chiton's LLM rules: rules evaluated by a host-assistant
-// LLM via subagent dispatch rather than by Go code. Each rule is metadata plus
-// a prompt; analyze emits one task per (rule, file) and ingests the structured
-// findings the host returns, tagged INFERRED (or AMBIGUOUS below the confidence
-// threshold). These target the cases deterministic AST rules cannot cover —
-// design-rationale mismatch, abstraction leaks, undocumented side effects,
-// contract-vs-comment violations, and similar semantic judgments.
+// Package llm holds chiton's LLM rules: metadata plus a prompt, evaluated by the host assistant via
+// subagent dispatch for semantic cases deterministic rules can't cover.
 package llm
 
 import "github.com/Eric-Fernald/chiton/internal/analyze"
@@ -18,8 +13,7 @@ type rule struct {
 func (r rule) Meta() analyze.Meta { return r.meta }
 func (r rule) Prompt() string     { return r.prompt }
 
-// def builds an LLM rule. langs=nil means the rule applies to every supported
-// language (most semantic rules are language-agnostic).
+// def builds an LLM rule with no Languages filter, so it applies to every supported code file.
 func def(id string, cat analyze.Category, sev analyze.Severity, summary, prompt string) rule {
 	return rule{
 		meta: analyze.Meta{

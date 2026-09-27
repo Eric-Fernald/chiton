@@ -2,23 +2,17 @@ package embed
 
 import (
 	"context"
-	"hash/fnv"
 	"math"
 	"strings"
 	"unicode"
 )
 
-// DefaultHashDim is the dimensionality of the HashEmbedder when none is given.
-// Smaller than a real model's 768 — it only needs enough buckets to keep
-// distinct tokens from colliding too often for tests and offline use.
+// DefaultHashDim is the dimensionality of the HashEmbedder when none is given; it only needs enough
+// buckets to keep distinct tokens from colliding too often for tests and offline use.
 const DefaultHashDim = 256
 
-// HashEmbedder is a deterministic, dependency-free embedder. It tokenises text
-// on non-alphanumeric boundaries, hashes each token into one of Dim buckets
-// (with a signed contribution so unrelated tokens can cancel rather than only
-// add), and L2-normalises the result. It captures lexical overlap — enough to
-// drive and test the retrieval pipeline — but is not a semantic model.
-// Use it for offline/CI runs (--provider hash); use Ollama for real recall.
+// HashEmbedder is a deterministic, dependency-free embedder for offline/CI runs (--provider hash): signed
+// token hashing into Dim buckets, L2-normalized. It captures lexical overlap only; use Ollama for recall.
 type HashEmbedder struct {
 	dim int
 }
@@ -46,7 +40,8 @@ func (h *HashEmbedder) Embed(_ context.Context, texts []string) ([][]float32, er
 
 func (h *HashEmbedder) embedOne(text string) []float32 {
 	vec := make([]float32, h.dim)
-	for _, tok := range tokenize(text) {
+	// Tokens are lowercased runs of letters/digits.
+	for tok := range strings.FieldsFuncSeq(strings.ToLower(text), isTokenSep) {
 		bucket, sign := bucketAndSign(tok, h.dim)
 		vec[bucket] += sign
 	}
@@ -54,26 +49,34 @@ func (h *HashEmbedder) embedOne(text string) []float32 {
 	return vec
 }
 
-// tokenize lowercases and splits on any non-letter/non-digit rune.
-func tokenize(text string) []string {
-	return strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-	})
+func isTokenSep(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }
+
+// FNV-1a (32-bit) parameters, matching hash/fnv.New32a so existing hash embeddings stay valid.
+const (
+	fnvOffset32 = 2166136261
+	fnvPrime32  = 16777619
+)
+
+// fnvSignSeed is the FNV-1a state after hashing the "sign:" salt.
+var fnvSignSeed = fnv32a(fnvOffset32, "sign:")
+
+// fnv32a continues an FNV-1a hash from state h over s, without allocating.
+func fnv32a(h uint32, s string) uint32 {
+	for i := 0; i < len(s); i++ {
+		h ^= uint32(s[i])
+		h *= fnvPrime32
+	}
+	return h
 }
 
 // bucketAndSign hashes tok to a bucket index and a ±1 sign. The sign comes
 // from a separate salt so it is independent of the bucket choice.
 func bucketAndSign(tok string, dim int) (int, float32) {
-	hb := fnv.New32a()
-	_, _ = hb.Write([]byte(tok))
-	bucket := int(hb.Sum32()) % dim
+	bucket := int(fnv32a(fnvOffset32, tok)) % dim
 	if bucket < 0 {
 		bucket += dim
 	}
-
-	hs := fnv.New32a()
-	_, _ = hs.Write([]byte("sign:" + tok))
-	if hs.Sum32()&1 == 0 {
+	if fnv32a(fnvSignSeed, tok)&1 == 0 {
 		return bucket, 1
 	}
 	return bucket, -1

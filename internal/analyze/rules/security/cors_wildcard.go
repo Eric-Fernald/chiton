@@ -1,8 +1,6 @@
 package security
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 
@@ -10,10 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// CORSWildcard flags an Access-Control-Allow-Origin set to "*". A wildcard
-// origin lets any site read responses; combined with credentials it is an
-// account-takeover vector. Matches both literal header writes and the common
-// framework config keys.
+// CORSWildcard flags Access-Control-Allow-Origin "*" (header writes or framework config keys): any
+// site can read responses, and with credentials it is an account-takeover vector.
 type CORSWildcard struct{}
 
 func (CORSWildcard) Meta() analyze.Meta {
@@ -39,12 +35,11 @@ var corsWildcardPatterns = []*regexp.Regexp{
 
 func (CORSWildcard) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := stripSlashComment(stripPyComment(sc.Text()))
+	for line, text := range analyze.Lines(t.Content) {
+		if !containsAny(text, `*"`, `*'`) {
+			continue
+		}
+		text = stripSlashCommentKeepURL(analyze.StripPyComment(text))
 		for _, re := range corsWildcardPatterns {
 			if re.MatchString(text) {
 				out = append(out, analyze.Finding{

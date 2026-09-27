@@ -4,14 +4,14 @@ package architecture
 import (
 	"context"
 	"sort"
+	"strings"
 
 	"github.com/Eric-Fernald/chiton/internal/analyze"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// CircularImport detects cycles in the IMPORTS edge graph between file nodes.
-// Edges from file → external package nodes (kind=symbol with external=true)
-// are ignored, since those can never form cycles inside the codebase.
+// CircularImport detects cycles in the IMPORTS graph; edges into external package nodes
+// (external=true) are ignored since they cannot close a cycle.
 type CircularImport struct{}
 
 func (CircularImport) Meta() analyze.Meta {
@@ -34,9 +34,7 @@ func (CircularImport) MatchGraph(_ context.Context, t analyze.GraphTarget) []ana
 			continue
 		}
 		src, dst := nodes[e.Src], nodes[e.Dst]
-		// Only consider edges where both endpoints are internal nodes (file
-		// or symbol nodes we ingested). Skip "external" package nodes — they
-		// have no out-edges and cannot complete a cycle.
+		// Both endpoints must be ingested nodes, and external packages cannot close a cycle.
 		if src == nil || dst == nil {
 			continue
 		}
@@ -46,26 +44,13 @@ func (CircularImport) MatchGraph(_ context.Context, t analyze.GraphTarget) []ana
 		adj[e.Src] = append(adj[e.Src], e.Dst)
 	}
 
-	cycles := findCycles(adj)
-
-	seen := map[string]bool{}
 	var out []analyze.Finding
-	for _, cyc := range cycles {
-		key := cycleKey(cyc)
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-
-		var labels []string
+	for _, cyc := range findCycles(adj) {
+		labels := make([]string, 0, len(cyc))
 		var firstURI string
 		var firstNode string
 		for _, id := range cyc {
-			n := nodes[id]
-			if n == nil {
-				labels = append(labels, id[:8])
-				continue
-			}
+			n := nodes[id] // never nil: adj only holds edges whose endpoints are indexed
 			labels = append(labels, n.Label)
 			if firstURI == "" {
 				firstURI = n.SourceURI
@@ -100,9 +85,8 @@ func indexNodesByID(ns []model.Node) map[string]*model.Node {
 	return m
 }
 
-// findCycles returns one representative cycle per strongly-connected component
-// of size > 1 in adj. Order within a cycle starts at the lexicographically
-// smallest node so the same cycle hashes to the same key across runs.
+// findCycles returns the members of each strongly-connected component of size > 1 in adj (Tarjan),
+// sorted by ID so the reported cycle is stable across runs.
 func findCycles(adj map[string][]string) [][]string {
 	index := 0
 	indices := map[string]int{}
@@ -157,26 +141,11 @@ func findCycles(adj map[string][]string) [][]string {
 	return sccs
 }
 
-func cycleKey(cyc []string) string {
-	cp := append([]string(nil), cyc...)
-	sort.Strings(cp)
-	key := ""
-	for _, id := range cp {
-		key += id + "|"
-	}
-	return key
-}
-
 func joinArrows(labels []string) string {
 	if len(labels) == 0 {
 		return ""
 	}
-	s := labels[0]
-	for i := 1; i < len(labels); i++ {
-		s += " → " + labels[i]
-	}
-	s += " → " + labels[0]
-	return s
+	return strings.Join(labels, " → ") + " → " + labels[0]
 }
 
 func init() { analyze.Register(CircularImport{}) }

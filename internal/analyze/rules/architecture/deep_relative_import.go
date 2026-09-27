@@ -1,18 +1,16 @@
 package architecture
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
+	"strings"
 
 	"github.com/Eric-Fernald/chiton/internal/analyze"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// DeepRelativeImport flags JS/TS import paths that climb three or more parent
-// directories (`../../../`). Deep relative paths are brittle and signal a module
-// reaching across layer boundaries it should not know about.
+// DeepRelativeImport flags JS/TS import paths that climb three or more parent directories
+// (`../../../`), a sign of a module reaching across layer boundaries.
 type DeepRelativeImport struct{}
 
 func (DeepRelativeImport) Meta() analyze.Meta {
@@ -34,15 +32,11 @@ var deepRelativeRe = regexp.MustCompile(`['"](\.\./){3,}`)
 
 func (DeepRelativeImport) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
+	for line, raw := range analyze.Lines(t.Content) {
 		// Only consider lines that are plausibly imports to avoid matching deep
 		// relative paths inside string data unrelated to module resolution.
-		text := stripArchLineComment("js", sc.Text())
-		if !jsImportRe.MatchString(trimLeadingSpace(text)) &&
+		text := stripArchLineComment("js", raw)
+		if !jsImportRe.MatchString(strings.TrimLeft(text, " \t")) &&
 			!jsRequireRe.MatchString(text) {
 			continue
 		}
@@ -60,16 +54,6 @@ func (DeepRelativeImport) MatchFile(_ context.Context, t analyze.FileTarget) []a
 		}
 	}
 	return out
-}
-
-// trimLeadingSpace strips leading spaces/tabs only (lighter than strings.TrimSpace
-// when we just need a left-anchored prefix check).
-func trimLeadingSpace(s string) string {
-	i := 0
-	for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
-		i++
-	}
-	return s[i:]
 }
 
 func init() { analyze.Register(DeepRelativeImport{}) }

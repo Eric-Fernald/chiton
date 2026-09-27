@@ -8,10 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/analyze"
 )
 
-// TooManyReturns flags a function with more than MaxReturns return statements.
-// Many exit points make a function harder to follow and to reason about for
-// resource cleanup. Function boundaries come from the extractor's symbol spans,
-// shared with the long-function and high-complexity rules.
+// TooManyReturns flags a function with more than MaxReturns return statements: many exit points make it
+// harder to follow and to reason about resource cleanup.
 type TooManyReturns struct{}
 
 // MaxReturns is the threshold; functions with more return statements fire.
@@ -30,9 +28,7 @@ func (TooManyReturns) Meta() analyze.Meta {
 	}
 }
 
-// returnStmtRe matches a return statement as a whole word. It is applied to
-// pre-masked body lines, so `return` inside a comment or string is filler and
-// is not counted.
+// returnStmtRe matches `return` as a whole word; masking keeps comments and strings from counting.
 var returnStmtRe = regexp.MustCompile(`\breturn\b`)
 
 func (TooManyReturns) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
@@ -58,10 +54,10 @@ func (TooManyReturns) MatchFile(_ context.Context, t analyze.FileTarget) []analy
 
 // countReturns counts return statements across the body's (pre-masked) source
 // lines.
-func countReturns(lines []string) int {
+func countReturns(lines [][]byte) int {
 	n := 0
 	for _, ln := range lines {
-		n += len(returnStmtRe.FindAllString(ln, -1))
+		n += len(returnStmtRe.FindAllIndex(ln, -1))
 	}
 	return n
 }

@@ -1,8 +1,6 @@
 package database
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 	"strings"
@@ -11,12 +9,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// DeleteUpdateNoWhere flags DELETE/UPDATE statements that clearly have no WHERE
-// clause — a mass mutation that wipes or rewrites an entire table. To stay
-// low-false-positive the rule only fires when the *whole statement* is visible
-// on one line and is terminated (closing quote/paren/semicolon) without a WHERE
-// appearing anywhere on that line. A statement that continues onto the next
-// line (no terminator) is skipped, since its WHERE may live there.
+// DeleteUpdateNoWhere flags a DELETE/UPDATE whose whole statement is terminated on one line with no
+// WHERE anywhere on it; statements that continue onto the next line are skipped.
 type DeleteUpdateNoWhere struct{}
 
 func (DeleteUpdateNoWhere) Meta() analyze.Meta {
@@ -42,19 +36,14 @@ var (
 
 func (DeleteUpdateNoWhere) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(maskDBBlocks(t.Content, t.URI)))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := stripDBComment(sc.Text(), t.URI)
+	py := analyze.FileExt(t.URI) == "py"
+	for line, raw := range analyze.Lines(maskedDB(t, py)) {
+		text := stripDBComment(raw, py)
 		// A WHERE anywhere on the line means the statement is bounded.
 		if whereClauseRe.MatchString(text) {
 			continue
 		}
-		// A line that ends in a string-concatenation / continuation operator is
-		// part of a multi-line statement whose WHERE may live on a later line —
-		// skip it rather than risk a false positive.
+		// A trailing concatenation/continuation token means the WHERE may be on a later line.
 		if continuesToNextLine(text) {
 			continue
 		}
@@ -74,9 +63,8 @@ func (DeleteUpdateNoWhere) MatchFile(_ context.Context, t analyze.FileTarget) []
 	return out
 }
 
-// continuesToNextLine reports whether a (comment-stripped) line ends with a
-// token that joins it to the next line — string concatenation (`+`, `||`, `,`)
-// or a trailing dot/backslash. Such a statement is not "clearly" WHERE-less.
+// continuesToNextLine reports whether s ends (ignoring trailing blanks) with `+`, `||`, `,`, `.`,
+// or `\`, joining it to the next line.
 func continuesToNextLine(s string) bool {
 	s = strings.TrimRight(s, " \t")
 	if s == "" {

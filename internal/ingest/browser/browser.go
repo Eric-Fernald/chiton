@@ -15,9 +15,8 @@ import (
 // when the caller does not specify a limit.
 const defaultLimit = 1000
 
-// historyURIScheme namespaces a history url node's source_uri so it never
-// collides with an `add-url` fetched-content node for the same page (which uses
-// the bare URL as its source_uri). The real URL is preserved in attrs["url"].
+// historyURIScheme namespaces history source_uris so they never collide with an add-url node for the
+// same page (which uses the bare URL); the real URL lives in attrs["url"].
 const historyURIScheme = "browser://"
 
 // DetectedDB is a browser History database found on the local machine.
@@ -52,18 +51,10 @@ type Report struct {
 	NodesUpserted int    `json:"nodes_upserted"`
 }
 
-func (ing *Ingester) readOnly() bool {
-	ro, ok := ing.store.(store.ReadOnlyAware)
-	return ok && ro.ReadOnly()
-}
-
-// IngestDB reads one History database and upserts a url node per visited web
-// page. It is idempotent: nodes are keyed on a stable ID derived from the URL +
-// title, so re-running refreshes visit counts and last-visit times in place
-// rather than duplicating. Non-web URLs (chrome://, about:, file://, extension
-// pages) are skipped.
+// IngestDB reads one History database and upserts a url node per visited web page, skipping non-web URLs.
+// Idempotent: IDs derive from the URL alone, so re-running refreshes visit counts and titles in place.
 func (ing *Ingester) IngestDB(ctx context.Context, dbPath, browser string, opts Options) (Report, error) {
-	if ing.readOnly() {
+	if store.IsReadOnly(ing.store) {
 		return Report{}, fmt.Errorf("browser: store is read-only — use the 'chiton browser ingest' CLI or restart 'chiton serve --writable'")
 	}
 	if opts.Limit <= 0 {
@@ -79,7 +70,7 @@ func (ing *Ingester) IngestDB(ctx context.Context, dbPath, browser string, opts 
 	}
 
 	now := ing.now()
-	var nodes []model.Node
+	nodes := make([]model.Node, 0, len(visits))
 	for _, v := range visits {
 		if !isWebURL(v.URL) {
 			continue
@@ -88,10 +79,8 @@ func (ing *Ingester) IngestDB(ctx context.Context, dbPath, browser string, opts 
 		if label == "" {
 			label = v.URL
 		}
-		// Key the node on the (stable) URL, not the mutable page title, and in a
-		// namespaced source_uri — so a re-ingest after Chromium updates the title
-		// refreshes the same node in place instead of orphaning it, and so the
-		// node never collides with an add-url node for the same page.
+		// Key on the stable URL, not the mutable title, so a re-ingest after a title change
+		// refreshes the same node instead of orphaning it.
 		uri := historyURIScheme + v.URL
 		attrs := map[string]any{
 			"kind":        "history",

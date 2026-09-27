@@ -15,9 +15,8 @@ import (
 // preference order.
 var knownBinaries = []string{"whisper", "whisper-cli", "whisper-cpp", "whisper.cpp"}
 
-// ShellTranscriber transcribes by invoking a whisper CLI and parsing its WebVTT
-// output. The exec call is injected (run) so the orchestration is unit-testable
-// without a real whisper install.
+// ShellTranscriber transcribes by invoking a whisper CLI and parsing its WebVTT output; run is injectable
+// so tests need no real whisper install.
 type ShellTranscriber struct {
 	cfg Config
 	// run executes the command; defaults to exec.CommandContext. Tests override
@@ -96,10 +95,8 @@ func (s *ShellTranscriber) resolveBinary() (string, error) {
 		"or build chiton with -tags whisper_cgo for the in-process backend", strings.Join(knownBinaries, ", "))
 }
 
-// buildArgs constructs CLI arguments. whisper.cpp tools (whisper-cli/-cpp) take
-// "-m model -f audio -ovtt -of <out>"; OpenAI's `whisper` takes
-// "audio --output_format vtt --output_dir <dir>". Detection is by binary base
-// name so an operator can point --whisper-bin at either family.
+// buildArgs builds CLI args in the whisper.cpp form ("-m model -f audio -ovtt") or OpenAI's
+// ("audio --output_format vtt"), chosen by the binary's base name.
 func (s *ShellTranscriber) buildArgs(bin, audioPath, outDir string) ([]string, error) {
 	base := strings.ToLower(filepath.Base(bin))
 	base = strings.TrimSuffix(base, filepath.Ext(base))

@@ -1,14 +1,5 @@
-// Package metrics computes graph centrality metrics for chiton nodes.
-//
-// Two metrics are computed:
-//   - Degree: number of incident edges (undirected).
-//   - Betweenness: fraction of shortest paths that pass through the node,
-//     normalized to [0, 1]. Uses the Brandes (2001) algorithm. For graphs
-//     larger than samplingThreshold nodes, betweenness is approximated by
-//     running BFS from a random sample of pivot nodes and scaling the result.
-//
-// Reference: Brandes, U. (2001). A faster algorithm for betweenness centrality.
-// Journal of Mathematical Sociology 25(2), 163–177.
+// Package metrics computes undirected degree and [0,1]-normalized Brandes betweenness for chiton nodes;
+// above samplingThreshold nodes, betweenness is estimated from a seeded sample of pivot sources.
 package metrics
 
 import (
@@ -44,12 +35,18 @@ func Compute(nodes []model.Node, edges []model.Edge) map[string]NodeMetrics {
 
 	g := buildIntGraph(len(nodes), edges, idToIdx)
 
+	// Exact: every node is a source. Sampled: k seeded pivots, each contribution scaled by n/k.
 	var raw []float64
 	if g.n <= samplingThreshold {
-		raw = brandesExact(g)
+		sources := make([]int, g.n)
+		for i := range sources {
+			sources[i] = i
+		}
+		raw = betweenness(g, sources, 1.0)
 	} else {
-		rng := rand.New(rand.NewSource(42))
-		raw = brandesSampled(g, samplePivots, rng)
+		k := min(samplePivots, g.n)
+		sources := rand.New(rand.NewSource(42)).Perm(g.n)[:k]
+		raw = betweenness(g, sources, float64(g.n)/float64(k))
 	}
 
 	result := make(map[string]NodeMetrics, len(nodes))
@@ -94,73 +91,62 @@ func buildIntGraph(n int, edges []model.Edge, idToIdx map[string]int) *intGraph 
 
 // ── Brandes algorithm ─────────────────────────────────────────────────────────
 
-// brandesExact computes exact normalized betweenness for all nodes via the
-// Brandes algorithm. Complexity O(n·m).
-func brandesExact(g *intGraph) []float64 {
+// betweenness runs Brandes from each source, scaling every contribution by scale, and normalizes the sums.
+// O(len(sources)·m).
+func betweenness(g *intGraph, sources []int, scale float64) []float64 {
 	bet := make([]float64, g.n)
-	for s := 0; s < g.n; s++ {
-		accumulate(g, s, bet, 1.0)
+	b := newBrandes(g)
+	for _, s := range sources {
+		b.accumulate(s, bet, scale)
 	}
 	normalize(bet, g.n)
 	return bet
 }
 
-// brandesSampled approximates betweenness by running Brandes from k random
-// pivot sources and scaling by n/k.
-func brandesSampled(g *intGraph, k int, rng *rand.Rand) []float64 {
-	if k > g.n {
-		k = g.n
-	}
-	sources := rng.Perm(g.n)[:k]
-	scale := float64(g.n) / float64(k)
+// brandes holds scratch buffers reused across sources; only entries a BFS reached are reset afterwards,
+// so each source costs O(reached nodes + edges) rather than O(n).
+type brandes struct {
+	g     *intGraph
+	sigma []float64
+	dist  []int
+	delta []float64
+	order []int // BFS visit order: the queue, and reversed, the stack
+}
 
-	bet := make([]float64, g.n)
-	for _, s := range sources {
-		accumulate(g, s, bet, scale)
+func newBrandes(g *intGraph) *brandes {
+	dist := make([]int, g.n)
+	for i := range dist {
+		dist[i] = -1
 	}
-	normalize(bet, g.n)
-	return bet
+	return &brandes{g: g, sigma: make([]float64, g.n), dist: dist, delta: make([]float64, g.n), order: make([]int, 0, g.n)}
 }
 
 // accumulate runs BFS from source s and back-propagates dependency scores
 // into bet, multiplied by scale. This is the inner loop of Brandes' algorithm.
-func accumulate(g *intGraph, s int, bet []float64, scale float64) {
-	n := g.n
-	pred := make([][]int, n)
-	sigma := make([]float64, n)
-	dist := make([]int, n)
-	for i := range dist {
-		dist[i] = -1
-	}
+func (b *brandes) accumulate(s int, bet []float64, scale float64) {
+	adj, sigma, dist, delta := b.g.adj, b.sigma, b.dist, b.delta
 	sigma[s] = 1.0
 	dist[s] = 0
 
-	queue := make([]int, 0, n)
-	queue = append(queue, s)
-	stack := make([]int, 0, n)
-
-	for len(queue) > 0 {
-		v := queue[0]
-		queue = queue[1:]
-		stack = append(stack, v)
-		for _, w := range g.adj[v] {
+	order := append(b.order[:0], s)
+	for head := 0; head < len(order); head++ {
+		v := order[head]
+		for _, w := range adj[v] {
 			if dist[w] < 0 {
 				dist[w] = dist[v] + 1
-				queue = append(queue, w)
+				order = append(order, w)
 			}
 			if dist[w] == dist[v]+1 {
 				sigma[w] += sigma[v]
-				pred[w] = append(pred[w], v)
 			}
 		}
 	}
 
-	delta := make([]float64, n)
-	for len(stack) > 0 {
-		w := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		for _, v := range pred[w] {
-			if sigma[w] > 0 {
+	// Predecessors of w are its neighbours one level closer to s (adjacency is symmetric and deduplicated).
+	for i := len(order) - 1; i >= 0; i-- {
+		w := order[i]
+		for _, v := range adj[w] {
+			if dist[v] == dist[w]-1 {
 				delta[v] += sigma[v] / sigma[w] * (1.0 + delta[w])
 			}
 		}
@@ -168,23 +154,23 @@ func accumulate(g *intGraph, s int, bet []float64, scale float64) {
 			bet[w] += delta[w] * scale
 		}
 	}
+
+	for _, v := range order {
+		sigma[v], dist[v], delta[v] = 0, -1, 0
+	}
+	b.order = order
 }
 
-// normalize divides raw betweenness sums by the number of pairs (n-1)(n-2)/2
-// for undirected graphs (Brandes counts each path in both directions).
+// normalize divides raw sums by (n-1)(n-2): twice the undirected pair count, because Brandes
+// accumulates each shortest path once from each endpoint.
 func normalize(bet []float64, n int) {
 	if n <= 2 {
 		return
 	}
-	// Brandes accumulates each undirected shortest path twice (once from each
-	// endpoint), so the normalization denominator is (n-1)*(n-2), not /2.
 	norm := float64((n - 1) * (n - 2))
 	for i := range bet {
 		bet[i] /= norm
-		// Sampled betweenness (brandesSampled) extrapolates by n/k, which is
-		// unbiased for the sum but can overshoot per node; clamp to honor the
-		// documented [0,1] range. Exact Brandes never exceeds 1, so this is a
-		// no-op there.
+		// Sampling extrapolates by n/k, which can overshoot 1 per node; clamp to the documented [0,1] range.
 		if bet[i] > 1 {
 			bet[i] = 1
 		}

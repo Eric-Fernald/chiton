@@ -60,3 +60,9 @@ func NewNodeID(sourceURI, canonicalLabel string) string {
 	h := sha256.Sum256([]byte(sourceURI + "::" + canonicalLabel))
 	return hex.EncodeToString(h[:16])
 }
+
+// ContentSHA returns the lowercase hex SHA-256 of b, the form stored in Node.ContentSHA256.
+func ContentSHA(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}

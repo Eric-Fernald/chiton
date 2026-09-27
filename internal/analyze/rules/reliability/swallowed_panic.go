@@ -2,7 +2,6 @@
 package reliability
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"regexp"
@@ -11,9 +10,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// SwallowedPanic flags Go `recover()` results that are assigned to the blank
-// identifier — the recovered panic is silently dropped without logging,
-// re-raising, or surfacing.
+// SwallowedPanic flags Go `recover()` results assigned to the blank identifier: the recovered panic is
+// dropped without logging, re-raising, or surfacing.
 type SwallowedPanic struct{}
 
 func (SwallowedPanic) Meta() analyze.Meta {
@@ -32,13 +30,12 @@ func (SwallowedPanic) Meta() analyze.Meta {
 var swallowedRecoverRe = regexp.MustCompile(`(^|\s)_\s*[:=]=\s*recover\s*\(\s*\)`)
 
 func (SwallowedPanic) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
+	if !bytes.Contains(t.Content, []byte("recover")) {
+		return nil
+	}
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		if swallowedRecoverRe.MatchString(sc.Text()) {
+	for line, text := range analyze.Lines(t.Content) {
+		if swallowedRecoverRe.MatchString(text) {
 			out = append(out, analyze.Finding{
 				RuleID:       "reliability/swallowed-panic",
 				Severity:     analyze.SeverityHigh,

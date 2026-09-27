@@ -1,8 +1,6 @@
 package security
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 
@@ -10,9 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// JWTNoneAlg flags a JWT configured with the "none" algorithm, which produces
-// unsigned tokens that anyone can forge. Matches an alg/algorithm key whose
-// value is the literal string "none".
+// JWTNoneAlg flags an alg/algorithm(s) key set to the literal "none", which produces unsigned
+// tokens that anyone can forge.
 type JWTNoneAlg struct{}
 
 func (JWTNoneAlg) Meta() analyze.Meta {
@@ -33,12 +30,11 @@ var jwtNoneRe = regexp.MustCompile(`(?i)["']?\b(alg|algorithm|algorithms)\b["']?
 
 func (JWTNoneAlg) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := stripSlashComment(stripPyComment(sc.Text()))
+	for line, text := range analyze.Lines(t.Content) {
+		if !containsAny(text, ":", "=") {
+			continue
+		}
+		text = stripSlashCommentKeepURL(analyze.StripPyComment(text))
 		if jwtNoneRe.MatchString(text) {
 			out = append(out, analyze.Finding{
 				RuleID:       "security/jwt-none-alg",

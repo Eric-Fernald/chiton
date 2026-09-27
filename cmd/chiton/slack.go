@@ -9,7 +9,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Eric-Fernald/chiton/internal/config"
 	"github.com/Eric-Fernald/chiton/internal/ingest/slack"
 )
 
@@ -47,13 +46,9 @@ func slackFetchCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cfg, err := config.Load()
+			_, gs, err := loadStore(false)
 			if err != nil {
 				return err
-			}
-			gs, err := openGraphStore(cfg.GraphPath, false)
-			if err != nil {
-				return fmt.Errorf("open store: %w", err)
 			}
 			defer gs.Close()
 
@@ -61,13 +56,9 @@ func slackFetchCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			scope := "#" + rep.ChannelID
-			if rep.ThreadTS != "" {
-				scope = fmt.Sprintf("thread %s in %s", rep.ThreadTS, rep.ChannelID)
-			}
 			fmt.Fprintf(cmd.OutOrStdout(),
 				"slack: ingested %s — %d message(s), %d turns, %d nodes\n",
-				scope, rep.Messages, rep.Turns, rep.NodesUpserted)
+				slackScope(rep), rep.Messages, rep.Turns, rep.NodesUpserted)
 			return nil
 		},
 	}
@@ -103,25 +94,17 @@ a tunnel/reverse proxy; Slack requires a public HTTPS Request URL.`,
 			if err != nil {
 				return err
 			}
-			cfg, err := config.Load()
+			_, gs, err := loadStore(false)
 			if err != nil {
 				return err
-			}
-			gs, err := openGraphStore(cfg.GraphPath, false)
-			if err != nil {
-				return fmt.Errorf("open store: %w", err)
 			}
 			defer gs.Close()
 
 			ing := slack.NewIngester(gs, src)
 			out := cmd.OutOrStdout()
-			logf := func(format string, args ...any) {
-				fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", args...)
-			}
 			handler := slack.NewEventsHandler(signingSecret, func(ctx context.Context, ev slack.MessageEvent) error {
-				// A threaded reply re-ingests just its thread; a top-level message
-				// re-ingests the channel so the new message is picked up. Re-ingest
-				// replaces by slack:// URI, so this is idempotent.
+				// A threaded reply re-ingests just its thread, a top-level message the whole channel;
+				// re-ingest replaces by slack:// URI, so this is idempotent.
 				threadTS := ""
 				if ev.ThreadTS != "" && ev.ThreadTS != ev.TS {
 					threadTS = ev.ThreadTS
@@ -130,36 +113,28 @@ a tunnel/reverse proxy; Slack requires a public HTTPS Request URL.`,
 				if err != nil {
 					return err
 				}
-				scope := "#" + rep.ChannelID
-				if rep.ThreadTS != "" {
-					scope = fmt.Sprintf("thread %s in %s", rep.ThreadTS, rep.ChannelID)
-				}
 				fmt.Fprintf(out, "slack events: ingested %s — %d message(s), %d turns\n",
-					scope, rep.Messages, rep.Turns)
+					slackScope(rep), rep.Messages, rep.Turns)
 				return nil
-			}, logf)
+			}, errLogf(cmd))
 
 			mux := http.NewServeMux()
 			mux.Handle("/slack/events", handler)
 			srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 
-			// Shut down cleanly on Ctrl-C so the store closes BadgerDB properly;
-			// cmd.Context() is cancelled by the root signal handler.
-			go func() {
-				<-cmd.Context().Done()
-				shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				_ = srv.Shutdown(shutCtx)
-			}()
-
 			fmt.Fprintf(out, "slack: events receiver listening on %s/slack/events (Ctrl-C to stop)\n", addr)
-			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				return err
-			}
-			return nil
+			return serveUntilDone(cmd.Context(), srv.ListenAndServe, srv.Shutdown)
 		},
 	}
 	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8445", "HTTP listen address (loopback by default; put a tunnel or reverse proxy in front)")
 	cmd.Flags().StringVar(&signingSecret, "signing-secret", "", "Slack app signing secret (or CHITON_SLACK_SIGNING_SECRET)")
 	return cmd
+}
+
+// slackScope describes an ingested conversation: "#<channel>" or "thread <ts> in <channel>".
+func slackScope(rep slack.Report) string {
+	if rep.ThreadTS != "" {
+		return fmt.Sprintf("thread %s in %s", rep.ThreadTS, rep.ChannelID)
+	}
+	return "#" + rep.ChannelID
 }

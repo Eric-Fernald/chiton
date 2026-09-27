@@ -10,18 +10,12 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/jobs"
 )
 
-// defaultWatchDebounce is the idle window before re-ingesting a History file.
-// Chromium writes to History continuously while browsing, so the window is
-// deliberately wide to coalesce a burst of writes into one re-ingest.
+// defaultWatchDebounce is deliberately wide: Chromium writes History continuously while browsing, so a
+// burst of writes should coalesce into one re-ingest.
 const defaultWatchDebounce = 5 * time.Second
 
-// Watch watches the directories holding the given History databases and
-// re-ingests a database when its file changes, until ctx is cancelled. It reuses
-// the same fswatch + jobs.Queue machinery as the Phase 3 live-sync watcher:
-// events are debounced and coalesced per database, and a database already being
-// ingested is never ingested concurrently with itself.
-//
-// On ctx cancellation it drains in-flight work and closes its watchers cleanly.
+// Watch re-ingests each History database when its file changes until ctx is cancelled, then drains.
+// Events are debounced per database, and a database is never ingested concurrently with itself.
 func (ing *Ingester) Watch(ctx context.Context, dbs []DetectedDB, opts Options, debounce time.Duration, logf func(string, ...any)) error {
 	if len(dbs) == 0 {
 		return nil
@@ -54,15 +48,12 @@ func (ing *Ingester) Watch(ctx context.Context, dbs []DetectedDB, opts Options, 
 			logf("browser: ingest %s failed: %v", key, err)
 		},
 	})
-	// Start the queue on a background context (NOT the watch ctx) so a Ctrl-C
-	// cancel does not hard-stop it before Drain() can flush the final debounced
-	// re-ingest — mirroring the Phase 3 live-sync engine's queue lifecycle.
+	// Start on a background context, not ctx, so a cancel can't stop the queue before Drain flushes
+	// the final debounced re-ingest.
 	queue.Start(context.Background())
 
-	// One fswatch per unique parent directory, in WatchRootOnly mode so only the
-	// profile directory itself is watched (the "User Data/<profile>" tree is huge
-	// — caches, blobs — and we only care about the History file and its
-	// journal/WAL sidecars sitting directly in it).
+	// One root-only fswatch per profile dir: its subtree is huge (caches, blobs) and only the History
+	// file and its sidecars, sitting directly in it, matter.
 	parents := uniqueParents(byPath)
 	var watchers []*fswatch.Watcher
 	for parent := range parents {
@@ -72,7 +63,7 @@ func (ing *Ingester) Watch(ctx context.Context, dbs []DetectedDB, opts Options, 
 			}
 		}, fswatch.Options{
 			WatchRootOnly: true,
-			Accept:        func(p string) bool { return isHistoryEvent(p) },
+			Accept:        isHistoryEvent,
 			OnError:       func(err error) { logf("browser watch: %v", err) },
 		})
 		if err != nil {
@@ -123,7 +114,7 @@ func matchHistoryKey(path string, byPath map[string]string) (string, bool) {
 	}
 	// Sidecar write (History-wal, History-shm, History-journal): strip the
 	// suffix and match the base DB.
-	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+	for _, suffix := range sidecarSuffixes {
 		if base, ok := strings.CutSuffix(clean, suffix); ok {
 			if _, ok := byPath[base]; ok {
 				return base, true

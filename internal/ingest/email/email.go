@@ -1,21 +1,5 @@
-// Package email ingests email — from local .eml/.mbox files, Microsoft Outlook
-// (via Graph), or Gmail (via its REST API) — into chiton's graph. It is the
-// Phase 6 "email ingestion" stretch item.
-//
-// Each message becomes an `email` node with `doc_section` children carrying the
-// body text, so the existing pending_extractions / submit_extraction subagent
-// flow extracts concepts from an email for free — no email-specific LLM path is
-// needed (the same trick the URL ingester uses). Sender and recipients become
-// PII-tagged `person` nodes that share the meeting subsystem's person:// scheme
-// and PII convention; they are keyed on the email address, so they dedupe
-// participants across email but do NOT automatically merge with a meeting's
-// display-name person nodes (cross-source identity resolution would need an
-// alias layer — out of scope). Replies link to the message they answer with a
-// REFERENCES edge when the parent is in the same ingest batch.
-//
-// The provider wiring (Outlook over Microsoft Graph, Gmail over REST) lives
-// behind the Source interface; the orchestration and graph-building here are
-// pure-Go and unit-tested with local files and a fake source.
+// Package email ingests .eml/.mbox files, Outlook and Gmail as email nodes with doc_section body children.
+// Participants become PII person:// nodes keyed on address; they do not merge with meeting speaker nodes.
 package email
 
 import (
@@ -30,6 +14,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/extract/meeting"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
+	"github.com/Eric-Fernald/chiton/internal/ingest/chunk"
 )
 
 // Section sizing for the doc_section children that carry an email's body, so
@@ -77,6 +62,16 @@ type Source interface {
 	Name() string
 }
 
+// OutlookConfig configures the Microsoft Graph mail source (app-only auth); shared by both msgraph builds.
+type OutlookConfig struct {
+	TenantID     string
+	ClientID     string
+	ClientSecret string
+	// UserID is the mailbox owner's id or UPN: messages are read under
+	// /users/{UserID}/messages (app-only has no /me).
+	UserID string
+}
+
 // Ingester turns messages from a Source into graph nodes.
 type Ingester struct {
 	store store.GraphStore
@@ -97,9 +92,8 @@ type Report struct {
 	References    int    `json:"references"`
 }
 
-// MessageURI returns a stable source_uri for a message. A Message-ID gives a
-// provider-independent identity (so the same mail ingested from a file and from
-// Gmail dedupes); without one we fall back to a content hash.
+// MessageURI returns a stable source_uri: the Message-ID when present (so the same mail from a file and from
+// Gmail dedupes), else a content hash.
 func MessageURI(m Message) string {
 	if id := sanitizeMessageID(m.MessageID); id != "" {
 		return "email://message/" + id
@@ -112,13 +106,10 @@ func MessageURI(m Message) string {
 	return "email://" + src + "/" + hex.EncodeToString(sum[:8])
 }
 
-// Ingest reads messages from src and upserts each as an email subgraph (email
-// node + doc_section body children + PII person nodes), keyed on a stable
-// email:// URI so a re-ingest replaces rather than duplicates. Replies link to
-// their parent (REFERENCES) when the parent appears in the same batch. Read-only
-// stores are rejected up front.
+// Ingest upserts each message from src as an email subgraph keyed on its email:// URI, so re-ingest replaces
+// rather than duplicates; replies get a REFERENCES edge only when the parent is in the same batch.
 func (i *Ingester) Ingest(ctx context.Context, src Source, opts Query) (Report, error) {
-	if ro, ok := i.store.(store.ReadOnlyAware); ok && ro.ReadOnly() {
+	if store.IsReadOnly(i.store) {
 		return Report{}, fmt.Errorf("email: store is read-only — use the 'chiton email' CLI or restart 'chiton serve --writable'")
 	}
 	msgs, err := src.Messages(ctx, opts)
@@ -127,13 +118,14 @@ func (i *Ingester) Ingest(ctx context.Context, src Source, opts Query) (Report, 
 	}
 
 	now := i.now()
-	rep := Report{Source: src.Name()}
+	srcName := src.Name()
+	rep := Report{Source: srcName}
 	idByMessageID := map[string]string{} // Message-ID → email node ID (this batch)
 	type reply struct{ childID, inReplyTo string }
 	var replies []reply
 
 	for _, m := range msgs {
-		m.Source = src.Name()
+		m.Source = srcName
 		uri := MessageURI(m)
 		// Replace any prior version of this message (email + its doc_sections
 		// share uri; person nodes have their own person:// uri and survive).
@@ -236,7 +228,7 @@ func buildGraph(m Message, uri string, now time.Time) ([]model.Node, []model.Edg
 	var edges []model.Edge
 
 	// Body → doc_section children (so concept extraction picks them up for free).
-	for idx, chunk := range chunkText(body, maxSectionBytes, maxSections) {
+	for idx, sec := range chunkText(body, maxSectionBytes, maxSections) {
 		secLabel := subject
 		if idx > 0 {
 			secLabel = fmt.Sprintf("%s §%d", subject, idx+1)
@@ -247,7 +239,7 @@ func buildGraph(m Message, uri string, now time.Time) ([]model.Node, []model.Edg
 			Kind:       model.KindDocSection,
 			Label:      secLabel,
 			SourceURI:  uri,
-			Attrs:      map[string]any{"text": chunk, "index": idx},
+			Attrs:      map[string]any{"text": sec, "index": idx},
 			Provenance: model.ProvExtracted,
 			Confidence: 1.0,
 			CreatedAt:  now,
@@ -306,9 +298,8 @@ func buildGraph(m Message, uri string, now time.Time) ([]model.Node, []model.Edg
 	return nodes, edges, emailID, persons
 }
 
-// idLabel is the canonical label used to derive the email node's stable ID:
-// the Message-ID when present (resolvable from a reply's In-Reply-To), else the
-// uri itself.
+// idLabel derives the email node ID from the Message-ID when present (resolvable from a reply's In-Reply-To),
+// else from the uri.
 func idLabel(m Message, uri string) string {
 	if mid := strings.TrimSpace(m.MessageID); mid != "" {
 		return mid
@@ -362,9 +353,8 @@ func firstMessageID(header string) string {
 	return sanitizeMessageID(header)
 }
 
-// chunkText splits text into chunks of at most size bytes, preferring blank-line
-// (paragraph) boundaries, capped at maxChunks (the final chunk absorbs the
-// remainder once the cap is hit). An empty body yields no chunks.
+// chunkText splits text into chunks of at most size bytes on paragraph boundaries. Past maxChunks the tail is
+// still hard-split, so size wins over maxChunks. Empty text yields no chunks.
 func chunkText(text string, size, maxChunks int) []string {
 	if strings.TrimSpace(text) == "" {
 		return nil
@@ -372,35 +362,9 @@ func chunkText(text string, size, maxChunks int) []string {
 	if size <= 0 {
 		size = maxSectionBytes
 	}
-	if len(text) <= size {
-		return []string{text}
-	}
-	paras := strings.Split(text, "\n\n")
-	var chunks []string
-	var cur strings.Builder
-	atCap := func() bool { return maxChunks > 0 && len(chunks) >= maxChunks-1 }
-	for _, p := range paras {
-		if cur.Len() > 0 && cur.Len()+len(p)+2 > size && !atCap() {
-			chunks = append(chunks, strings.TrimSpace(cur.String()))
-			cur.Reset()
-		}
-		if cur.Len() > 0 {
-			cur.WriteString("\n\n")
-		}
-		cur.WriteString(p)
-	}
-	if rest := strings.TrimSpace(cur.String()); rest != "" {
-		chunks = append(chunks, rest)
-	}
-	if len(chunks) == 0 {
-		chunks = []string{text}
-	}
-	// Paragraph grouping leaves two cases over the size budget: a single
-	// paragraph longer than size (common for HTML bodies, whose paragraph breaks
-	// htmlToText strips), and the final chunk once the maxChunks cap stops
-	// flushing. Hard-split both so no doc_section overflows a downstream
-	// extraction context. size wins over maxChunks here.
-	return splitOversized(chunks, size)
+	// Hard-split oversized paragraphs (HTML bodies lose their breaks) and the post-cap tail so no doc_section
+	// overflows a downstream extraction context.
+	return splitOversized(chunk.Paragraphs(text, size, maxChunks), size)
 }
 
 // splitOversized splits any chunk longer than size into size-bounded pieces on
@@ -420,18 +384,18 @@ func splitOversized(chunks []string, size int) []string {
 	return out
 }
 
-// runeBoundary returns the largest index <= max that does not split a UTF-8
+// runeBoundary returns the largest index <= limit that does not split a UTF-8
 // rune. It always returns > 0 so callers make progress.
-func runeBoundary(s string, max int) int {
-	if max >= len(s) {
+func runeBoundary(s string, limit int) int {
+	if limit >= len(s) {
 		return len(s)
 	}
-	i := max
+	i := limit
 	for i > 0 && !utf8.RuneStart(s[i]) {
 		i--
 	}
 	if i == 0 {
-		return max // pathological (no boundary found); force progress
+		return limit // pathological (no boundary found); force progress
 	}
 	return i
 }

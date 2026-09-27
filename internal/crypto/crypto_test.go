@@ -64,9 +64,8 @@ func TestKeyFile_SaveLoadRoundTrip(t *testing.T) {
 	}
 }
 
-// TestDeriveKey_RejectsBadParams verifies DeriveKey returns a clean error
-// rather than panicking inside argon2 (iterations/parallelism < 1) or silently
-// deriving a weak/short key.
+// TestDeriveKey_RejectsBadParams verifies DeriveKey errors cleanly instead of panicking inside
+// argon2 (iterations/parallelism < 1) or silently deriving a weak/short key.
 func TestDeriveKey_RejectsBadParams(t *testing.T) {
 	base := func() *KeyFile { kf, _ := DefaultKeyFile(); return kf }
 	cases := map[string]func(*KeyFile){

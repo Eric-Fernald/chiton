@@ -4,6 +4,7 @@ import (
 	"math/rand"
 	"testing"
 
+	"github.com/Eric-Fernald/chiton/internal/graph/metrics"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
@@ -147,6 +148,30 @@ func TestIncrementalNewNode(t *testing.T) {
 	// G is isolated, so it must be in its own community, distinct from both cliques.
 	if sameComm(res, "G", "A") || sameComm(res, "G", "D") {
 		t.Error("isolated new node G should be its own community")
+	}
+}
+
+// TestFullMatchesSeparatePasses pins Full to Run plus metrics.Compute, the passes `chiton cluster` combines.
+func TestFullMatchesSeparatePasses(t *testing.T) {
+	nodes, edges := twoCliques()
+	nodes = append(nodes, makeNode("A", "A2")) // duplicate ID: the later entry wins
+	edges = append(edges, makeEdge("A", "A"), makeEdge("B", "A"), makeEdge("A", "gone"))
+
+	res := Full(nodes, edges, 1.0, rand.New(rand.NewSource(3)))
+	comm := Run(nodes, edges, 1.0, rand.New(rand.NewSource(3)))
+	met := metrics.Compute(nodes, edges)
+	if res.NodeCount != len(nodes) || res.CommunityCount != 2 {
+		t.Errorf("NodeCount, CommunityCount = %d, %d; want %d, 2", res.NodeCount, res.CommunityCount, len(nodes))
+	}
+	for _, n := range nodes {
+		want := NodeResult{Label: n.Label, SourceURI: n.SourceURI, CommunityID: comm[n.ID],
+			Betweenness: met[n.ID].Betweenness, Degree: met[n.ID].Degree}
+		if n.ID == "A" {
+			want.Label = "A2"
+		}
+		if got := res.Nodes[n.ID]; got != want {
+			t.Errorf("Full node %s = %+v, want %+v", n.ID, got, want)
+		}
 	}
 }
 

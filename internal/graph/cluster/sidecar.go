@@ -6,12 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/Eric-Fernald/chiton/internal/fsutil"
 )
 
-// Results holds the output of a cluster pass: community assignments and
-// centrality metrics for every node. It is written to a JSON sidecar file
-// next to the graph store so the serve process can load it without needing
-// write access to the store.
+// Results holds a cluster pass's per-node communities and centrality metrics. It is a JSON sidecar next to
+// the graph store so the serve process can load it without write access to the store.
 type Results struct {
 	GeneratedAt    time.Time             `json:"generated_at"`
 	NodeCount      int                   `json:"node_count"`
@@ -28,20 +28,19 @@ type NodeResult struct {
 	Degree      int     `json:"degree"`
 }
 
-// SidecarPath returns the conventional path for the cluster sidecar file
-// given the graph store path (e.g. ./chiton-out/graph.kuzu →
-// ./chiton-out/cluster.json).
+// SidecarPath returns the cluster sidecar path for a graph store path
+// (e.g. ./chiton-out/graph.kuzu → ./chiton-out/cluster.json).
 func SidecarPath(graphPath string) string {
 	return filepath.Join(filepath.Dir(graphPath), "cluster.json")
 }
 
-// WriteSidecar writes r to path as indented JSON, creating the file if needed.
+// WriteSidecar atomically writes r to path as indented JSON, so a concurrent reader never sees a partial file.
 func WriteSidecar(path string, r *Results) error {
 	b, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal cluster results: %w", err)
 	}
-	if err := os.WriteFile(path, b, 0o644); err != nil {
+	if err := fsutil.WriteFileAtomic(path, b, 0o644); err != nil {
 		return fmt.Errorf("write cluster sidecar %s: %w", path, err)
 	}
 	return nil

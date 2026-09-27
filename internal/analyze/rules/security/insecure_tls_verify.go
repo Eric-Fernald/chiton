@@ -1,8 +1,6 @@
 package security
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 
@@ -10,12 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// InsecureTLSVerify flags code that disables TLS certificate verification:
-//   - Go:  InsecureSkipVerify: true
-//   - Py:  verify=False  /  ssl._create_unverified_context
-//   - JS:  rejectUnauthorized: false
-//
-// Disabling verification re-enables active MITM attacks, so this is critical.
+// InsecureTLSVerify flags code that disables TLS certificate verification (Go, Python, Node);
+// critical because it re-enables active MITM attacks.
 type InsecureTLSVerify struct{}
 
 func (InsecureTLSVerify) Meta() analyze.Meta {
@@ -38,10 +32,8 @@ var insecureTLSPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`NODE_TLS_REJECT_UNAUTHORIZED["']?\s*[:=]\s*["']?0`), // Node env
 }
 
-// insecureTLSPyVerify matches a Python `verify=False` only when an HTTP-client
-// context is present on the same line (requests/httpx/session receivers, or one
-// of the common request-method calls). This avoids matching unrelated keyword
-// arguments such as pandas read_csv(verify=False) or a marshmallow Bool field.
+// Python `verify=False` counts only with an HTTP-client call on the same line, so unrelated kwargs
+// like pandas read_csv(verify=False) don't match.
 var (
 	insecureTLSPyVerify  = regexp.MustCompile(`(?i)\bverify\s*=\s*False\b`)
 	insecureTLSPyHTTPCtx = regexp.MustCompile(`(?i)\b(?:requests|httpx|session)\s*\.|\.(?:get|post|put|request)\s*\(`)
@@ -49,12 +41,11 @@ var (
 
 func (InsecureTLSVerify) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := stripSlashComment(stripPyComment(sc.Text()))
+	for line, text := range analyze.Lines(t.Content) {
+		if !containsAny(text, ":", "=", "_create_unverified_context") {
+			continue
+		}
+		text = stripSlashCommentKeepURL(analyze.StripPyComment(text))
 		matched := false
 		for _, re := range insecureTLSPatterns {
 			if re.MatchString(text) {
@@ -82,12 +73,9 @@ func (InsecureTLSVerify) MatchFile(_ context.Context, t analyze.FileTarget) []an
 	return out
 }
 
-// stripSlashComment removes a trailing `//` line comment that is not inside a
-// quoted string. Block comments are left intact (rare on a single matched line)
-// and `://` URL separators are preserved because the function only treats `//`
-// as a comment when it is preceded by something other than `:`. Shared by the
-// security package's C-family rules.
-func stripSlashComment(s string) string {
+// stripSlashCommentKeepURL truncates s at a `//` outside a quoted string, keeping string contents and
+// `://` URL separators; block comments are left intact.
+func stripSlashCommentKeepURL(s string) string {
 	var inStr byte
 	for i := 0; i < len(s); i++ {
 		c := s[i]

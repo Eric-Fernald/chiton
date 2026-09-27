@@ -1,8 +1,6 @@
 package database
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 
@@ -10,23 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// RawQueryEscapeHatch flags ORM raw-SQL escape hatches — the methods that drop
-// out of the query builder and run a literal SQL string, bypassing the ORM's
-// parameterization and validation. They are not bugs by themselves, but they
-// warrant review since they are where injection and schema-coupling sneak in.
-//
-// To stay low-false-positive the rule anchors to real ORM call sites rather than
-// matching any method named raw/extra/text/query:
-//   - django/knex .raw(...) — only when the call argument looks like SQL
-//     (contains a SQL verb) or the receiver is a query builder (objects/knex).
-//     This skips express `req.raw`, a generic `.raw` accessor, etc.
-//   - django .extra(...) — the queryset escape hatch; required to carry a
-//     Django-style kwarg (select=/where=/tables=/params=/order_by=) so an
-//     unrelated object's .extra(...) does not match.
-//   - sqlalchemy text("...") — only when the file imports sqlalchemy OR the
-//     string argument begins with a SQL verb. This skips a React/i18n
-//     `text('some.key')` helper.
-//   - sequelize.query("...") — the receiver name anchors it.
+// RawQueryEscapeHatch flags ORM raw-SQL escape hatches (.raw, .extra, sqlalchemy text, sequelize.query),
+// each anchored to a real ORM call site so generic raw/extra/text/query methods stay quiet.
 type RawQueryEscapeHatch struct{}
 
 func (RawQueryEscapeHatch) Meta() analyze.Meta {
@@ -51,9 +34,7 @@ var sqlLooking = regexp.MustCompile(`(?i)\b(?:SELECT\b[^"'` + "`" + `]*?\bFROM|I
 var sqlalchemyImportRe = regexp.MustCompile(`(?i)\b(?:import\s+sqlalchemy|from\s+sqlalchemy\b)`)
 
 var (
-	// .extra( — django queryset escape hatch. Require a Django-style kwarg
-	// (select=/where=/tables=/params=/order_by=) so an unrelated object's
-	// .extra(...) method does not match.
+	// Django .extra( must carry a queryset kwarg so an unrelated object's .extra(...) does not match.
 	extraCallRe = regexp.MustCompile(`\.extra\s*\(\s*(?:select|where|tables|params|order_by)\s*=`)
 	// .raw( on a query builder (objects / knex receiver), regardless of arg.
 	builderRawRe = regexp.MustCompile(`(?i)\b(?:objects|knex)\.raw\s*\(`)
@@ -68,16 +49,13 @@ var (
 )
 
 func (RawQueryEscapeHatch) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
-	masked := maskDBBlocks(t.Content, t.URI)
+	py := analyze.FileExt(t.URI) == "py"
+	masked := maskedDB(t, py)
 	sqlalchemyImported := sqlalchemyImportRe.Match(masked)
 
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(masked))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := stripDBComment(sc.Text(), t.URI)
+	for line, raw := range analyze.Lines(masked) {
+		text := stripDBComment(raw, py)
 
 		var name string
 		switch {

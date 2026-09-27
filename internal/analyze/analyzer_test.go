@@ -15,9 +15,8 @@ import (
 	badgerstore "github.com/Eric-Fernald/chiton/internal/graph/store/badger"
 )
 
-// TestAnalyzeEndToEnd walks a tiny synthetic repo, runs all registered rules,
-// and confirms findings + rule nodes land in the store with the expected
-// VIOLATES/AFFECTS edges.
+// TestAnalyzeEndToEnd runs all registered rules over a tiny synthetic repo and checks that
+// findings and rule nodes land in the store and resolve via List/Explain.
 func TestAnalyzeEndToEnd(t *testing.T) {
 	tmp := t.TempDir()
 
@@ -115,9 +114,8 @@ func helper() {}
 	}
 }
 
-// TestAnalyzePrunesResolvedFindings confirms that re-analysing a file after the
-// offending code is removed deletes the stale deterministic finding, so the
-// store reflects live truth and --diff can report it as resolved.
+// TestAnalyzePrunesResolvedFindings confirms re-analysing a fixed file deletes its stale
+// deterministic finding, so --diff can report it as resolved.
 func TestAnalyzePrunesResolvedFindings(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()
@@ -260,11 +258,8 @@ func secretCount(ctx context.Context, t *testing.T, gs *badgerstore.Store) int {
 	return len(views)
 }
 
-// TestDiffEndToEnd exercises the real path the --diff feature ships: Analyze a
-// repo, snapshot a baseline from the store, change the code, re-Analyze (which
-// prunes resolved findings), and assert Diff reports exactly the right
-// new/resolved set — and that a surviving finding's stable FindingID keeps it
-// out of BOTH new and resolved.
+// TestDiffEndToEnd drives the real --diff path (analyze, baseline, edit, re-analyze) and checks
+// that a surviving finding's stable ID keeps it out of both new and resolved.
 func TestDiffEndToEnd(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()

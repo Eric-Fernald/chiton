@@ -3,9 +3,7 @@ package ast
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -16,42 +14,24 @@ import (
 // strip it so a leading "# Heading" isn't hidden behind the BOM bytes.
 var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 
-// MarkdownExtractor turns a Markdown file into a file node plus one doc_section
-// node per ATX heading (# … ######), wired with CONTAINS edges that mirror the
-// heading hierarchy. Each section's body text (everything up to the next
-// heading) is stored in attrs["text"] so the embed pass can vectorize it.
-//
-// This is the *structural* doc pass (free, deterministic, EXTRACTED). The
-// *semantic* pass — turning section text into concept nodes — is handled later
-// in subagent mode (internal/extract/subagent), keyed off these nodes.
+// MarkdownExtractor emits a file node plus one doc_section per ATX heading, nested via CONTAINS by heading
+// level; each section's body is kept in attrs["text"] for embedding and subagent concept extraction.
 type MarkdownExtractor struct{}
 
-func (m *MarkdownExtractor) ExtractFile(_ context.Context, path string) ([]model.Node, []model.Edge, error) {
-	src, err := os.ReadFile(path)
-	if err != nil {
-		return nil, nil, fmt.Errorf("read %s: %w", path, err)
-	}
+func (m *MarkdownExtractor) ExtractFile(ctx context.Context, path string) ([]model.Node, []model.Edge, error) {
+	return extractFile(ctx, m, path)
+}
+
+func (m *MarkdownExtractor) ExtractSource(_ context.Context, path string, src []byte) ([]model.Node, []model.Edge, error) {
 	src = bytes.TrimPrefix(src, utf8BOM)
 
-	absPath, _ := filepath.Abs(path)
-	uri := "file://" + filepath.ToSlash(absPath)
-	sum := sha256.Sum256(src)
-
-	fileNode := model.Node{
-		ID:            model.NewNodeID(uri, uri),
-		Kind:          model.KindFile,
-		Label:         filepath.Base(path),
-		SourceURI:     uri,
-		Provenance:    model.ProvExtracted,
-		Confidence:    1.0,
-		ContentSHA256: fmt.Sprintf("%x", sum[:]),
-		Attrs:         map[string]any{"language": "markdown"},
-	}
+	fileNode := newFileNode(path, src, map[string]any{"language": "markdown"})
+	uri := fileNode.SourceURI
 
 	nodes := []model.Node{fileNode}
 	var edges []model.Edge
 
-	lines := strings.Split(strings.ReplaceAll(string(src), "\r\n", "\n"), "\n")
+	lines := splitLines(src)
 
 	type heading struct {
 		level int
@@ -100,11 +80,8 @@ func (m *MarkdownExtractor) ExtractFile(_ context.Context, path string) ([]model
 		if hi+1 < len(headings) {
 			end = headings[hi+1].line - 1
 		}
-		var bodyLines []string
-		for j := h.line; j < end; j++ { // h.line is 1-based; skip the heading line itself
-			bodyLines = append(bodyLines, lines[j])
-		}
-		body := strings.TrimSpace(strings.Join(bodyLines, "\n"))
+		// h.line is 1-based, so lines[h.line] is the first line after the heading.
+		body := strings.TrimSpace(strings.Join(lines[h.line:end], "\n"))
 
 		sec := docSectionNode(uri, h.text, h.line, h.level, body)
 		nodes = append(nodes, sec)

@@ -1,10 +1,7 @@
 package install
 
-// jsoncToJSON strips JSONC extensions — // and /* */ comments and trailing
-// commas — so encoding/json can parse the comment-laden configs that OpenCode
-// and VS Code document for their MCP files. Bytes inside string literals are
-// left untouched, so URLs ("http://...") and comment-like text inside values
-// survive intact.
+// jsoncToJSON strips // and /* */ comments and trailing commas so encoding/json can parse the JSONC configs
+// OpenCode and VS Code document; string literals are untouched, so values like "http://..." survive.
 func jsoncToJSON(b []byte) []byte {
 	out := make([]byte, 0, len(b))
 	inStr := false
@@ -44,9 +41,8 @@ func jsoncToJSON(b []byte) []byte {
 	return removeTrailingCommas(out)
 }
 
-// removeTrailingCommas drops a comma that is followed (ignoring whitespace) by a
-// closing } or ], which encoding/json rejects but JSONC allows. String contents
-// are skipped so a comma inside a string is never touched.
+// removeTrailingCommas drops a comma followed (ignoring whitespace) by } or ], which JSONC allows but
+// encoding/json rejects; commas inside strings are never touched.
 func removeTrailingCommas(b []byte) []byte {
 	out := make([]byte, 0, len(b))
 	inStr := false

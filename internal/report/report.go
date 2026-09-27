@@ -43,10 +43,7 @@ func Generate(w io.Writer, results *cluster.Results, edges []model.Edge, opts Op
 		return all[i].id < all[j].id // stable tie-break so output is reproducible
 	})
 
-	limit := opts.MaxGodNodes
-	if limit > len(all) {
-		limit = len(all)
-	}
+	limit := min(opts.MaxGodNodes, len(all))
 
 	fmt.Fprintf(w, "## God Nodes (top %d by betweenness)\n\n", limit)
 	fmt.Fprintf(w, "| Rank | Label | Community | Betweenness | Degree |\n")
@@ -78,24 +75,14 @@ func Generate(w io.Writer, results *cluster.Results, edges []model.Edge, opts Op
 			return members[i].SourceURI < members[j].SourceURI // stable tie-break
 		})
 		fmt.Fprintf(w, "### Community %d (%d nodes)\n\n", cid, len(members))
-		cap := opts.MaxPerCommunity
-		if cap > len(members) {
-			cap = len(members)
-		}
-		for _, m := range members[:cap] {
+		shown := min(opts.MaxPerCommunity, len(members))
+		for _, m := range members[:shown] {
 			fmt.Fprintf(w, "- `%s` (%s)\n", m.Label, m.SourceURI)
 		}
-		if len(members) > cap {
-			fmt.Fprintf(w, "- … and %d more\n", len(members)-cap)
+		if len(members) > shown {
+			fmt.Fprintf(w, "- … and %d more\n", len(members)-shown)
 		}
 		fmt.Fprintln(w)
-	}
-
-	nodeComm := map[string]int{}
-	nodeLabel := map[string]string{}
-	for id, r := range results.Nodes {
-		nodeComm[id] = r.CommunityID
-		nodeLabel[id] = r.Label
 	}
 
 	type surprisingEdge struct {
@@ -105,27 +92,31 @@ func Generate(w io.Writer, results *cluster.Results, edges []model.Edge, opts Op
 		dstComm  int
 		kind     model.EdgeKind
 	}
+	type edgeKey struct {
+		src, dst string
+		kind     model.EdgeKind
+	}
+	const maxSurprising = 20
 	var surprising []surprisingEdge
-	seen := map[string]bool{}
+	seen := map[edgeKey]bool{}
 	for _, e := range edges {
-		sc, ok1 := nodeComm[e.Src]
-		dc, ok2 := nodeComm[e.Dst]
-		if !ok1 || !ok2 || sc == dc {
+		src, ok1 := results.Nodes[e.Src]
+		dst, ok2 := results.Nodes[e.Dst]
+		if !ok1 || !ok2 || src.CommunityID == dst.CommunityID {
 			continue
 		}
-		key := fmt.Sprintf("%s-%s-%s", e.Src, e.Dst, e.Kind)
+		key := edgeKey{e.Src, e.Dst, e.Kind}
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
-		surprising = append(surprising, surprisingEdge{nodeLabel[e.Src], nodeLabel[e.Dst], sc, dc, e.Kind})
+		surprising = append(surprising, surprisingEdge{src.Label, dst.Label, src.CommunityID, dst.CommunityID, e.Kind})
+		if len(surprising) == maxSurprising {
+			break
+		}
 	}
 
 	if len(surprising) > 0 {
-		const maxSurprising = 20
-		if len(surprising) > maxSurprising {
-			surprising = surprising[:maxSurprising]
-		}
 		fmt.Fprintf(w, "## Surprising Cross-Community Connections\n\n")
 		fmt.Fprintf(w, "| From | To | Edge | Communities |\n")
 		fmt.Fprintf(w, "|------|----|------|-------------|\n")

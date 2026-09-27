@@ -2,10 +2,6 @@ package ast
 
 import (
 	"context"
-	"crypto/sha256"
-	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -27,271 +23,83 @@ var (
 // RustExtractor parses Rust source files using regex-based line scanning.
 type RustExtractor struct{}
 
-func (r *RustExtractor) ExtractFile(_ context.Context, path string) ([]model.Node, []model.Edge, error) {
-	src, err := os.ReadFile(path)
-	if err != nil {
-		return nil, nil, fmt.Errorf("read %s: %w", path, err)
-	}
+func (r *RustExtractor) ExtractFile(ctx context.Context, path string) ([]model.Node, []model.Edge, error) {
+	return extractFile(ctx, r, path)
+}
 
-	absPath, _ := filepath.Abs(path)
-	uri := "file://" + filepath.ToSlash(absPath)
-	sum := sha256.Sum256(src)
-
-	fileNode := model.Node{
-		ID:            model.NewNodeID(uri, uri),
-		Kind:          model.KindFile,
-		Label:         filepath.Base(path),
-		SourceURI:     uri,
-		Provenance:    model.ProvExtracted,
-		Confidence:    1.0,
-		ContentSHA256: fmt.Sprintf("%x", sum[:]),
-		Attrs:         map[string]any{"language": "rust"},
-	}
-
-	nodes := []model.Node{fileNode}
-	var edges []model.Edge
-	seenEdge := map[string]bool{}
-
-	addEdge := func(e model.Edge) {
-		if !seenEdge[e.ID] {
-			seenEdge[e.ID] = true
-			edges = append(edges, e)
-		}
-	}
-	seenNode := map[string]bool{fileNode.ID: true}
-	addNode := func(n model.Node) {
-		if !seenNode[n.ID] {
-			seenNode[n.ID] = true
-			nodes = append(nodes, n)
-		}
-	}
-
-	symbols := map[string]string{}
-
-	lines := strings.Split(strings.ReplaceAll(string(src), "\r\n", "\n"), "\n")
-
-	type scopeFrame struct {
-		kind      string // "impl", "fn", "mod"
-		typeName  string // for "impl", the type being implemented
-		traitName string // for "impl Trait for Type"
-		pushDepth int
-	}
-
-	type funcRecord struct {
-		lineStart int
-		id        string
-	}
-
-	var scopeStack []scopeFrame
-	depth := 0
+func (r *RustExtractor) ExtractSource(_ context.Context, path string, src []byte) ([]model.Node, []model.Edge, error) {
+	g := newFileGraph(newFileNode(path, src, map[string]any{"language": "rust"}))
+	lines := splitLines(src)
+	var scopes braceScopes // kinds: "impl" (named for the implemented type), "fn", "mod"
 	var funcs []funcRecord
 
-	top := func() *scopeFrame {
-		if len(scopeStack) == 0 {
-			return nil
-		}
-		return &scopeStack[len(scopeStack)-1]
-	}
-
-	makeSymbol := func(label, langKind string, lineNum int) model.Node {
-		return model.Node{
-			ID:         model.NewNodeID(uri, label),
-			Kind:       model.KindSymbol,
-			Label:      label,
-			SourceURI:  uri,
-			Span:       &model.SourceSpan{StartLine: lineNum + 1},
-			Provenance: model.ProvExtracted,
-			Confidence: 1.0,
-			Attrs:      map[string]any{"lang_kind": langKind},
-		}
-	}
-
-	// Pass 1: collect symbols.
-	inBlock := false
-	for lineNum, line := range lines {
-		pre := depth
-		startedInBlock := inBlock
-		var open, close_ int
-		open, close_, inBlock = countLineBraces(line, inBlock)
-
-		stripped := strings.TrimLeft(line, " \t")
-		// Skip comment lines for symbol detection — but only AFTER updating the
-		// block-comment state above, so /* */ braces never reach depth tracking.
-		if startedInBlock || strings.HasPrefix(stripped, "//") || strings.HasPrefix(stripped, "///") {
-			depth = pre + open - close_
-			for len(scopeStack) > 0 && depth <= scopeStack[len(scopeStack)-1].pushDepth {
-				scopeStack = scopeStack[:len(scopeStack)-1]
-			}
-			continue
-		}
-
-		t := top()
-		inImplBody := t != nil && t.kind == "impl" && pre > t.pushDepth
-
-		handled := false
-
-		if inImplBody {
+	// Pass 1: collect symbols, skipping // lines (scan still tracks their braces and /* */ state).
+	isComment := func(s string) bool { return strings.HasPrefix(s, "//") }
+	scopes.scan(lines, isComment, func(i int, line string, pre, open int) {
+		fn := reRsFn.FindStringSubmatch(line)
+		if t := scopes.top(); t != nil && t.kind == "impl" && pre > t.pushDepth && fn != nil {
 			// fn inside impl → method
-			if m := reRsFn.FindStringSubmatch(line); m != nil {
-				typeName := t.typeName
-				label := typeName + "." + m[1]
-				sym := makeSymbol(label, "method", lineNum)
-				addNode(sym)
-				symbols[m[1]] = sym.ID
-				symbols[label] = sym.ID
-				addEdge(containsEdge(fileNode.ID, sym.ID))
-				funcs = append(funcs, funcRecord{lineStart: lineNum, id: sym.ID})
-				scopeStack = append(scopeStack, scopeFrame{kind: "fn", pushDepth: pre})
-				handled = true
+			label := t.name + "." + fn[1]
+			funcs = append(funcs, funcRecord{lineStart: i, id: g.declare(label, "method", i+1, fn[1])})
+			scopes.push("fn", "", pre)
+			return
+		}
+
+		if fn != nil {
+			funcs = append(funcs, funcRecord{lineStart: i, id: g.declare(fn[1], "func", i+1)})
+			scopes.push("fn", "", pre)
+		} else if m := reRsImpl.FindStringSubmatch(line); m != nil {
+			traitName := m[1] // may be empty for bare impl
+			typeName := m[2]
+			scopes.push("impl", typeName, pre)
+
+			if traitName != "" {
+				// impl Trait for Type → IMPLEMENTS edge
+				typeID := g.symbols[typeName]
+				if typeID == "" {
+					typeID = model.NewNodeID(g.uri, typeName)
+				}
+				g.addExternal(typeID, traitName, implementsEdge)
+			}
+		} else if m := reRsStruct.FindStringSubmatch(line); m != nil {
+			g.declare(m[1], "struct", i+1)
+			scopes.push("mod", "", pre)
+		} else if m := reRsEnum.FindStringSubmatch(line); m != nil {
+			g.declare(m[1], "enum", i+1)
+			scopes.push("mod", "", pre)
+		} else if m := reRsTrait.FindStringSubmatch(line); m != nil {
+			g.declare(m[1], "trait", i+1)
+			scopes.push("mod", "", pre)
+		} else if m := reRsMod.FindStringSubmatch(line); m != nil {
+			g.declare(m[1], "mod", i+1)
+			if open > 0 {
+				scopes.push("mod", "", pre)
 			}
 		}
 
-		if !handled {
-			switch {
-			case reRsFn.MatchString(line):
-				if m := reRsFn.FindStringSubmatch(line); m != nil {
-					sym := makeSymbol(m[1], "func", lineNum)
-					addNode(sym)
-					symbols[m[1]] = sym.ID
-					addEdge(containsEdge(fileNode.ID, sym.ID))
-					funcs = append(funcs, funcRecord{lineStart: lineNum, id: sym.ID})
-					scopeStack = append(scopeStack, scopeFrame{kind: "fn", pushDepth: pre})
-				}
-
-			case reRsImpl.MatchString(line):
-				if m := reRsImpl.FindStringSubmatch(line); m != nil {
-					traitName := m[1] // may be empty for bare impl
-					typeName := m[2]
-					frame := scopeFrame{kind: "impl", typeName: typeName, traitName: traitName, pushDepth: pre}
-					scopeStack = append(scopeStack, frame)
-
-					if traitName != "" {
-						// impl Trait for Type → IMPLEMENTS edge
-						typeID := symbols[typeName]
-						if typeID == "" {
-							typeID = model.NewNodeID(uri, typeName)
-						}
-						traitNode := importNode(traitName)
-						addNode(traitNode)
-						addEdge(implementsEdge(typeID, traitNode.ID))
-					}
-				}
-
-			case reRsStruct.MatchString(line):
-				if m := reRsStruct.FindStringSubmatch(line); m != nil {
-					sym := makeSymbol(m[1], "struct", lineNum)
-					addNode(sym)
-					symbols[m[1]] = sym.ID
-					addEdge(containsEdge(fileNode.ID, sym.ID))
-					scopeStack = append(scopeStack, scopeFrame{kind: "mod", pushDepth: pre})
-				}
-
-			case reRsEnum.MatchString(line):
-				if m := reRsEnum.FindStringSubmatch(line); m != nil {
-					sym := makeSymbol(m[1], "enum", lineNum)
-					addNode(sym)
-					symbols[m[1]] = sym.ID
-					addEdge(containsEdge(fileNode.ID, sym.ID))
-					scopeStack = append(scopeStack, scopeFrame{kind: "mod", pushDepth: pre})
-				}
-
-			case reRsTrait.MatchString(line):
-				if m := reRsTrait.FindStringSubmatch(line); m != nil {
-					sym := makeSymbol(m[1], "trait", lineNum)
-					addNode(sym)
-					symbols[m[1]] = sym.ID
-					addEdge(containsEdge(fileNode.ID, sym.ID))
-					scopeStack = append(scopeStack, scopeFrame{kind: "mod", pushDepth: pre})
-				}
-
-			case reRsMod.MatchString(line):
-				if m := reRsMod.FindStringSubmatch(line); m != nil {
-					sym := makeSymbol(m[1], "mod", lineNum)
-					addNode(sym)
-					symbols[m[1]] = sym.ID
-					addEdge(containsEdge(fileNode.ID, sym.ID))
-					if open > 0 {
-						scopeStack = append(scopeStack, scopeFrame{kind: "mod", pushDepth: pre})
-					}
-				}
-			}
-
-			// use declarations → import nodes
-			if m := reRsUse.FindStringSubmatch(line); m != nil {
-				pkg := rustUsePath(m[1])
-				if pkg != "" {
-					n := importNode(pkg)
-					addNode(n)
-					addEdge(importEdge(fileNode.ID, n.ID))
-				}
-			}
-			if m := reRsExtern.FindStringSubmatch(line); m != nil {
-				n := importNode(m[1])
-				addNode(n)
-				addEdge(importEdge(fileNode.ID, n.ID))
+		// use declarations → import nodes
+		if m := reRsUse.FindStringSubmatch(line); m != nil {
+			if pkg := rustUsePath(m[1]); pkg != "" {
+				g.addImport(pkg)
 			}
 		}
-
-		depth = pre + open - close_
-		for len(scopeStack) > 0 && depth <= scopeStack[len(scopeStack)-1].pushDepth {
-			scopeStack = scopeStack[:len(scopeStack)-1]
+		if m := reRsExtern.FindStringSubmatch(line); m != nil {
+			g.addImport(m[1])
 		}
-	}
+	})
 
-	ambiguous := ambiguousBareNames(symbols)
-
-	// Pass 2: CALLS edges.
-	for _, fr := range funcs {
-		bodyDepth := 0
-		inBody := false
-		inBlock := false
-		for i := fr.lineStart; i < len(lines); i++ {
-			startedInBlock := inBlock
-			var open, close_ int
-			open, close_, inBlock = countLineBraces(lines[i], inBlock)
-			bodyDepth += open
-			if bodyDepth > 0 {
-				inBody = true
-			}
-			if inBody && i > fr.lineStart && !startedInBlock {
-				for _, m := range reRsCall.FindAllStringSubmatch(lines[i], -1) {
-					calleeName := m[1]
-					if isRsKeyword(calleeName) {
-						continue
-					}
-					calleeID, ok := symbols[calleeName]
-					if !ok || calleeID == fr.id || ambiguous[calleeName] {
-						continue
-					}
-					addEdge(callsEdge(fr.id, calleeID))
-				}
-			}
-			bodyDepth -= close_
-			if inBody && bodyDepth <= 0 {
-				break
-			}
-		}
-	}
-
-	return nodes, edges, nil
+	g.addBraceCalls(lines, funcs, false, reRsCall, isRsKeyword)
+	return g.nodes, g.edges, nil
 }
 
 // rustUsePath extracts the crate name from a use path like "std::fs::File" → "std".
 func rustUsePath(s string) string {
 	s = strings.TrimSpace(s)
-	// Handle grouped imports: {A, B} → skip
-	if strings.Contains(s, "{") {
-		idx := strings.Index(s, "::")
-		if idx < 0 {
-			return ""
-		}
-		return strings.TrimSpace(s[:idx])
+	head, _, found := strings.Cut(s, "::")
+	if !found && strings.Contains(s, "{") {
+		return "" // a bare grouped import like {A, B} names no crate
 	}
-	parts := strings.SplitN(s, "::", 2)
-	if len(parts) == 0 {
-		return ""
-	}
-	return strings.TrimSpace(parts[0])
+	return strings.TrimSpace(head)
 }
 
 var rsKeywords = map[string]bool{

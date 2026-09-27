@@ -24,39 +24,30 @@ type changeNotification struct {
 	Value []ChangeItem `json:"value"`
 }
 
-// WebhookHandler receives Microsoft Graph change notifications for Teams
-// transcripts. It performs the subscription-validation handshake (echoing
-// ?validationToken=…) and, for genuine notifications, verifies clientState and
-// dispatches each change to onChange. It is transport-only: callers wire the
-// returned handler into their own http.Server.
+// WebhookHandler receives Graph change notifications for Teams transcripts: it echoes ?validationToken=…
+// handshakes and dispatches changes whose clientState matches to onChange.
 type WebhookHandler struct {
 	clientState string
 	onChange    func(ctx context.Context, c ChangeItem) error
 	log         func(format string, args ...any)
 }
 
-// NewWebhookHandler builds a handler. clientState is the shared secret set when
-// creating the Graph subscription; notifications whose clientState does not
-// match are rejected (defends against forged callbacks). onChange handles one
-// validated change (typically: fetch the new transcript and ingest it).
+// NewWebhookHandler builds a handler; clientState is the shared secret from the Graph subscription, and
+// notifications that don't match it are rejected as forged.
 func NewWebhookHandler(clientState string, onChange func(ctx context.Context, c ChangeItem) error, log func(string, ...any)) *WebhookHandler {
 	if log == nil {
 		log = func(string, ...any) {}
 	}
 	if clientState == "" {
-		// Fail closed. An empty clientState means nothing can be authenticated,
-		// so every notification is rejected rather than every notification being
-		// trusted. The caller is expected to refuse to start in this state; this
-		// is the library-level backstop for callers that do not.
+		// Fail closed: with no clientState every notification is rejected. Callers should refuse to start;
+		// this is the library backstop.
 		log("teams webhook: WARNING — clientState is empty; every notification will be rejected")
 	}
 	return &WebhookHandler{clientState: clientState, onChange: onChange, log: log}
 }
 
 func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Subscription validation: Graph sends ?validationToken=… and expects it
-	// echoed back verbatim as text/plain within 10s. This happens on both the
-	// initial POST and on renewal.
+	// Graph expects ?validationToken=… echoed verbatim as text/plain within 10s, on creation and on renewal.
 	if token := r.URL.Query().Get("validationToken"); token != "" {
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
@@ -84,9 +75,8 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Acknowledge fast (Graph requires a 2xx within 3s) and process each change.
-	// clientState mismatches are dropped, not errored, so a forged callback
-	// cannot learn which states are valid.
+	// Mismatched clientStates are dropped, not errored, so a forged callback can't learn valid states. The 202
+	// is sent only after every onChange returns, so onChange must fit Graph's 3s ack deadline.
 	for _, c := range note.Value {
 		if !h.validState(c.ClientState) {
 			h.log("teams webhook: dropping notification with bad clientState (sub %s)", c.SubscriptionID)
@@ -101,10 +91,8 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
-// validState constant-time-compares the notification's clientState to ours.
-// With no configured clientState there is nothing to compare against, so the
-// notification is rejected: an unauthenticated receiver that accepts anything
-// would let any host on the network inject meeting content into the graph.
+// validState constant-time-compares clientState; with none configured it rejects, since accepting anything
+// would let any network host inject meeting content into the graph.
 func (h *WebhookHandler) validState(got string) bool {
 	if h.clientState == "" {
 		return false
@@ -112,11 +100,8 @@ func (h *WebhookHandler) validState(got string) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(h.clientState)) == 1
 }
 
-// ParseTranscriptResource extracts the (meetingID, transcriptID) from a Graph
-// transcript resource string such as
-// "communications/onlineMeetings('MEET')/transcripts('TID')" or
-// "users('U')/onlineMeetings('MEET')/transcripts('TID')". Returns ok=false when
-// the resource is not a transcript path.
+// ParseTranscriptResource extracts (meetingID, transcriptID) from a resource such as
+// "users('U')/onlineMeetings('MEET')/transcripts('TID')"; ok is false for non-transcript paths.
 func ParseTranscriptResource(resource string) (meetingID, transcriptID string, ok bool) {
 	meetingID = between(resource, "onlineMeetings('", "')")
 	transcriptID = between(resource, "transcripts('", "')")

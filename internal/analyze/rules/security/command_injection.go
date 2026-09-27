@@ -1,8 +1,6 @@
 package security
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 
@@ -10,13 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// CommandInjection flags shell-out patterns where input can reach a shell:
-//   - Py:  subprocess.*(..., shell=True)  /  os.system(
-//   - JS:  child_process.exec(  /  require('child_process').exec(
-//   - Go:  exec.Command("sh"|"bash", "-c", ...)
-//
-// These run their argument through a shell, so any interpolated variable is a
-// command-injection vector.
+// CommandInjection flags shell-out calls (shell=True, os.system, child_process.exec, sh -c): they
+// run their argument through a shell, so any interpolated variable is an injection vector.
 type CommandInjection struct{}
 
 func (CommandInjection) Meta() analyze.Meta {
@@ -43,12 +36,11 @@ var commandInjectionPatterns = []*regexp.Regexp{
 
 func (CommandInjection) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := stripSlashComment(stripPyComment(sc.Text()))
+	for line, text := range analyze.Lines(t.Content) {
+		if !containsAny(text, "=", "os.", "exec") {
+			continue
+		}
+		text = stripSlashCommentKeepURL(analyze.StripPyComment(text))
 		for _, re := range commandInjectionPatterns {
 			if re.MatchString(text) {
 				out = append(out, analyze.Finding{

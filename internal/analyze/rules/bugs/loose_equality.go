@@ -1,8 +1,6 @@
 package bugs
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 
@@ -10,9 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// LooseEquality flags JS/TS use of `==` / `!=` instead of the strict
-// `===` / `!==`. Loose equality triggers type coercion (e.g. 0 == "",
-// null == undefined) and is a frequent source of subtle bugs.
+// LooseEquality flags JS/TS `==` / `!=` instead of the strict `===` / `!==`: loose equality coerces types
+// (0 == "", null == undefined), a frequent source of subtle bugs.
 type LooseEquality struct{}
 
 func (LooseEquality) Meta() analyze.Meta {
@@ -28,23 +25,15 @@ func (LooseEquality) Meta() analyze.Meta {
 	}
 }
 
-// Match `==` or `!=` that is NOT part of `===`, `!==`, `==>`, `>=`, `<=`,
-// or an assignment-equality boundary. The surrounding negative classes keep
-// `===`/`!==` (extra `=`) from matching, and exclude `=>` arrow boundaries.
+// `==` / `!=` not part of a longer `=` run (`===`, `!==`) and not preceded by `<`, `>`, or `!`.
 var looseEqualityRe = regexp.MustCompile(`[^=!<>]([!=]=)([^=]|$)`)
 
 func (LooseEquality) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	// Mask string, template, and regex literal bodies plus comments across the
-	// whole file first, so `==`/`!=` inside a SQL string, a base64 blob, a
-	// template, or a regex literal (/.../) can never reach the operator regex.
+	// Whole-file masking keeps `==`/`!=` inside strings, templates, regex literals, and comments
+	// (SQL fragments, base64 padding) away from the operator regex.
 	masked := maskJSLiteralsAndComments(t.Content)
-	sc := bufio.NewScanner(bytes.NewReader(masked))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := sc.Text()
+	for line, text := range analyze.Lines(masked) {
 		if looseEqualityRe.MatchString(text) {
 			out = append(out, analyze.Finding{
 				RuleID:       "bugs/loose-equality",

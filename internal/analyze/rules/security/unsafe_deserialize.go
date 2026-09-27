@@ -1,8 +1,6 @@
 package security
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 
@@ -10,9 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// UnsafeDeserialize flags use of Python pickle.loads / cPickle.loads / yaml.load
-// (without SafeLoader), and JavaScript's `eval`-style deserialization via
-// `Function(...)`/`new Function(...)`. These are common RCE vectors.
+// UnsafeDeserialize flags common RCE vectors: pickle.load(s), yaml.load without a Loader, and
+// JavaScript's eval-style Function(...) / new Function(...).
 type UnsafeDeserialize struct{}
 
 func (UnsafeDeserialize) Meta() analyze.Meta {
@@ -37,12 +34,10 @@ var unsafeDeserPatterns = []*regexp.Regexp{
 
 func (UnsafeDeserialize) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := sc.Text()
+	for line, text := range analyze.Lines(t.Content) {
+		if !containsAny(text, "ickle.load", "yaml.load", "Function") {
+			continue
+		}
 		for _, re := range unsafeDeserPatterns {
 			if re.MatchString(text) {
 				out = append(out, analyze.Finding{

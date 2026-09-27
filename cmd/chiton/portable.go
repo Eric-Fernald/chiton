@@ -7,14 +7,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Eric-Fernald/chiton/internal/config"
 	"github.com/Eric-Fernald/chiton/internal/graph/portable"
 )
 
-// exportCmd writes the whole graph to a portable, self-describing JSON
-// snapshot (nodes with inlined embeddings + edges). This is the supported way
-// to back up, share, or migrate a graph between machines/versions, and the
-// counterpart to `chiton merge`.
+// exportCmd writes the whole graph (nodes with inlined embeddings + edges) to a portable JSON snapshot:
+// the supported way to back up or migrate a graph, and the counterpart to `chiton merge`.
 func exportCmd() *cobra.Command {
 	var outFile string
 
@@ -27,14 +24,10 @@ BadgerDB store directory, which is only safe to copy between identical versions.
 
 Pair with 'chiton merge' to import or combine graphs across repositories.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := config.Load()
+			// Read-only so export can run while 'chiton serve' holds the store.
+			_, gs, err := loadStore(true)
 			if err != nil {
 				return err
-			}
-			// Read-only so export can run while 'chiton serve' holds the store.
-			gs, err := openGraphStore(cfg.GraphPath, true)
-			if err != nil {
-				return fmt.Errorf("open store: %w", err)
 			}
 			defer gs.Close()
 
@@ -64,11 +57,8 @@ Pair with 'chiton merge' to import or combine graphs across repositories.`,
 	return cmd
 }
 
-// mergeCmd loads one or more exported snapshots into the current graph store.
-// Because node IDs are stable hashes of (source_uri, label), this both imports
-// a single graph and merges several repos' graphs into one — nodes they share
-// (external packages, shared concepts) collapse to one, and re-running is
-// idempotent.
+// mergeCmd loads exported snapshots into the current store. Node IDs are stable hashes of
+// (source_uri, label), so shared nodes collapse across repos and re-running is idempotent.
 func mergeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "merge <snapshot.json>...",
@@ -82,13 +72,9 @@ shared across graphs — the basis for cross-repo knowledge graphs. Point
 graph_path at a fresh store to import, or at an existing one to combine.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load()
+			_, gs, err := loadStore(false)
 			if err != nil {
 				return err
-			}
-			gs, err := openGraphStore(cfg.GraphPath, false)
-			if err != nil {
-				return fmt.Errorf("open store: %w", err)
 			}
 			defer gs.Close()
 

@@ -29,12 +29,8 @@ type MessageEvent struct {
 	ThreadTS  string
 }
 
-// EventsHandler receives Slack Events API callbacks. It verifies each request's
-// signature (X-Slack-Signature HMAC over the raw body, bounded by a replay
-// window), performs the url_verification challenge handshake, and dispatches
-// genuine message events to onMessage. It is transport-only: callers wire the
-// returned handler into their own http.Server. It mirrors the Teams
-// WebhookHandler, with Slack's signing-secret scheme in place of clientState.
+// EventsHandler receives Slack Events API callbacks: it verifies each request's X-Slack-Signature (HMAC over
+// the raw body, within a replay window), answers url_verification, and dispatches message events to onMessage.
 type EventsHandler struct {
 	signingSecret string
 	onMessage     func(ctx context.Context, ev MessageEvent) error
@@ -42,18 +38,15 @@ type EventsHandler struct {
 	now           func() time.Time
 }
 
-// NewEventsHandler builds a handler. signingSecret is the Slack app signing
-// secret used to authenticate every request; requests that fail verification
-// are rejected. onMessage handles one verified message event (typically:
-// re-ingest the channel or thread the message belongs to).
+// NewEventsHandler builds a handler that authenticates every request with the Slack signing secret; an empty
+// secret fails closed. onMessage handles one verified message event.
 func NewEventsHandler(signingSecret string, onMessage func(ctx context.Context, ev MessageEvent) error, log func(string, ...any)) *EventsHandler {
 	if log == nil {
 		log = func(string, ...any) {}
 	}
 	if signingSecret == "" {
-		// A Slack app always has a signing secret, so an empty one is a
-		// misconfiguration with no legitimate use. Fail closed (verify rejects
-		// everything) rather than silently authenticating forged requests.
+		// Every Slack app has a signing secret, so empty is a misconfiguration: fail closed rather than
+		// authenticate forged requests.
 		log("slack events: WARNING — no signing secret configured; ALL requests will be rejected (set CHITON_SLACK_SIGNING_SECRET)")
 	}
 	return &EventsHandler{
@@ -125,9 +118,8 @@ func (h *EventsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// verify authenticates a request using the Slack signing-secret scheme:
-// X-Slack-Signature = "v0=" + HMAC_SHA256(secret, "v0:"+timestamp+":"+body),
-// constant-time compared, with the timestamp bounded to the replay window.
+// verify checks X-Slack-Signature = "v0=" + HMAC_SHA256(secret, "v0:"+timestamp+":"+body) in constant time,
+// rejecting timestamps outside the replay window.
 func (h *EventsHandler) verify(header http.Header, body []byte) bool {
 	if h.signingSecret == "" {
 		return false // fail closed: cannot authenticate without a secret
@@ -155,12 +147,8 @@ func (h *EventsHandler) verify(header http.Header, body []byte) bool {
 	return hmac.Equal([]byte(expected), []byte(sig))
 }
 
-// shouldDispatch reports whether an inner event should trigger a re-ingest:
-// only genuine human text messages (skips edits/deletes/joins and bot echoes).
-// It is intentionally stricter than the WebClient's ingestable filter — a
-// re-ingest re-fetches the whole conversation, which applies ingestable to
-// every message, so bot/system messages are still captured on the next human
-// message; we just don't re-fetch on bot chatter.
+// shouldDispatch reports whether an event should trigger a re-ingest: human text messages only. Bot messages
+// are skipped here but still captured when the next human message re-fetches the whole conversation.
 func (h *EventsHandler) shouldDispatch(ev slackInnerEvent) bool {
 	if ev.Type != "message" {
 		return false

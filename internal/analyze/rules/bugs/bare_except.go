@@ -1,8 +1,6 @@
 package bugs
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 
@@ -10,9 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// BareExcept flags Python `except:` (no exception class) and JS/TS empty
-// catch blocks — both swallow every exception including KeyboardInterrupt
-// / TypeError and hide real bugs.
+// BareExcept flags Python `except:` (no exception class) and JS/TS `catch () {`: both swallow every
+// exception, including KeyboardInterrupt / TypeError, and hide real bugs.
 type BareExcept struct{}
 
 func (BareExcept) Meta() analyze.Meta {
@@ -35,12 +32,7 @@ var (
 
 func (BareExcept) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := sc.Text()
+	for line, text := range analyze.Lines(t.Content) {
 		if bareExceptPy.MatchString(text) || bareCatchJS.MatchString(text) {
 			out = append(out, analyze.Finding{
 				RuleID:       "bugs/bare-except",

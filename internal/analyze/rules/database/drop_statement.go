@@ -1,8 +1,6 @@
 package database
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 
@@ -10,9 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// DropStatement flags DROP TABLE / DROP DATABASE / DROP SCHEMA in source. These
-// are destructive, irreversible DDL statements; they belong in reviewed,
-// versioned migrations, not embedded in application code.
+// DropStatement flags DROP TABLE/DATABASE/SCHEMA in source: irreversible DDL that belongs in
+// reviewed migrations, not application code.
 type DropStatement struct{}
 
 func (DropStatement) Meta() analyze.Meta {
@@ -29,17 +26,14 @@ func (DropStatement) Meta() analyze.Meta {
 }
 
 // Require an object keyword after DROP so we don't match the English word
-// "drop" or method names like dropFirst(). IF EXISTS is allowed between.
+// "drop" or method names like dropFirst(); `DROP TABLE IF EXISTS` still matches.
 var dropStmtRe = regexp.MustCompile(`(?i)\bDROP\s+(?:TABLE|DATABASE|SCHEMA)\b`)
 
 func (DropStatement) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(maskDBBlocks(t.Content, t.URI)))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		text := stripDBComment(sc.Text(), t.URI)
+	py := analyze.FileExt(t.URI) == "py"
+	for line, raw := range analyze.Lines(maskedDB(t, py)) {
+		text := stripDBComment(raw, py)
 		if dropStmtRe.MatchString(text) {
 			out = append(out, analyze.Finding{
 				RuleID:       "database/drop-statement",

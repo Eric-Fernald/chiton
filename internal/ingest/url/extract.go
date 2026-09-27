@@ -11,9 +11,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/extract/meeting"
 )
 
-// extractText renders a fetched payload to readable plain text, dispatching on
-// content type (with an extension fallback). It returns the text and, when the
-// format carries one (HTML <title>), a document title.
+// extractText renders a fetched payload to plain text by content type (falling back to extension),
+// plus the document title when the format has one (HTML <title>).
 func extractText(fr *fetchResult) (text, title string) {
 	ct := fr.contentType
 	switch {
@@ -91,9 +90,8 @@ func textContent(n *html.Node) string {
 	return b.String()
 }
 
-// pdfText extracts plain text from a PDF. ledongthuc/pdf can panic on malformed
-// input, so the extraction is guarded; a failure yields "" (Add then reports no
-// readable text rather than crashing).
+// pdfText extracts plain text from a PDF. ledongthuc/pdf can panic on malformed input, so a recover
+// turns any failure into "" (Add then reports no readable text).
 func pdfText(body []byte) (out string) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -115,25 +113,15 @@ func pdfText(body []byte) (out string) {
 	return buf.String()
 }
 
-// transcriptText renders a VTT/SRT subtitle file to readable prose by parsing it
-// with the meeting parser and joining the turns (dropping the timing markup that
-// would otherwise pollute concept extraction).
+// transcriptText renders a VTT/SRT file to prose via the meeting parser, dropping timing markup that
+// would pollute concept extraction.
 func transcriptText(fr *fetchResult) string {
 	name := "subtitles." + fr.ext
 	tr, err := meeting.Parse(name, fr.body)
 	if err != nil {
 		return string(fr.body)
 	}
-	var b strings.Builder
-	for _, turn := range tr.Turns {
-		if turn.Speaker != "" {
-			b.WriteString(turn.Speaker)
-			b.WriteString(": ")
-		}
-		b.WriteString(turn.Text)
-		b.WriteByte('\n')
-	}
-	return b.String()
+	return tr.Text()
 }
 
 // stripTags is a last-resort HTML tag remover for documents the parser rejects.
@@ -161,7 +149,7 @@ func stripTags(s string) string {
 // a single blank line, so chunkText's paragraph splitting stays meaningful.
 func collapseBlankLines(s string) string {
 	lines := strings.Split(s, "\n")
-	var out []string
+	out := make([]string, 0, len(lines))
 	blank := 0
 	for _, ln := range lines {
 		ln = strings.TrimRight(ln, " \t")

@@ -9,20 +9,17 @@ import (
 	"net/mail"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
 
-// maxFileBytes caps how much of any single mail file is read into memory,
-// mirroring the URL ingester's 32 MiB body cap. A larger archive is read up to
-// this bound (truncated) rather than risking memory exhaustion on an
-// attacker-influenceable mailbox.
+// maxFileBytes caps how much of one mail file is read; larger archives are truncated rather than risking
+// memory exhaustion on an attacker-influenceable mailbox.
 const maxFileBytes = 64 << 20
 
-// LocalSource reads email from local files: individual .eml messages or .mbox
-// archives. A directory is walked for both. This is the dependency-free,
-// fully-testable path — no network, no credentials.
+// LocalSource reads .eml messages and .mbox archives from a file or a directory tree, with no network or
+// credentials.
 type LocalSource struct {
 	path string
 }
@@ -54,7 +51,7 @@ func (s *LocalSource) Messages(_ context.Context, opts Query) ([]Message, error)
 		if err != nil {
 			return nil, err
 		}
-		sort.Strings(files)
+		slices.Sort(files)
 	} else {
 		files = []string{s.path}
 	}
@@ -86,13 +83,9 @@ func (s *LocalSource) Messages(_ context.Context, opts Query) ([]Message, error)
 // applyQuery filters parsed messages by Since and caps them at Max.
 func applyQuery(msgs []Message, opts Query) []Message {
 	if !opts.Since.IsZero() {
-		kept := msgs[:0]
-		for _, m := range msgs {
-			if m.Date.IsZero() || !m.Date.Before(opts.Since) {
-				kept = append(kept, m)
-			}
-		}
-		msgs = kept
+		msgs = slices.DeleteFunc(msgs, func(m Message) bool {
+			return !m.Date.IsZero() && m.Date.Before(opts.Since)
+		})
 	}
 	if opts.Max > 0 && len(msgs) > opts.Max {
 		msgs = msgs[:opts.Max]
@@ -100,14 +93,14 @@ func applyQuery(msgs []Message, opts Query) []Message {
 	return msgs
 }
 
-// readCapped reads up to max bytes of a file into memory.
-func readCapped(path string, max int64) ([]byte, error) {
+// readCapped reads up to limit bytes of a file into memory.
+func readCapped(path string, limit int64) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	return io.ReadAll(io.LimitReader(f, max))
+	return io.ReadAll(io.LimitReader(f, limit))
 }
 
 // isMailFile reports whether a filename looks like an email file we can parse.
@@ -119,14 +112,14 @@ func isMailFile(path string) bool {
 	return false
 }
 
+var mboxFromLine = []byte("From ")
+
 // looksLikeMbox reports whether data begins with an mbox "From " envelope line.
 func looksLikeMbox(data []byte) bool {
-	return bytes.HasPrefix(data, []byte("From "))
+	return bytes.HasPrefix(data, mboxFromLine)
 }
 
-// utf8BOM is the byte-order mark some Windows editors prepend when saving UTF-8.
-// Left in place it corrupts the first header line (the leading bytes bind to the
-// "From" key), so we strip it before parsing.
+// utf8BOM is stripped before parsing: left in place it binds to the first header key and corrupts it.
 var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 
 // parseMessage parses one RFC 5322 message into a Message.
@@ -170,10 +163,10 @@ func parseMbox(data []byte) ([]Message, error) {
 		cur.Reset()
 	}
 	for sc.Scan() {
-		line := sc.Text()
+		line := sc.Bytes()
 		// An mbox envelope line ("From sender date") delimits messages; it is not
 		// part of the RFC 5322 message itself, so we drop it.
-		if strings.HasPrefix(line, "From ") {
+		if bytes.HasPrefix(line, mboxFromLine) {
 			flush()
 			started = true
 			continue
@@ -182,17 +175,14 @@ func parseMbox(data []byte) ([]Message, error) {
 			continue
 		}
 		// Unescape the ">From " mbox body quoting (best-effort, ">>From " etc.).
-		if strings.HasPrefix(line, ">") && strings.HasPrefix(strings.TrimLeft(line, ">"), "From ") {
+		if len(line) > 0 && line[0] == '>' && bytes.HasPrefix(bytes.TrimLeft(line, ">"), mboxFromLine) {
 			line = line[1:]
 		}
-		cur.WriteString(line)
+		cur.Write(line)
 		cur.WriteByte('\n')
 	}
 	flush()
-	if err := sc.Err(); err != nil {
-		return msgs, err
-	}
-	return msgs, nil
+	return msgs, sc.Err()
 }
 
 // firstAddress parses the first mailbox from a header value (used for From).
@@ -220,9 +210,7 @@ func parseAddressList(header string) []Address {
 	}
 	out := make([]Address, 0, len(parsed))
 	for _, a := range parsed {
-		// mail.ParseAddressList already RFC 2047-decodes display names; decoding
-		// again would mangle a literal name that happens to look like an
-		// encoded-word, so take a.Name verbatim here.
+		// ParseAddressList already RFC 2047-decodes names; decoding again would mangle a literal "=?...?=" name.
 		out = append(out, Address{Name: a.Name, Email: a.Address})
 	}
 	return out

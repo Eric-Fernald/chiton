@@ -8,25 +8,12 @@ import (
 	"github.com/spf13/viper"
 )
 
-// ProjectDirEnv names the environment variable that anchors chiton to a
-// workspace regardless of the process working directory.
-//
-// Assistant-launched MCP servers do not reliably start in the workspace root —
-// the Claude Code plugin sets this to the project directory — so without an
-// anchor a server can end up reading a different store than `chiton build`
-// wrote. When it is set, `.chitonrc` is looked up there and a relative
-// graph_path is resolved against it.
+// ProjectDirEnv anchors chiton to a workspace, since assistant-launched MCP servers may start elsewhere
+// and read the wrong store; when set, .chitonrc is read there and a relative graph_path resolves against it.
 const ProjectDirEnv = "CHITON_PROJECT_DIR"
 
-// ProjectDir returns the anchoring directory: $CHITON_PROJECT_DIR when set,
-// otherwise "." (the process working directory), preserving the historical
-// behaviour for CLI use.
-//
-// A value still carrying a "${...}" template is treated as unset: the launcher
-// passed the placeholder through without substituting it (Claude Code does this
-// with ${CLAUDE_PROJECT_DIR} when the variable is undefined), and anchoring to a
-// literal "${CLAUDE_PROJECT_DIR}" directory only turns a working store path into
-// one that cannot be opened.
+// ProjectDir returns $CHITON_PROJECT_DIR, or "." when unset. A value still holding a "${...}" template
+// (a launcher placeholder left unsubstituted) counts as unset, since anchoring to it breaks the store path.
 func ProjectDir() string {
 	if dir := strings.TrimSpace(os.Getenv(ProjectDirEnv)); dir != "" && !strings.Contains(dir, "${") {
 		return dir
@@ -57,18 +44,14 @@ type Config struct {
 	Semantic  SemanticConfig `mapstructure:"semantic"`
 }
 
-// Load reads .chitonrc (TOML) from the project directory, merges environment
-// overrides (CHITON_* prefix), and returns a Config with sane defaults.
-//
-// The project directory is $CHITON_PROJECT_DIR when set, else the process
-// working directory. See LoadFrom.
+// Load reads .chitonrc (TOML) from ProjectDir, merges CHITON_* environment overrides, and returns a
+// Config with sane defaults. See LoadFrom.
 func Load() (*Config, error) {
 	return LoadFrom(ProjectDir())
 }
 
-// LoadFrom is Load anchored at an explicit directory. A relative graph_path is
-// resolved against dir only when dir is not the working directory, so plain CLI
-// invocations keep returning the relative default they always have.
+// LoadFrom is Load anchored at dir. A relative graph_path is resolved against dir only when dir is not
+// ".", so plain CLI invocations keep their relative default.
 func LoadFrom(dir string) (*Config, error) {
 	if dir == "" {
 		dir = "."
@@ -88,22 +71,14 @@ func LoadFrom(dir string) (*Config, error) {
 	v.SetDefault("embed.provider", "ollama")
 	v.SetDefault("embed.model", "nomic-embed-text")
 	v.SetDefault("embed.endpoint", "http://localhost:11434")
-	// No embed.dim default on purpose: leaving it 0 lets each provider apply its
-	// own native dimension (Ollama 768, hash 256) instead of forcing the Ollama
-	// size onto the hash provider. An explicit embed.dim / CHITON_EMBED_DIM wins.
-	//
-	// It still has to be bound explicitly, though. Unmarshal only walks
-	// AllKeys(), and AutomaticEnv alone does not put a key there — so without
-	// this BindEnv, embed.dim is the one setting where the environment override
-	// is silently dropped while every other CHITON_* var works.
+	// No embed.dim default: 0 lets each provider use its native dimension (Ollama 768, hash 256). It must
+	// still be bound, as Unmarshal only walks AllKeys() and would silently drop CHITON_EMBED_DIM.
 	if err := v.BindEnv("embed.dim"); err != nil {
 		return nil, err
 	}
 	v.SetDefault("semantic.confidence_threshold", 0.5)
 
-	// Allow CHITON_EMBED_PROVIDER, CHITON_SEMANTIC_CONFIDENCE_THRESHOLD, etc.
-	// The key replacer maps nested keys (embed.provider) to flat env vars
-	// (CHITON_EMBED_PROVIDER).
+	// The replacer maps nested keys to flat env vars: embed.provider -> CHITON_EMBED_PROVIDER.
 	v.SetEnvPrefix("CHITON")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
@@ -119,9 +94,8 @@ func LoadFrom(dir string) (*Config, error) {
 	return &cfg, nil
 }
 
-// resolveAgainst makes a relative path absolute against dir. It is a no-op for
-// absolute paths, for an empty path, and for dir == "." — the last so that CLI
-// runs keep printing the familiar relative "./chiton-out/graph.kuzu".
+// resolveAgainst makes a relative path absolute against dir. It is a no-op for absolute or empty paths
+// and for dir ".", so CLI runs keep printing the familiar relative "./chiton-out/graph.kuzu".
 func resolveAgainst(dir, path string) string {
 	if path == "" || dir == "" || dir == "." || filepath.IsAbs(path) {
 		return path

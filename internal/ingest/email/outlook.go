@@ -2,6 +2,7 @@
 
 // The Outlook/Microsoft Graph mail source. Excluded from the default build —
 // see outlook_stub.go for why, and for the msgraph-free counterpart.
+
 package email
 
 import (
@@ -16,20 +17,8 @@ import (
 	"github.com/microsoftgraph/msgraph-sdk-go/users"
 )
 
-// outlookScopes requests the application (.default) scope: app-only auth with
-// the Mail.Read application permission (admin-consented). This mirrors the Teams
-// transcript client and is the unattended-daemon path.
+// outlookScopes is the app-only .default scope; it needs the admin-consented Mail.Read application permission.
 var outlookScopes = []string{"https://graph.microsoft.com/.default"}
-
-// OutlookConfig configures the Microsoft Graph mail source (app-only auth).
-type OutlookConfig struct {
-	TenantID     string
-	ClientID     string
-	ClientSecret string
-	// UserID is the mailbox owner's id or UPN: messages are read under
-	// /users/{UserID}/messages (app-only has no /me).
-	UserID string
-}
 
 // OutlookSource is the Microsoft Graph implementation of Source.
 type OutlookSource struct {
@@ -70,9 +59,7 @@ func NewOutlookSourceFromEnv() (*OutlookSource, error) {
 // Name implements Source.
 func (s *OutlookSource) Name() string { return "outlook" }
 
-// Messages implements Source: it lists the mailbox's most recent messages
-// (optionally filtered by received date) and maps them to provider-agnostic
-// Messages.
+// Messages implements Source: it lists the mailbox's newest messages, optionally filtered by received date.
 func (s *OutlookSource) Messages(ctx context.Context, opts Query) ([]Message, error) {
 	top := int32(50)
 	if opts.Max > 0 {
@@ -96,8 +83,9 @@ func (s *OutlookSource) Messages(ctx context.Context, opts Query) ([]Message, er
 	if coll == nil {
 		return nil, nil
 	}
-	var msgs []Message
-	for _, gm := range coll.GetValue() {
+	vals := coll.GetValue()
+	msgs := make([]Message, 0, len(vals))
+	for _, gm := range vals {
 		msgs = append(msgs, outlookToMessage(gm))
 	}
 	return msgs, nil
@@ -115,9 +103,7 @@ func outlookToMessage(gm models.Messageable) Message {
 	if v := gm.GetConversationId(); v != nil {
 		m.ThreadID = *v
 	}
-	// In-Reply-To lives in the internetMessageHeaders collection (requested via
-	// $select), not as a first-class property — pull it out so reply threading
-	// works for Outlook the same way it does for local/Gmail.
+	// In-Reply-To is only in internetMessageHeaders (requested via $select), not a first-class property.
 	for _, h := range gm.GetInternetMessageHeaders() {
 		name, val := "", ""
 		if v := h.GetName(); v != nil {

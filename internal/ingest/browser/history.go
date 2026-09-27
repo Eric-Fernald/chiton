@@ -1,15 +1,5 @@
-// Package browser ingests local web-browser history (Chrome, Edge, Brave and
-// other Chromium-family browsers) into chiton's graph as `url` nodes, one per
-// visited page. It is the Phase 6 "browser history ingestion" stretch item.
-//
-// The History store is a SQLite database. Chromium keeps the live file locked
-// while the browser runs, so we copy it to a temp location and read the copy
-// with the pure-Go modernc.org/sqlite driver (no CGo — same pure-Go principle
-// that put BadgerDB ahead of Kuzu). Only page metadata (URL, title, visit count,
-// last-visit time) is ingested; chiton never fetches the pages themselves, so
-// browser ingest does no network I/O and raises no SSRF surface. To pull a
-// page's content into the graph, use `chiton add-url`, which has the fetch path
-// and its SSRF guards.
+// Package browser ingests Chromium-family browser history as `url` nodes, reading only page metadata from a
+// copy of the locked SQLite History file; it never fetches pages, so it has no network or SSRF surface.
 package browser
 
 import (
@@ -26,9 +16,8 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// chromeEpochOffsetMicros is the gap, in microseconds, between the Windows/
-// Chrome epoch (1601-01-01 UTC) and the Unix epoch (1970-01-01 UTC). Chromium
-// stores urls.last_visit_time as microseconds since 1601.
+// chromeEpochOffsetMicros is the gap between the Chrome epoch (1601-01-01 UTC), from which
+// urls.last_visit_time counts microseconds, and the Unix epoch.
 const chromeEpochOffsetMicros int64 = 11644473600 * 1_000_000
 
 // Visit is one row from a Chromium History database's `urls` table.
@@ -46,10 +35,8 @@ type readOptions struct {
 	minVisits int
 }
 
-// readHistory copies a (possibly live, locked) Chromium History SQLite file to a
-// temp location, opens that copy with the pure-Go driver, and returns its visit
-// rows. Copying first is the standard way to read the file without contending
-// for the lock Chromium holds while running.
+// readHistory reads visit rows from a temp copy of a Chromium History file, avoiding contention for
+// the lock Chromium holds on the live file while running.
 func readHistory(ctx context.Context, dbPath string, opts readOptions) ([]Visit, error) {
 	tmp, cleanup, err := copyForRead(dbPath)
 	if err != nil {
@@ -57,9 +44,8 @@ func readHistory(ctx context.Context, dbPath string, opts readOptions) ([]Visit,
 	}
 	defer cleanup()
 
-	// The copy is a disposable temp file, so opening it read-write is harmless;
-	// we only ever issue SELECTs. A plain forward-slashed path is the most
-	// portable DSN for the modernc driver across Windows/macOS/Linux.
+	// The copy is disposable, so opening it read-write is harmless; a forward-slashed path is the most
+	// portable DSN for the modernc driver.
 	db, err := sql.Open("sqlite", filepath.ToSlash(tmp))
 	if err != nil {
 		return nil, fmt.Errorf("open history db: %w", err)
@@ -121,9 +107,11 @@ func buildQuery(opts readOptions) (string, []any) {
 	return q, args
 }
 
-// copyForRead copies path (and its -wal / -shm sidecars when present) into a new
-// temp dir, returning the copied main-file path and a cleanup func that removes
-// the dir.
+// sidecarSuffixes are the WAL/SHM/rollback-journal files SQLite keeps beside a History DB.
+var sidecarSuffixes = []string{"-wal", "-shm", "-journal"}
+
+// copyForRead copies path and any sidecars into a new temp dir, returning the copy's path and a
+// cleanup func that removes the dir.
 func copyForRead(path string) (string, func(), error) {
 	dir, err := os.MkdirTemp("", "chiton-hist-*")
 	if err != nil {
@@ -137,7 +125,7 @@ func copyForRead(path string) (string, func(), error) {
 	}
 	// Best-effort: a checkpoint-pending DB needs its WAL/SHM (or rollback journal)
 	// alongside the main file to read consistently.
-	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+	for _, suffix := range sidecarSuffixes {
 		_ = copyFile(path+suffix, dst+suffix)
 	}
 	return dst, cleanup, nil

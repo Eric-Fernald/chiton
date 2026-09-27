@@ -1,0 +1,2396 @@
+# aider / fresh
+## install aider
+{
+  "installer": "aider",
+  "wrote": [
+    "$REPO/CONVENTIONS.md",
+    "$REPO/.aider.conf.yml"
+  ],
+  "notes": [
+    "Aider has no MCP support; chiton's MCP tools are unavailable here.",
+    "The rules block tells Aider to shell out to the `chiton` CLI instead — run `chiton build .` first."
+  ]
+}
++++ $REPO/.aider.conf.yml
+read:
+    - CONVENTIONS.md
+
++++ $REPO/CONVENTIONS.md
+<!-- chiton:start -->
+<rules prompt>
+<!-- chiton:end -->
+
+## install aider
+{
+  "installer": "aider",
+  "wrote": [
+    "$REPO/CONVENTIONS.md",
+    "$REPO/.aider.conf.yml"
+  ],
+  "notes": [
+    "Aider has no MCP support; chiton's MCP tools are unavailable here.",
+    "The rules block tells Aider to shell out to the `chiton` CLI instead — run `chiton build .` first."
+  ]
+}
+## doctor aider
+{
+  "installer": "aider",
+  "detected": true,
+  "registered": true,
+  "ok": [
+    "$REPO/CONVENTIONS.md: chiton rules block present",
+    "$REPO/.aider.conf.yml: reads CONVENTIONS.md"
+  ]
+}
+## uninstall aider
+{
+  "installer": "aider",
+  "wrote": [
+    "$REPO/.aider.conf.yml",
+    "$REPO/CONVENTIONS.md"
+  ]
+}
+--- removed $REPO/.aider.conf.yml
+--- removed $REPO/CONVENTIONS.md
+## doctor aider
+{
+  "installer": "aider",
+  "detected": false,
+  "registered": false,
+  "issues": [
+    "$REPO/CONVENTIONS.md: no chiton rules block",
+    "$REPO/.aider.conf.yml: CONVENTIONS.md not in `read:` (run `chiton install --assistant aider`)"
+  ]
+}
+## uninstall aider
+{
+  "installer": "aider",
+  "skipped": [
+    "$REPO/.aider.conf.yml",
+    "$REPO/CONVENTIONS.md"
+  ]
+}
+# aider / seeded
+## install aider
+{
+  "installer": "aider",
+  "wrote": [
+    "$REPO/CONVENTIONS.md",
+    "$REPO/.aider.conf.yml"
+  ],
+  "notes": [
+    "Aider has no MCP support; chiton's MCP tools are unavailable here.",
+    "The rules block tells Aider to shell out to the `chiton` CLI instead — run `chiton build .` first."
+  ]
+}
++++ $REPO/.aider.conf.yml
+auto-commits: false
+read:
+    - EXISTING.md
+    - CONVENTIONS.md
+
++++ $REPO/CONVENTIONS.md
+# User rules
+
+Keep this.
+
+<!-- chiton:start -->
+<rules prompt>
+<!-- chiton:end -->
+
+## doctor aider
+{
+  "installer": "aider",
+  "detected": true,
+  "registered": true,
+  "ok": [
+    "$REPO/CONVENTIONS.md: chiton rules block present",
+    "$REPO/.aider.conf.yml: reads CONVENTIONS.md"
+  ]
+}
+## uninstall aider
+{
+  "installer": "aider",
+  "wrote": [
+    "$REPO/.aider.conf.yml",
+    "$REPO/CONVENTIONS.md"
+  ]
+}
++++ $REPO/.aider.conf.yml
+auto-commits: false
+read:
+    - EXISTING.md
+
++++ $REPO/CONVENTIONS.md
+# User rules
+
+Keep this.
+
+## doctor aider
+{
+  "installer": "aider",
+  "detected": true,
+  "registered": false,
+  "issues": [
+    "$REPO/CONVENTIONS.md: no chiton rules block",
+    "$REPO/.aider.conf.yml: CONVENTIONS.md not in `read:` (run `chiton install --assistant aider`)"
+  ]
+}
+# aider / user-scope
+## install aider
+err: installer does not support --user-scope
+{
+  "installer": "aider"
+}
+## doctor aider
+{
+  "installer": "aider",
+  "detected": true,
+  "registered": false,
+  "issues": [
+    "$REPO/CONVENTIONS.md: no chiton rules block",
+    "$REPO/.aider.conf.yml: CONVENTIONS.md not in `read:` (run `chiton install --assistant aider`)"
+  ]
+}
+## uninstall aider
+{
+  "installer": "aider",
+  "skipped": [
+    "$REPO/.aider.conf.yml",
+    "$REPO/CONVENTIONS.md"
+  ]
+}
+# aider / malformed
+## doctor aider
+{
+  "installer": "aider",
+  "detected": true,
+  "registered": false,
+  "ok": [
+    "$REPO/CONVENTIONS.md: chiton rules block present"
+  ],
+  "issues": [
+    "$REPO/.aider.conf.yml: yaml: line 1: did not find expected ',' or ']'"
+  ]
+}
+## install aider
+err: parse $REPO/.aider.conf.yml: yaml: line 1: did not find expected ',' or ']'
+{
+  "installer": "aider",
+  "wrote": [
+    "$REPO/CONVENTIONS.md"
+  ]
+}
++++ $REPO/CONVENTIONS.md
+<!-- chiton:end -->
+user text
+<!-- chiton:start -->
+stale
+
+<!-- chiton:start -->
+<rules prompt>
+<!-- chiton:end -->
+
+## uninstall aider
+err: parse $REPO/.aider.conf.yml: yaml: line 1: did not find expected ',' or ']'
+{
+  "installer": "aider"
+}
+# antigravity / fresh
+## install antigravity
+{
+  "installer": "antigravity",
+  "wrote": [
+    "$HOME/.gemini/config/mcp_config.json",
+    "$REPO/AGENTS.md"
+  ],
+  "notes": [
+    "MCP config is user-scope (~/.gemini/config/mcp_config.json); it applies to Antigravity in every project."
+  ]
+}
++++ $HOME/.gemini/config/mcp_config.json
+{
+  "mcpServers": {
+    "chiton": {
+      "command": "/fake/chiton",
+      "args": [
+        "serve",
+        "--stdio"
+      ]
+    }
+  }
+}
+
++++ $REPO/AGENTS.md
+<!-- chiton:start -->
+<rules prompt>
+<!-- chiton:end -->
+
+## install antigravity
+{
+  "installer": "antigravity",
+  "wrote": [
+    "$HOME/.gemini/config/mcp_config.json",
+    "$REPO/AGENTS.md"
+  ],
+  "notes": [
+    "$HOME/.gemini/config/mcp_config.json: refreshed existing chiton entry",
+    "MCP config is user-scope (~/.gemini/config/mcp_config.json); it applies to Antigravity in every project."
+  ]
+}
+## doctor antigravity
+{
+  "installer": "antigravity",
+  "detected": false,
+  "registered": true,
+  "ok": [
+    "$HOME/.gemini/config/mcp_config.json: chiton server registered",
+    "$REPO/AGENTS.md: chiton rules block present"
+  ]
+}
+## uninstall antigravity
+{
+  "installer": "antigravity",
+  "wrote": [
+    "$HOME/.gemini/config/mcp_config.json",
+    "$REPO/AGENTS.md"
+  ]
+}
+--- removed $HOME/.gemini/config/mcp_config.json
+--- removed $REPO/AGENTS.md
+## doctor antigravity
+{
+  "installer": "antigravity",
+  "detected": false,
+  "registered": false,
+  "issues": [
+    "$HOME/.gemini/config/mcp_config.json: no chiton entry (run `chiton install --assistant antigravity`)",
+    "$REPO/AGENTS.md: no chiton rules block"
+  ]
+}
+## uninstall antigravity
+{
+  "installer": "antigravity",
+  "skipped": [
+    "$HOME/.gemini/config/mcp_config.json",
+    "$REPO/AGENTS.md"
+  ]
+}
+# antigravity / seeded
+## install antigravity
+{
+  "installer": "antigravity",
+  "wrote": [
+    "$HOME/.gemini/config/mcp_config.json",
+    "$REPO/AGENTS.md"
+  ],
+  "notes": [
+    "MCP config is user-scope (~/.gemini/config/mcp_config.json); it applies to Antigravity in every project."
+  ]
+}
++++ $HOME/.gemini/config/mcp_config.json
+{
+  "extra": true,
+  "mcpServers": {
+    "chiton": {
+      "command": "/fake/chiton",
+      "args": [
+        "serve",
+        "--stdio",
+        "--graph",
+        "./g/graph.badger"
+      ]
+    },
+    "other": {
+      "args": [],
+      "command": "x"
+    }
+  }
+}
+
++++ $REPO/AGENTS.md
+# User rules
+
+Keep this.
+
+<!-- chiton:start -->
+<rules prompt>
+<!-- chiton:end -->
+
+## doctor antigravity
+{
+  "installer": "antigravity",
+  "detected": false,
+  "registered": true,
+  "ok": [
+    "$HOME/.gemini/config/mcp_config.json: chiton server registered",
+    "$REPO/AGENTS.md: chiton rules block present"
+  ]
+}
+## uninstall antigravity
+{
+  "installer": "antigravity",
+  "wrote": [
+    "$HOME/.gemini/config/mcp_config.json",
+    "$REPO/AGENTS.md"
+  ]
+}
++++ $HOME/.gemini/config/mcp_config.json
+{
+  "extra": true,
+  "mcpServers": {
+    "other": {
+      "args": [],
+      "command": "x"
+    }
+  }
+}
+
++++ $REPO/AGENTS.md
+# User rules
+
+Keep this.
+
+## doctor antigravity
+{
+  "installer": "antigravity",
+  "detected": false,
+  "registered": false,
+  "issues": [
+    "$HOME/.gemini/config/mcp_config.json: no chiton entry (run `chiton install --assistant antigravity`)",
+    "$REPO/AGENTS.md: no chiton rules block"
+  ]
+}
+# antigravity / user-scope
+## install antigravity
+{
+  "installer": "antigravity",
+  "wrote": [
+    "$HOME/.gemini/config/mcp_config.json",
+    "$REPO/AGENTS.md"
+  ],
+  "notes": [
+    "MCP config is user-scope (~/.gemini/config/mcp_config.json); it applies to Antigravity in every project."
+  ]
+}
++++ $HOME/.gemini/config/mcp_config.json
+{
+  "extra": true,
+  "mcpServers": {
+    "chiton": {
+      "command": "/fake/chiton",
+      "args": [
+        "serve",
+        "--stdio"
+      ]
+    },
+    "other": {
+      "args": [],
+      "command": "x"
+    }
+  }
+}
+
++++ $REPO/AGENTS.md
+# User rules
+
+Keep this.
+
+<!-- chiton:start -->
+<rules prompt>
+<!-- chiton:end -->
+
+## doctor antigravity
+{
+  "installer": "antigravity",
+  "detected": false,
+  "registered": true,
+  "ok": [
+    "$HOME/.gemini/config/mcp_config.json: chiton server registered",
+    "$REPO/AGENTS.md: chiton rules block present"
+  ]
+}
+## uninstall antigravity
+{
+  "installer": "antigravity",
+  "wrote": [
+    "$HOME/.gemini/config/mcp_config.json",
+    "$REPO/AGENTS.md"
+  ]
+}
++++ $HOME/.gemini/config/mcp_config.json
+{
+  "extra": true,
+  "mcpServers": {
+    "other": {
+      "args": [],
+      "command": "x"
+    }
+  }
+}
+
++++ $REPO/AGENTS.md
+# User rules
+
+Keep this.
+
+# antigravity / malformed
+## doctor antigravity
+{
+  "installer": "antigravity",
+  "detected": false,
+  "registered": false,
+  "ok": [
+    "$REPO/AGENTS.md: chiton rules block present"
+  ],
+  "issues": [
+    "$HOME/.gemini/config/mcp_config.json: invalid character 'n' looking for beginning of object key string"
+  ]
+}
+## install antigravity
+err: parse $HOME/.gemini/config/mcp_config.json: invalid character 'n' looking for beginning of object key string
+{
+  "installer": "antigravity"
+}
+## uninstall antigravity
+err: parse $HOME/.gemini/config/mcp_config.json: invalid character 'n' looking for beginning of object key string
+{
+  "installer": "antigravity"
+}
+# claude-code / fresh
+## install claude-code
+{
+  "installer": "claude-code",
+  "wrote": [
+    "$REPO/.mcp.json",
+    "$REPO/CLAUDE.md",
+    "$REPO/.claude/skills/chiton/SKILL.md",
+    "$REPO/.claude/skills/chiton-subagent-tasks/SKILL.md"
+  ],
+  "notes": [
+    "Restart Claude Code to pick up the new MCP server."
+  ]
+}
++++ $REPO/.claude/skills/chiton-subagent-tasks/SKILL.md
+<subagent-tasks skill markdown>
++++ $REPO/.claude/skills/chiton/SKILL.md
+<graph skill markdown>
++++ $REPO/.mcp.json
+{
+  "mcpServers": {
+    "chiton": {
+      "command": "/fake/chiton",
+      "args": [
+        "serve",
+        "--stdio"
+      ]
+    }
+  }
+}
+
++++ $REPO/CLAUDE.md
+<!-- chiton:start -->
+<rules prompt>
+<!-- chiton:end -->
+
+## install claude-code
+{
+  "installer": "claude-code",
+  "wrote": [
+    "$REPO/.mcp.json",
+    "$REPO/CLAUDE.md",
+    "$REPO/.claude/skills/chiton/SKILL.md",
+    "$REPO/.claude/skills/chiton-subagent-tasks/SKILL.md"
+  ],
+  "notes": [
+    "$REPO/.mcp.json: refreshed existing chiton entry",
+    "Restart Claude Code to pick up the new MCP server."
+  ]
+}
+## doctor claude-code
+{
+  "installer": "claude-code",
+  "detected": true,
+  "registered": true,
+  "ok": [
+    "$REPO/.mcp.json: chiton server registered",
+    "$REPO/CLAUDE.md: chiton rules block present",
+    "$REPO/.claude/skills/chiton/SKILL.md: skill installed",
+    "$REPO/.claude/skills/chiton-subagent-tasks/SKILL.md: skill installed"
+  ]
+}
+## uninstall claude-code
+{
+  "installer": "claude-code",
+  "wrote": [
+    "$REPO/.mcp.json",
+    "$REPO/CLAUDE.md",
+    "$REPO/.claude/skills/chiton",
+    "$REPO/.claude/skills/chiton-subagent-tasks"
+  ]
+}
+--- removed $REPO/.claude/skills/chiton-subagent-tasks/SKILL.md
+--- removed $REPO/.claude/skills/chiton/SKILL.md
+--- removed $REPO/.mcp.json
+--- removed $REPO/CLAUDE.md
+## doctor claude-code
+{
+  "installer": "claude-code",
+  "detected": true,
+  "registered": false,
+  "issues": [
+    "$REPO/.mcp.json: no chiton entry (run `chiton install --assistant claude-code`)",
+    "$REPO/CLAUDE.md: no chiton rules block",
+    "$REPO/.claude/skills/chiton/SKILL.md: skill not installed",
+    "$REPO/.claude/skills/chiton-subagent-tasks/SKILL.md: skill not installed"
+  ]
+}
+## uninstall claude-code
+{
+  "installer": "claude-code",
+  "skipped": [
+    "$REPO/.mcp.json",
+    "$REPO/CLAUDE.md",
+    "$REPO/.claude/skills/chiton",
+    "$REPO/.claude/skills/chiton-subagent-tasks"
+  ]
+}
+# claude-code / seeded
+## install claude-code
+{
+  "installer": "claude-code",
+  "wrote": [
+    "$REPO/.mcp.json",
+    "$REPO/CLAUDE.md",
+    "$REPO/.claude/skills/chiton/SKILL.md",
+    "$REPO/.claude/skills/chiton-subagent-tasks/SKILL.md"
+  ],
+  "notes": [
+    "Restart Claude Code to pick up the new MCP server."
+  ]
+}
++++ $REPO/.claude/skills/chiton-subagent-tasks/SKILL.md
+<subagent-tasks skill markdown>
++++ $REPO/.claude/skills/chiton/SKILL.md
+<graph skill markdown>
++++ $REPO/.mcp.json
+{
+  "extra": true,
+  "mcpServers": {
+    "chiton": {
+      "command": "/fake/chiton",
+      "args": [
+        "serve",
+        "--stdio",
+        "--graph",
+        "./g/graph.badger"
+      ]
+    },
+    "other": {
+      "args": [],
+      "command": "x"
+    }
+  }
+}
+
++++ $REPO/CLAUDE.md
+# User rules
+
+Keep this.
+
+<!-- chiton:start -->
+<rules prompt>
+<!-- chiton:end -->
+
+## doctor claude-code
+{
+  "installer": "claude-code",
+  "detected": true,
+  "registered": true,
+  "ok": [
+    "$REPO/.mcp.json: chiton server registered",
+    "$REPO/CLAUDE.md: chiton rules block present",
+    "$REPO/.claude/skills/chiton/SKILL.md: skill installed",
+    "$REPO/.claude/skills/chiton-subagent-tasks/SKILL.md: skill installed"
+  ]
+}
+## uninstall claude-code
+{
+  "installer": "claude-code",
+  "wrote": [
+    "$REPO/.mcp.json",
+    "$REPO/CLAUDE.md",
+    "$REPO/.claude/skills/chiton",
+    "$REPO/.claude/skills/chiton-subagent-tasks"
+  ]
+}
+--- removed $REPO/.claude/skills/chiton-subagent-tasks/SKILL.md
+--- removed $REPO/.claude/skills/chiton/SKILL.md
++++ $REPO/.mcp.json
+{
+  "extra": true,
+  "mcpServers": {
+    "other": {
+      "args": [],
+      "command": "x"
+    }
+  }
+}
+
++++ $REPO/CLAUDE.md
+# User rules
+
+Keep this.
+
+## doctor claude-code
+{
+  "installer": "claude-code",
+  "detected": true,
+  "registered": false,
+  "issues": [
+    "$REPO/.mcp.json: no chiton entry (run `chiton install --assistant claude-code`)",
+    "$REPO/CLAUDE.md: no chiton rules block",
+    "$REPO/.claude/skills/chiton/SKILL.md: skill not installed",
+    "$REPO/.claude/skills/chiton-subagent-tasks/SKILL.md: skill not installed"
+  ]
+}
+# claude-code / user-scope
+## install claude-code
+err: installer does not support --user-scope
+{
+  "installer": "claude-code"
+}
+## doctor claude-code
+{
+  "installer": "claude-code",
+  "detected": true,
+  "registered": false,
+  "issues": [
+    "$REPO/.mcp.json: no chiton entry (run `chiton install --assistant claude-code`)",
+    "$REPO/CLAUDE.md: no chiton rules block",
+    "$REPO/.claude/skills/chiton/SKILL.md: skill not installed",
+    "$REPO/.claude/skills/chiton-subagent-tasks/SKILL.md: skill not installed"
+  ]
+}
+## uninstall claude-code
+{
+  "installer": "claude-code",
+  "skipped": [
+    "$REPO/.mcp.json",
+    "$REPO/CLAUDE.md",
+    "$REPO/.claude/skills/chiton",
+    "$REPO/.claude/skills/chiton-subagent-tasks"
+  ]
+}
+# claude-code / malformed
+## doctor claude-code
+{
+  "installer": "claude-code",
+  "detected": true,
+  "registered": false,
+  "ok": [
+    "$REPO/CLAUDE.md: chiton rules block present"
+  ],
+  "issues": [
+    "$REPO/.mcp.json: invalid character 'n' looking for beginning of object key string",
+    "$REPO/.claude/skills/chiton/SKILL.md: skill not installed",
+    "$REPO/.claude/skills/chiton-subagent-tasks/SKILL.md: skill not installed"
+  ]
+}
+## install claude-code
+err: parse $REPO/.mcp.json: invalid character 'n' looking for beginning of object key string
+{
+  "installer": "claude-code"
+}
+## uninstall claude-code
+err: parse $REPO/.mcp.json: invalid character 'n' looking for beginning of object key string
+{
+  "installer": "claude-code"
+}
+# codex / fresh
+## install codex
+{
+  "installer": "codex",
+  "wrote": [
+    "$HOME/.codex/config.toml",
+    "$REPO/AGENTS.md"
+  ],
+  "notes": [
+    "MCP config is user-scope (~/.codex/config.toml); it applies to Codex in every project."
+  ]
+}
++++ $HOME/.codex/config.toml
+[mcp_servers]
+[mcp_servers.chiton]
+args = ['serve', '--stdio']
+command = '/fake/chiton'
+
++++ $REPO/AGENTS.md
+<!-- chiton:start -->
+<rules prompt>
+<!-- chiton:end -->
+
+## install codex
+{
+  "installer": "codex",
+  "wrote": [
+    "$HOME/.codex/config.toml",
+    "$REPO/AGENTS.md"
+  ],
+  "notes": [
+    "$HOME/.codex/config.toml: refreshed existing chiton entry",
+    "MCP config is user-scope (~/.codex/config.toml); it applies to Codex in every project."
+  ]
+}
+## doctor codex
+{
+  "installer": "codex",
+  "detected": false,
+  "registered": true,
+  "ok": [
+    "$HOME/.codex/config.toml: chiton server registered",
+    "$REPO/AGENTS.md: chiton rules block present"
+  ]
+}
+## uninstall codex
+{
+  "installer": "codex",
+  "wrote": [
+    "$HOME/.codex/config.toml",
+    "$REPO/AGENTS.md"
+  ]
+}
+--- removed $HOME/.codex/config.toml
+--- removed $REPO/AGENTS.md
+## doctor codex
+{
+  "installer": "codex",
+  "detected": false,
+  "registered": false,
+  "issues": [
+    "$HOME/.codex/config.toml: no chiton entry (run `chiton install --assistant codex`)",
+    "$REPO/AGENTS.md: no chiton rules block"
+  ]
+}
+## uninstall codex
+{
+  "installer": "codex",
+  "skipped": [
+    "$HOME/.codex/config.toml",
+    "$REPO/AGENTS.md"
+  ]
+}
+# codex / seeded
+## install codex
+{
+  "installer": "codex",
+  "wrote": [
+    "$HOME/.codex/config.toml",
+    "$REPO/AGENTS.md"
+  ],
+  "notes": [
+    "MCP config is user-scope (~/.codex/config.toml); it applies to Codex in every project."
+  ]
+}
++++ $HOME/.codex/config.toml
+model = 'o3'
+
+[mcp_servers]
+[mcp_servers.chiton]
+args = ['serve', '--stdio', '--graph', './g/graph.badger']
+command = '/fake/chiton'
+
+[mcp_servers.other]
+args = ['y']
+command = 'x'
+
++++ $REPO/AGENTS.md
+# User rules
+
+Keep this.
+
+<!-- chiton:start -->
+<rules prompt>
+<!-- chiton:end -->
+
+## doctor codex
+{
+  "installer": "codex",
+  "detected": false,
+  "registered": true,
+  "ok": [
+    "$HOME/.codex/config.toml: chiton server registered",
+    "$REPO/AGENTS.md: chiton rules block present"
+  ]
+}
+## uninstall codex
+{
+  "installer": "codex",
+  "wrote": [
+    "$HOME/.codex/config.toml",
+    "$REPO/AGENTS.md"
+  ]
+}
++++ $HOME/.codex/config.toml
+model = 'o3'
+
+[mcp_servers]
+[mcp_servers.other]
+args = ['y']
+command = 'x'
+
++++ $REPO/AGENTS.md
+# User rules
+
+Keep this.
+
+## doctor codex
+{
+  "installer": "codex",
+  "detected": false,
+  "registered": false,
+  "issues": [
+    "$HOME/.codex/config.toml: no chiton entry (run `chiton install --assistant codex`)",
+    "$REPO/AGENTS.md: no chiton rules block"
+  ]
+}
+# codex / user-scope
+## install codex
+{
+  "installer": "codex",
+  "wrote": [
+    "$HOME/.codex/config.toml",
+    "$REPO/AGENTS.md"
+  ],
+  "notes": [
+    "MCP config is user-scope (~/.codex/config.toml); it applies to Codex in every project."
+  ]
+}
++++ $HOME/.codex/config.toml
+model = 'o3'
+
+[mcp_servers]
+[mcp_servers.chiton]
+args = ['serve', '--stdio']
+command = '/fake/chiton'
+
+[mcp_servers.other]
+args = ['y']
+command = 'x'
+
++++ $REPO/AGENTS.md
+# User rules
+
+Keep this.
+
+<!-- chiton:start -->
+<rules prompt>
+<!-- chiton:end -->
+
+## doctor codex
+{
+  "installer": "codex",
+  "detected": false,
+  "registered": true,
+  "ok": [
+    "$HOME/.codex/config.toml: chiton server registered",
+    "$REPO/AGENTS.md: chiton rules block present"
+  ]
+}
+## uninstall codex
+{
+  "installer": "codex",
+  "wrote": [
+    "$HOME/.codex/config.toml",
+    "$REPO/AGENTS.md"
+  ]
+}
++++ $HOME/.codex/config.toml
+model = 'o3'
+
+[mcp_servers]
+[mcp_servers.other]
+args = ['y']
+command = 'x'
+
++++ $REPO/AGENTS.md
+# User rules
+
+Keep this.
+
+# codex / malformed
+## doctor codex
+{
+  "installer": "codex",
+  "detected": false,
+  "registered": false,
+  "ok": [
+    "$REPO/AGENTS.md: chiton rules block present"
+  ],
+  "issues": [
+    "$HOME/.codex/config.toml: toml: unexpected character U+000A at start of value"
+  ]
+}
+## install codex
+err: parse $HOME/.codex/config.toml: toml: unexpected character U+000A at start of value
+{
+  "installer": "codex"
+}
+## uninstall codex
+err: parse $HOME/.codex/config.toml: toml: unexpected character U+000A at start of value
+{
+  "installer": "codex"
+}
+# copilot-cli / fresh
+## install copilot-cli
+{
+  "installer": "copilot-cli",
+  "wrote": [
+    "$HOME/.copilot/mcp-config.json",
+    "$REPO/AGENTS.md"
+  ],
+  "notes": [
+    "MCP config is user-scope (~/.copilot/mcp-config.json); it applies to Copilot CLI in every project."
+  ]
+}
++++ $HOME/.copilot/mcp-config.json
+{
+  "mcpServers": {
+    "chiton": {
+      "type": "local",
+      "command": "/fake/chiton",
+      "args": [
+        "serve",
+        "--stdio"
+      ],
+      "env": {},
+      "tools": [
+        "*"
+      ]
+    }
+  }
+}
+
++++ $REPO/AGENTS.md
+<!-- chiton:start -->
+<rules prompt>
+<!-- chiton:end -->
+
+## install copilot-cli
+{
+  "installer": "copilot-cli",
+  "wrote": [
+    "$HOME/.copilot/mcp-config.json",
+    "$REPO/AGENTS.md"
+  ],
+  "notes": [
+    "$HOME/.copilot/mcp-config.json: refreshed existing chiton entry",
+    "MCP config is user-scope (~/.copilot/mcp-config.json); it applies to Copilot CLI in every project."
+  ]
+}
+## doctor copilot-cli
+{
+  "installer": "copilot-cli",
+  "detected": false,
+  "registered": true,
+  "ok": [
+    "$HOME/.copilot/mcp-config.json: chiton server registered",
+    "$REPO/AGENTS.md: chiton rules block present"
+  ]
+}
+## uninstall copilot-cli
+{
+  "installer": "copilot-cli",
+  "wrote": [
+    "$HOME/.copilot/mcp-config.json",
+    "$REPO/AGENTS.md"
+  ]
+}
+--- removed $HOME/.copilot/mcp-config.json
+--- removed $REPO/AGENTS.md
+## doctor copilot-cli
+{
+  "installer": "copilot-cli",
+  "detected": false,
+  "registered": false,
+  "issues": [
+    "$HOME/.copilot/mcp-config.json: no chiton entry (run `chiton install --assistant copilot-cli`)",
+    "$REPO/AGENTS.md: no chiton rules block"
+  ]
+}
+## uninstall copilot-cli
+{
+  "installer": "copilot-cli",
+  "skipped": [
+    "$HOME/.copilot/mcp-config.json",
+    "$REPO/AGENTS.md"
+  ]
+}
+# copilot-cli / seeded
+## install copilot-cli
+{
+  "installer": "copilot-cli",
+  "wrote": [
+    "$HOME/.copilot/mcp-config.json",
+    "$REPO/AGENTS.md"
+  ],
+  "notes": [
+    "MCP config is user-scope (~/.copilot/mcp-config.json); it applies to Copilot CLI in every project."
+  ]
+}
++++ $HOME/.copilot/mcp-config.json
+{
+  "extra": true,
+  "mcpServers": {
+    "chiton": {
+      "type": "local",
+      "command": "/fake/chiton",
+      "args": [
+        "serve",
+        "--stdio",
+        "--graph",
+        "./g/graph.badger"
+      ],
+      "env": {},
+      "tools": [
+        "*"
+      ]
+    },
+    "other": {
+      "args": [],
+      "command": "x"
+    }
+  }
+}
+
++++ $REPO/AGENTS.md
+# User rules
+
+Keep this.
+
+<!-- chiton:start -->
+<rules prompt>
+<!-- chiton:end -->
+
+## doctor copilot-cli
+{
+  "installer": "copilot-cli",
+  "detected": false,
+  "registered": true,
+  "ok": [
+    "$HOME/.copilot/mcp-config.json: chiton server registered",
+    "$REPO/AGENTS.md: chiton rules block present"
+  ]
+}
+## uninstall copilot-cli
+{
+  "installer": "copilot-cli",
+  "wrote": [
+    "$HOME/.copilot/mcp-config.json",
+    "$REPO/AGENTS.md"
+  ]
+}
++++ $HOME/.copilot/mcp-config.json
+{
+  "extra": true,
+  "mcpServers": {
+    "other": {
+      "args": [],
+      "command": "x"
+    }
+  }
+}
+
++++ $REPO/AGENTS.md
+# User rules
+
+Keep this.
+
+## doctor copilot-cli
+{
+  "installer": "copilot-cli",
+  "detected": false,
+  "registered": false,
+  "issues": [
+    "$HOME/.copilot/mcp-config.json: no chiton entry (run `chiton install --assistant copilot-cli`)",
+    "$REPO/AGENTS.md: no chiton rules block"
+  ]
+}
+# copilot-cli / user-scope
+## install copilot-cli
+{
+  "installer": "copilot-cli",
+  "wrote": [
+    "$HOME/.copilot/mcp-config.json",
+    "$REPO/AGENTS.md"
+  ],
+  "notes": [
+    "MCP config is user-scope (~/.copilot/mcp-config.json); it applies to Copilot CLI in every project."
+  ]
+}
++++ $HOME/.copilot/mcp-config.json
+{
+  "extra": true,
+  "mcpServers": {
+    "chiton": {
+      "type": "local",
+      "command": "/fake/chiton",
+      "args": [
+        "serve",
+        "--stdio"
+      ],
+      "env": {},
+      "tools": [
+        "*"
+      ]
+    },
+    "other": {
+      "args": [],
+      "command": "x"
+    }
+  }
+}
+
++++ $REPO/AGENTS.md
+# User rules
+
+Keep this.
+
+<!-- chiton:start -->
+<rules prompt>
+<!-- chiton:end -->
+
+## doctor copilot-cli
+{
+  "installer": "copilot-cli",
+  "detected": false,
+  "registered": true,
+  "ok": [
+    "$HOME/.copilot/mcp-config.json: chiton server registered",
+    "$REPO/AGENTS.md: chiton rules block present"
+  ]
+}
+## uninstall copilot-cli
+{
+  "installer": "copilot-cli",
+  "wrote": [
+    "$HOME/.copilot/mcp-config.json",
+    "$REPO/AGENTS.md"
+  ]
+}
++++ $HOME/.copilot/mcp-config.json
+{
+  "extra": true,
+  "mcpServers": {
+    "other": {
+      "args": [],
+      "command": "x"
+    }
+  }
+}
+
++++ $REPO/AGENTS.md
+# User rules
+
+Keep this.
+
+# copilot-cli / malformed
+## doctor copilot-cli
+{
+  "installer": "copilot-cli",
+  "detected": false,
+  "registered": false,
+  "ok": [
+    "$REPO/AGENTS.md: chiton rules block present"
+  ],
+  "issues": [
+    "$HOME/.copilot/mcp-config.json: no chiton entry (run `chiton install --assistant copilot-cli`)"
+  ]
+}
+## install copilot-cli
+err: refusing to overwrite $HOME/.copilot/mcp-config.json: "mcpServers" is not a JSON object
+{
+  "installer": "copilot-cli"
+}
+## uninstall copilot-cli
+{
+  "installer": "copilot-cli",
+  "wrote": [
+    "$REPO/AGENTS.md"
+  ],
+  "skipped": [
+    "$HOME/.copilot/mcp-config.json"
+  ]
+}
+# copilot-vscode / fresh
+## install copilot-vscode
+{
+  "installer": "copilot-vscode",
+  "wrote": [
+    "$REPO/.vscode/mcp.json",
+    "$REPO/.github/copilot-instructions.md"
+  ],
+  "notes": [
+    "Reload the VS Code window to pick up the new MCP server."
+  ]
+}
++++ $REPO/.github/copilot-instructions.md
+<!-- chiton:start -->
+<rules prompt>
+<!-- chiton:end -->
+
++++ $REPO/.vscode/mcp.json
+{
+  "mcpServers": {
+    "chiton": {
+      "command": "/fake/chiton",
+      "args": [
+        "serve",
+        "--stdio"
+      ]
+    }
+  }
+}
+
+## install copilot-vscode
+{
+  "installer": "copilot-vscode",
+  "wrote": [
+    "$REPO/.vscode/mcp.json",
+    "$REPO/.github/copilot-instructions.md"
+  ],
+  "notes": [
+    "$REPO/.vscode/mcp.json: refreshed existing chiton entry",
+    "Reload the VS Code window to pick up the new MCP server."
+  ]
+}
+## doctor copilot-vscode
+{
+  "installer": "copilot-vscode",
+  "detected": true,
+  "registered": true,
+  "ok": [
+    "$REPO/.vscode/mcp.json: chiton server registered",
+    "$REPO/.github/copilot-instructions.md: chiton rules block present"
+  ]
+}
+## uninstall copilot-vscode
+{
+  "installer": "copilot-vscode",
+  "wrote": [
+    "$REPO/.vscode/mcp.json",
+    "$REPO/.github/copilot-instructions.md"
+  ]
+}
+--- removed $REPO/.github/copilot-instructions.md
+--- removed $REPO/.vscode/mcp.json
+## doctor copilot-vscode
+{
+  "installer": "copilot-vscode",
+  "detected": true,
+  "registered": false,
+  "issues": [
+    "$REPO/.vscode/mcp.json: no chiton entry (run `chiton install --assistant copilot-vscode`)",
+    "$REPO/.github/copilot-instructions.md: no chiton rules block"
+  ]
+}
+## uninstall copilot-vscode
+{
+  "installer": "copilot-vscode",
+  "skipped": [
+    "$REPO/.vscode/mcp.json",
+    "$REPO/.github/copilot-instructions.md"
+  ]
+}
+# copilot-vscode / seeded
+## install copilot-vscode
+{
+  "installer": "copilot-vscode",
+  "wrote": [
+    "$REPO/.vscode/mcp.json",
+    "$REPO/.github/copilot-instructions.md"
+  ],
+  "notes": [
+    "Reload the VS Code window to pick up the new MCP server."
+  ]
+}
++++ $REPO/.github/copilot-instructions.md
+# User rules
+
+Keep this.
+
+<!-- chiton:start -->
+<rules prompt>
+<!-- chiton:end -->
+
++++ $REPO/.vscode/mcp.json
+{
+  "extra": true,
+  "mcpServers": {
+    "chiton": {
+      "command": "/fake/chiton",
+      "args": [
+        "serve",
+        "--stdio",
+        "--graph",
+        "./g/graph.badger"
+      ]
+    },
+    "other": {
+      "args": [],
+      "command": "x"
+    }
+  }
+}
+
+## doctor copilot-vscode
+{
+  "installer": "copilot-vscode",
+  "detected": true,
+  "registered": true,
+  "ok": [
+    "$REPO/.vscode/mcp.json: chiton server registered",
+    "$REPO/.github/copilot-instructions.md: chiton rules block present"
+  ]
+}
+## uninstall copilot-vscode
+{
+  "installer": "copilot-vscode",
+  "wrote": [
+    "$REPO/.vscode/mcp.json",
+    "$REPO/.github/copilot-instructions.md"
+  ]
+}
++++ $REPO/.github/copilot-instructions.md
+# User rules
+
+Keep this.
+
++++ $REPO/.vscode/mcp.json
+{
+  "extra": true,
+  "mcpServers": {
+    "other": {
+      "args": [],
+      "command": "x"
+    }
+  }
+}
+
+## doctor copilot-vscode
+{
+  "installer": "copilot-vscode",
+  "detected": true,
+  "registered": false,
+  "issues": [
+    "$REPO/.vscode/mcp.json: no chiton entry (run `chiton install --assistant copilot-vscode`)",
+    "$REPO/.github/copilot-instructions.md: no chiton rules block"
+  ]
+}
+# copilot-vscode / user-scope
+## install copilot-vscode
+err: installer does not support --user-scope
+{
+  "installer": "copilot-vscode"
+}
+## doctor copilot-vscode
+{
+  "installer": "copilot-vscode",
+  "detected": true,
+  "registered": false,
+  "issues": [
+    "$REPO/.vscode/mcp.json: no chiton entry (run `chiton install --assistant copilot-vscode`)",
+    "$REPO/.github/copilot-instructions.md: no chiton rules block"
+  ]
+}
+## uninstall copilot-vscode
+{
+  "installer": "copilot-vscode",
+  "skipped": [
+    "$REPO/.vscode/mcp.json",
+    "$REPO/.github/copilot-instructions.md"
+  ]
+}
+# copilot-vscode / malformed
+## doctor copilot-vscode
+{
+  "installer": "copilot-vscode",
+  "detected": true,
+  "registered": false,
+  "ok": [
+    "$REPO/.github/copilot-instructions.md: chiton rules block present"
+  ],
+  "issues": [
+    "$REPO/.vscode/mcp.json: invalid character 'n' looking for beginning of object key string"
+  ]
+}
+## install copilot-vscode
+err: parse $REPO/.vscode/mcp.json: invalid character 'n' looking for beginning of object key string
+{
+  "installer": "copilot-vscode"
+}
+## uninstall copilot-vscode
+err: parse $REPO/.vscode/mcp.json: invalid character 'n' looking for beginning of object key string
+{
+  "installer": "copilot-vscode"
+}
+# cursor / fresh
+## install cursor
+{
+  "installer": "cursor",
+  "wrote": [
+    "$REPO/.cursor/mcp.json",
+    "$REPO/.cursor/rules/chiton.mdc"
+  ],
+  "notes": [
+    "Restart Cursor (or reload the window) to pick up the new MCP server."
+  ]
+}
++++ $REPO/.cursor/mcp.json
+{
+  "mcpServers": {
+    "chiton": {
+      "command": "/fake/chiton",
+      "args": [
+        "serve",
+        "--stdio"
+      ]
+    }
+  }
+}
+
++++ $REPO/.cursor/rules/chiton.mdc
+---
+description: chiton knowledge-graph context — call chiton MCP tools before grep/file reads for architecture and navigation questions
+alwaysApply: true
+---
+
+<rules prompt>
+
+## install cursor
+{
+  "installer": "cursor",
+  "wrote": [
+    "$REPO/.cursor/mcp.json",
+    "$REPO/.cursor/rules/chiton.mdc"
+  ],
+  "notes": [
+    "$REPO/.cursor/mcp.json: refreshed existing chiton entry",
+    "Restart Cursor (or reload the window) to pick up the new MCP server."
+  ]
+}
+## doctor cursor
+{
+  "installer": "cursor",
+  "detected": true,
+  "registered": true,
+  "ok": [
+    "$REPO/.cursor/mcp.json: chiton server registered",
+    "$REPO/.cursor/rules/chiton.mdc: chiton project rule present"
+  ]
+}
+## uninstall cursor
+{
+  "installer": "cursor",
+  "wrote": [
+    "$REPO/.cursor/mcp.json",
+    "$REPO/.cursor/rules/chiton.mdc"
+  ]
+}
+--- removed $REPO/.cursor/mcp.json
+--- removed $REPO/.cursor/rules/chiton.mdc
+## doctor cursor
+{
+  "installer": "cursor",
+  "detected": true,
+  "registered": false,
+  "issues": [
+    "$REPO/.cursor/mcp.json: no chiton entry (run `chiton install --assistant cursor`)",
+    "$REPO/.cursor/rules/chiton.mdc: no chiton rule"
+  ]
+}
+## uninstall cursor
+{
+  "installer": "cursor",
+  "skipped": [
+    "$REPO/.cursor/mcp.json",
+    "$REPO/.cursor/rules/chiton.mdc"
+  ]
+}
+# cursor / seeded
+## install cursor
+{
+  "installer": "cursor",
+  "wrote": [
+    "$REPO/.cursor/mcp.json",
+    "$REPO/.cursor/rules/chiton.mdc"
+  ],
+  "notes": [
+    "Restart Cursor (or reload the window) to pick up the new MCP server."
+  ]
+}
++++ $REPO/.cursor/mcp.json
+{
+  "extra": true,
+  "mcpServers": {
+    "chiton": {
+      "command": "/fake/chiton",
+      "args": [
+        "serve",
+        "--stdio",
+        "--graph",
+        "./g/graph.badger"
+      ]
+    },
+    "other": {
+      "args": [],
+      "command": "x"
+    }
+  }
+}
+
++++ $REPO/.cursor/rules/chiton.mdc
+---
+description: chiton knowledge-graph context — call chiton MCP tools before grep/file reads for architecture and navigation questions
+alwaysApply: true
+---
+
+<rules prompt>
+
+## doctor cursor
+{
+  "installer": "cursor",
+  "detected": true,
+  "registered": true,
+  "ok": [
+    "$REPO/.cursor/mcp.json: chiton server registered",
+    "$REPO/.cursor/rules/chiton.mdc: chiton project rule present"
+  ]
+}
+## uninstall cursor
+{
+  "installer": "cursor",
+  "wrote": [
+    "$REPO/.cursor/mcp.json",
+    "$REPO/.cursor/rules/chiton.mdc"
+  ]
+}
++++ $REPO/.cursor/mcp.json
+{
+  "extra": true,
+  "mcpServers": {
+    "other": {
+      "args": [],
+      "command": "x"
+    }
+  }
+}
+
+--- removed $REPO/.cursor/rules/chiton.mdc
+## doctor cursor
+{
+  "installer": "cursor",
+  "detected": true,
+  "registered": false,
+  "issues": [
+    "$REPO/.cursor/mcp.json: no chiton entry (run `chiton install --assistant cursor`)",
+    "$REPO/.cursor/rules/chiton.mdc: no chiton rule"
+  ]
+}
+# cursor / user-scope
+## install cursor
+{
+  "installer": "cursor",
+  "wrote": [
+    "$HOME/.cursor/mcp.json",
+    "$REPO/.cursor/rules/chiton.mdc"
+  ],
+  "notes": [
+    "Restart Cursor (or reload the window) to pick up the new MCP server."
+  ]
+}
++++ $HOME/.cursor/mcp.json
+{
+  "extra": true,
+  "mcpServers": {
+    "chiton": {
+      "command": "/fake/chiton",
+      "args": [
+        "serve",
+        "--stdio"
+      ]
+    },
+    "other": {
+      "args": [],
+      "command": "x"
+    }
+  }
+}
+
++++ $REPO/.cursor/rules/chiton.mdc
+---
+description: chiton knowledge-graph context — call chiton MCP tools before grep/file reads for architecture and navigation questions
+alwaysApply: true
+---
+
+<rules prompt>
+
+## doctor cursor
+{
+  "installer": "cursor",
+  "detected": true,
+  "registered": true,
+  "ok": [
+    "$HOME/.cursor/mcp.json: chiton server registered",
+    "$REPO/.cursor/rules/chiton.mdc: chiton project rule present"
+  ]
+}
+## uninstall cursor
+{
+  "installer": "cursor",
+  "wrote": [
+    "$HOME/.cursor/mcp.json",
+    "$REPO/.cursor/rules/chiton.mdc"
+  ]
+}
++++ $HOME/.cursor/mcp.json
+{
+  "extra": true,
+  "mcpServers": {
+    "other": {
+      "args": [],
+      "command": "x"
+    }
+  }
+}
+
+--- removed $REPO/.cursor/rules/chiton.mdc
+# cursor / malformed
+## doctor cursor
+{
+  "installer": "cursor",
+  "detected": true,
+  "registered": false,
+  "issues": [
+    "$REPO/.cursor/mcp.json: no chiton entry (run `chiton install --assistant cursor`)",
+    "$REPO/.cursor/rules/chiton.mdc: no chiton rule"
+  ]
+}
+## install cursor
+err: refusing to overwrite $REPO/.cursor/mcp.json: "mcpServers" is not a JSON object
+{
+  "installer": "cursor"
+}
+## uninstall cursor
+{
+  "installer": "cursor",
+  "skipped": [
+    "$REPO/.cursor/mcp.json",
+    "$REPO/.cursor/rules/chiton.mdc"
+  ]
+}
+# gemini-cli / fresh
+## install gemini-cli
+{
+  "installer": "gemini-cli",
+  "wrote": [
+    "$REPO/.gemini/settings.json",
+    "$REPO/GEMINI.md"
+  ],
+  "notes": [
+    "Restart Gemini CLI to pick up the new MCP server."
+  ]
+}
++++ $REPO/.gemini/settings.json
+{
+  "mcpServers": {
+    "chiton": {
+      "command": "/fake/chiton",
+      "args": [
+        "serve",
+        "--stdio"
+      ]
+    }
+  }
+}
+
++++ $REPO/GEMINI.md
+<!-- chiton:start -->
+<rules prompt>
+<!-- chiton:end -->
+
+## install gemini-cli
+{
+  "installer": "gemini-cli",
+  "wrote": [
+    "$REPO/.gemini/settings.json",
+    "$REPO/GEMINI.md"
+  ],
+  "notes": [
+    "$REPO/.gemini/settings.json: refreshed existing chiton entry",
+    "Restart Gemini CLI to pick up the new MCP server."
+  ]
+}
+## doctor gemini-cli
+{
+  "installer": "gemini-cli",
+  "detected": true,
+  "registered": true,
+  "ok": [
+    "$REPO/.gemini/settings.json: chiton server registered",
+    "$REPO/GEMINI.md: chiton rules block present"
+  ]
+}
+## uninstall gemini-cli
+{
+  "installer": "gemini-cli",
+  "wrote": [
+    "$REPO/.gemini/settings.json",
+    "$REPO/GEMINI.md"
+  ]
+}
+--- removed $REPO/.gemini/settings.json
+--- removed $REPO/GEMINI.md
+## doctor gemini-cli
+{
+  "installer": "gemini-cli",
+  "detected": true,
+  "registered": false,
+  "issues": [
+    "$REPO/.gemini/settings.json: no chiton entry (run `chiton install --assistant gemini-cli`)",
+    "$REPO/GEMINI.md: no chiton rules block"
+  ]
+}
+## uninstall gemini-cli
+{
+  "installer": "gemini-cli",
+  "skipped": [
+    "$REPO/.gemini/settings.json",
+    "$REPO/GEMINI.md"
+  ]
+}
+# gemini-cli / seeded
+## install gemini-cli
+{
+  "installer": "gemini-cli",
+  "wrote": [
+    "$REPO/.gemini/settings.json",
+    "$REPO/GEMINI.md"
+  ],
+  "notes": [
+    "Restart Gemini CLI to pick up the new MCP server."
+  ]
+}
++++ $REPO/.gemini/settings.json
+{
+  "extra": true,
+  "mcpServers": {
+    "chiton": {
+      "command": "/fake/chiton",
+      "args": [
+        "serve",
+        "--stdio",
+        "--graph",
+        "./g/graph.badger"
+      ]
+    },
+    "other": {
+      "args": [],
+      "command": "x"
+    }
+  }
+}
+
++++ $REPO/GEMINI.md
+# User rules
+
+Keep this.
+
+<!-- chiton:start -->
+<rules prompt>
+<!-- chiton:end -->
+
+## doctor gemini-cli
+{
+  "installer": "gemini-cli",
+  "detected": true,
+  "registered": true,
+  "ok": [
+    "$REPO/.gemini/settings.json: chiton server registered",
+    "$REPO/GEMINI.md: chiton rules block present"
+  ]
+}
+## uninstall gemini-cli
+{
+  "installer": "gemini-cli",
+  "wrote": [
+    "$REPO/.gemini/settings.json",
+    "$REPO/GEMINI.md"
+  ]
+}
++++ $REPO/.gemini/settings.json
+{
+  "extra": true,
+  "mcpServers": {
+    "other": {
+      "args": [],
+      "command": "x"
+    }
+  }
+}
+
++++ $REPO/GEMINI.md
+# User rules
+
+Keep this.
+
+## doctor gemini-cli
+{
+  "installer": "gemini-cli",
+  "detected": true,
+  "registered": false,
+  "issues": [
+    "$REPO/.gemini/settings.json: no chiton entry (run `chiton install --assistant gemini-cli`)",
+    "$REPO/GEMINI.md: no chiton rules block"
+  ]
+}
+# gemini-cli / user-scope
+## install gemini-cli
+{
+  "installer": "gemini-cli",
+  "wrote": [
+    "$HOME/.gemini/settings.json",
+    "$REPO/GEMINI.md"
+  ],
+  "notes": [
+    "Restart Gemini CLI to pick up the new MCP server."
+  ]
+}
++++ $HOME/.gemini/settings.json
+{
+  "extra": true,
+  "mcpServers": {
+    "chiton": {
+      "command": "/fake/chiton",
+      "args": [
+        "serve",
+        "--stdio"
+      ]
+    },
+    "other": {
+      "args": [],
+      "command": "x"
+    }
+  }
+}
+
++++ $REPO/GEMINI.md
+# User rules
+
+Keep this.
+
+<!-- chiton:start -->
+<rules prompt>
+<!-- chiton:end -->
+
+## doctor gemini-cli
+{
+  "installer": "gemini-cli",
+  "detected": true,
+  "registered": true,
+  "ok": [
+    "$HOME/.gemini/settings.json: chiton server registered",
+    "$REPO/GEMINI.md: chiton rules block present"
+  ]
+}
+## uninstall gemini-cli
+{
+  "installer": "gemini-cli",
+  "wrote": [
+    "$HOME/.gemini/settings.json",
+    "$REPO/GEMINI.md"
+  ]
+}
++++ $HOME/.gemini/settings.json
+{
+  "extra": true,
+  "mcpServers": {
+    "other": {
+      "args": [],
+      "command": "x"
+    }
+  }
+}
+
++++ $REPO/GEMINI.md
+# User rules
+
+Keep this.
+
+# gemini-cli / malformed
+## doctor gemini-cli
+{
+  "installer": "gemini-cli",
+  "detected": true,
+  "registered": false,
+  "ok": [
+    "$REPO/GEMINI.md: chiton rules block present"
+  ],
+  "issues": [
+    "$REPO/.gemini/settings.json: invalid character 'n' looking for beginning of object key string"
+  ]
+}
+## install gemini-cli
+err: parse $REPO/.gemini/settings.json: invalid character 'n' looking for beginning of object key string
+{
+  "installer": "gemini-cli"
+}
+## uninstall gemini-cli
+err: parse $REPO/.gemini/settings.json: invalid character 'n' looking for beginning of object key string
+{
+  "installer": "gemini-cli"
+}
+# opencode / fresh
+## install opencode
+{
+  "installer": "opencode",
+  "wrote": [
+    "$REPO/opencode.json",
+    "$REPO/AGENTS.md"
+  ],
+  "notes": [
+    "Restart OpenCode to pick up the new MCP server."
+  ]
+}
++++ $REPO/AGENTS.md
+<!-- chiton:start -->
+<rules prompt>
+<!-- chiton:end -->
+
++++ $REPO/opencode.json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "chiton": {
+      "type": "local",
+      "command": [
+        "/fake/chiton",
+        "serve",
+        "--stdio"
+      ],
+      "enabled": true
+    }
+  }
+}
+
+## install opencode
+{
+  "installer": "opencode",
+  "wrote": [
+    "$REPO/opencode.json",
+    "$REPO/AGENTS.md"
+  ],
+  "notes": [
+    "$REPO/opencode.json: refreshed existing chiton entry",
+    "Restart OpenCode to pick up the new MCP server."
+  ]
+}
+## doctor opencode
+{
+  "installer": "opencode",
+  "detected": true,
+  "registered": true,
+  "ok": [
+    "$REPO/opencode.json: chiton server registered",
+    "$REPO/AGENTS.md: chiton rules block present"
+  ]
+}
+## uninstall opencode
+{
+  "installer": "opencode",
+  "wrote": [
+    "$REPO/opencode.json",
+    "$REPO/AGENTS.md"
+  ]
+}
+--- removed $REPO/AGENTS.md
+--- removed $REPO/opencode.json
+## doctor opencode
+{
+  "installer": "opencode",
+  "detected": false,
+  "registered": false,
+  "issues": [
+    "$REPO/opencode.json: no chiton entry (run `chiton install --assistant opencode`)",
+    "$REPO/AGENTS.md: no chiton rules block"
+  ]
+}
+## uninstall opencode
+{
+  "installer": "opencode",
+  "skipped": [
+    "$REPO/opencode.json",
+    "$REPO/AGENTS.md"
+  ]
+}
+# opencode / seeded
+## install opencode
+{
+  "installer": "opencode",
+  "wrote": [
+    "$REPO/opencode.json",
+    "$REPO/AGENTS.md"
+  ],
+  "notes": [
+    "Restart OpenCode to pick up the new MCP server."
+  ]
+}
++++ $REPO/AGENTS.md
+# User rules
+
+Keep this.
+
+<!-- chiton:start -->
+<rules prompt>
+<!-- chiton:end -->
+
++++ $REPO/opencode.json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "chiton": {
+      "type": "local",
+      "command": [
+        "/fake/chiton",
+        "serve",
+        "--stdio",
+        "--graph",
+        "./g/graph.badger"
+      ],
+      "enabled": true
+    },
+    "other": {
+      "command": [
+        "a"
+      ],
+      "enabled": true,
+      "type": "local"
+    }
+  },
+  "model": "m"
+}
+
+## doctor opencode
+{
+  "installer": "opencode",
+  "detected": true,
+  "registered": true,
+  "ok": [
+    "$REPO/opencode.json: chiton server registered",
+    "$REPO/AGENTS.md: chiton rules block present"
+  ]
+}
+## uninstall opencode
+{
+  "installer": "opencode",
+  "wrote": [
+    "$REPO/opencode.json",
+    "$REPO/AGENTS.md"
+  ]
+}
++++ $REPO/AGENTS.md
+# User rules
+
+Keep this.
+
++++ $REPO/opencode.json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "other": {
+      "command": [
+        "a"
+      ],
+      "enabled": true,
+      "type": "local"
+    }
+  },
+  "model": "m"
+}
+
+## doctor opencode
+{
+  "installer": "opencode",
+  "detected": true,
+  "registered": false,
+  "issues": [
+    "$REPO/opencode.json: no chiton entry (run `chiton install --assistant opencode`)",
+    "$REPO/AGENTS.md: no chiton rules block"
+  ]
+}
+# opencode / user-scope
+## install opencode
+{
+  "installer": "opencode",
+  "wrote": [
+    "$HOME/.config/opencode/opencode.json",
+    "$REPO/AGENTS.md"
+  ],
+  "notes": [
+    "Restart OpenCode to pick up the new MCP server."
+  ]
+}
++++ $HOME/.config/opencode/opencode.json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "chiton": {
+      "type": "local",
+      "command": [
+        "/fake/chiton",
+        "serve",
+        "--stdio"
+      ],
+      "enabled": true
+    },
+    "other": {
+      "command": [
+        "a"
+      ],
+      "enabled": true,
+      "type": "local"
+    }
+  },
+  "model": "m"
+}
+
++++ $REPO/AGENTS.md
+# User rules
+
+Keep this.
+
+<!-- chiton:start -->
+<rules prompt>
+<!-- chiton:end -->
+
+## doctor opencode
+{
+  "installer": "opencode",
+  "detected": true,
+  "registered": true,
+  "ok": [
+    "$HOME/.config/opencode/opencode.json: chiton server registered",
+    "$REPO/AGENTS.md: chiton rules block present"
+  ]
+}
+## uninstall opencode
+{
+  "installer": "opencode",
+  "wrote": [
+    "$HOME/.config/opencode/opencode.json",
+    "$REPO/AGENTS.md"
+  ]
+}
++++ $HOME/.config/opencode/opencode.json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "other": {
+      "command": [
+        "a"
+      ],
+      "enabled": true,
+      "type": "local"
+    }
+  },
+  "model": "m"
+}
+
++++ $REPO/AGENTS.md
+# User rules
+
+Keep this.
+
+# opencode / malformed
+## doctor opencode
+{
+  "installer": "opencode",
+  "detected": true,
+  "registered": false,
+  "ok": [
+    "$REPO/AGENTS.md: chiton rules block present"
+  ],
+  "issues": [
+    "$REPO/opencode.json: no chiton entry (run `chiton install --assistant opencode`)"
+  ]
+}
+## install opencode
+err: refusing to overwrite $REPO/opencode.json: "mcp" is not a JSON object
+{
+  "installer": "opencode"
+}
+## uninstall opencode
+{
+  "installer": "opencode",
+  "wrote": [
+    "$REPO/AGENTS.md"
+  ],
+  "skipped": [
+    "$REPO/opencode.json"
+  ]
+}
+# shared AGENTS.md
+## install opencode
+{
+  "installer": "opencode",
+  "wrote": [
+    "$REPO/opencode.json",
+    "$REPO/AGENTS.md"
+  ],
+  "notes": [
+    "Restart OpenCode to pick up the new MCP server."
+  ]
+}
++++ $REPO/AGENTS.md
+<!-- chiton:start -->
+<rules prompt>
+<!-- chiton:end -->
+
++++ $REPO/opencode.json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "chiton": {
+      "type": "local",
+      "command": [
+        "/fake/chiton",
+        "serve",
+        "--stdio"
+      ],
+      "enabled": true
+    }
+  }
+}
+
+## install codex
+{
+  "installer": "codex",
+  "wrote": [
+    "$HOME/.codex/config.toml",
+    "$REPO/AGENTS.md"
+  ],
+  "notes": [
+    "MCP config is user-scope (~/.codex/config.toml); it applies to Codex in every project."
+  ]
+}
++++ $HOME/.codex/config.toml
+[mcp_servers]
+[mcp_servers.chiton]
+args = ['serve', '--stdio']
+command = '/fake/chiton'
+
+## install copilot-cli
+{
+  "installer": "copilot-cli",
+  "wrote": [
+    "$HOME/.copilot/mcp-config.json",
+    "$REPO/AGENTS.md"
+  ],
+  "notes": [
+    "MCP config is user-scope (~/.copilot/mcp-config.json); it applies to Copilot CLI in every project."
+  ]
+}
++++ $HOME/.copilot/mcp-config.json
+{
+  "mcpServers": {
+    "chiton": {
+      "type": "local",
+      "command": "/fake/chiton",
+      "args": [
+        "serve",
+        "--stdio"
+      ],
+      "env": {},
+      "tools": [
+        "*"
+      ]
+    }
+  }
+}
+
+## install antigravity
+{
+  "installer": "antigravity",
+  "wrote": [
+    "$HOME/.gemini/config/mcp_config.json",
+    "$REPO/AGENTS.md"
+  ],
+  "notes": [
+    "MCP config is user-scope (~/.gemini/config/mcp_config.json); it applies to Antigravity in every project."
+  ]
+}
++++ $HOME/.gemini/config/mcp_config.json
+{
+  "mcpServers": {
+    "chiton": {
+      "command": "/fake/chiton",
+      "args": [
+        "serve",
+        "--stdio"
+      ]
+    }
+  }
+}
+
+## uninstall codex
+{
+  "installer": "codex",
+  "wrote": [
+    "$HOME/.codex/config.toml"
+  ],
+  "skipped": [
+    "$REPO/AGENTS.md"
+  ],
+  "notes": [
+    "$REPO/AGENTS.md: kept chiton rules block (still used by another installed assistant)"
+  ]
+}
+--- removed $HOME/.codex/config.toml
+## uninstall opencode
+{
+  "installer": "opencode",
+  "wrote": [
+    "$REPO/opencode.json"
+  ],
+  "skipped": [
+    "$REPO/AGENTS.md"
+  ],
+  "notes": [
+    "$REPO/AGENTS.md: kept chiton rules block (still used by another installed assistant)"
+  ]
+}
+--- removed $REPO/opencode.json
+## uninstall antigravity
+{
+  "installer": "antigravity",
+  "wrote": [
+    "$HOME/.gemini/config/mcp_config.json"
+  ],
+  "skipped": [
+    "$REPO/AGENTS.md"
+  ],
+  "notes": [
+    "$REPO/AGENTS.md: kept chiton rules block (still used by another installed assistant)"
+  ]
+}
+--- removed $HOME/.gemini/config/mcp_config.json
+## uninstall copilot-cli
+{
+  "installer": "copilot-cli",
+  "wrote": [
+    "$HOME/.copilot/mcp-config.json",
+    "$REPO/AGENTS.md"
+  ]
+}
+--- removed $HOME/.copilot/mcp-config.json
+--- removed $REPO/AGENTS.md

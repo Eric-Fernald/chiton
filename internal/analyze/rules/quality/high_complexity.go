@@ -8,11 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/analyze"
 )
 
-// HighComplexity flags a function whose approximate cyclomatic complexity
-// exceeds MaxComplexity. Complexity is estimated as 1 plus the number of
-// branch-introducing constructs in the body (if/for/while/case/catch) and
-// short-circuit operators (&&, ||). Function boundaries come from the
-// extractor's symbol spans — the same source LongFunction relies on.
+// HighComplexity flags a function whose approximate cyclomatic complexity (1 + branch keywords + `&&`/`||`)
+// exceeds MaxComplexity.
 type HighComplexity struct{}
 
 // MaxComplexity is the threshold; functions above it fire.
@@ -59,15 +56,13 @@ func (HighComplexity) MatchFile(_ context.Context, t analyze.FileTarget) []analy
 	return out
 }
 
-// complexity estimates cyclomatic complexity from body source lines: a base of
-// 1, plus each branch keyword and each short-circuit operator. Lines arrive
-// pre-masked (qFuncBodiesMasked), so keywords/operators inside strings,
-// comments, and Python docstrings are filler bytes and are not counted.
-func complexity(lines []string) int {
+// complexity estimates cyclomatic complexity from pre-masked body lines: 1 plus each branch keyword and
+// short-circuit operator.
+func complexity(lines [][]byte) int {
 	c := 1
 	for _, ln := range lines {
-		c += len(branchKeywordRe.FindAllString(ln, -1))
-		c += len(logicalOpRe.FindAllString(ln, -1))
+		c += len(branchKeywordRe.FindAllIndex(ln, -1))
+		c += len(logicalOpRe.FindAllIndex(ln, -1))
 	}
 	return c
 }

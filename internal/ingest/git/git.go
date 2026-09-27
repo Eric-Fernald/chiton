@@ -1,6 +1,5 @@
-// Package git turns git history into chiton sync change-sets. It shells out to
-// the git binary (assumed present wherever git hooks run) and parses
-// --name-status output into the Change events the live-sync engine consumes.
+// Package git turns git history into chiton sync change-sets by shelling out to git (assumed present
+// wherever hooks run) and parsing --name-status output.
 package git
 
 import (
@@ -43,14 +42,8 @@ func Available(root string) bool {
 	return err == nil && strings.TrimSpace(string(out)) == "true"
 }
 
-// LastCommitChanges returns the files touched by HEAD (the just-made commit).
-//
-// An ordinary commit is diffed against its parent. A merge commit is diffed
-// against its first parent: a plain `git diff-tree HEAD` prints nothing for a
-// merge (diff-tree only reports paths that differ from *every* parent), which
-// would silently leave every file a merge brings in stale in the graph. The
-// initial, parentless commit has nothing to diff against, so --root reports all
-// of its files as additions.
+// LastCommitChanges returns the files touched by HEAD, diffed against its first parent because a plain
+// `git diff-tree HEAD` prints nothing for a merge. A parentless root commit reports all files as added.
 func LastCommitChanges(root string) ([]Change, error) {
 	if parent, ok := firstParent(root); ok {
 		out, err := run(root, "diff", "--name-status", parent, "HEAD")
@@ -66,9 +59,7 @@ func LastCommitChanges(root string) ([]Change, error) {
 	return parseNameStatus(root, out), nil
 }
 
-// firstParent reports HEAD's first parent ("HEAD^") and whether HEAD has one.
-// Diffing against the first parent gives a merge commit's net change relative to
-// the branch it landed on; the initial commit is parentless and returns false.
+// firstParent reports HEAD's first parent ("HEAD^") and whether HEAD has one (the initial commit doesn't).
 func firstParent(root string) (string, bool) {
 	// rev-parse --verify --quiet exits non-zero (and silent) when HEAD^ does not
 	// resolve — i.e. on the root commit.
@@ -106,12 +97,8 @@ func ChangedSince(root, ref string) ([]Change, error) {
 	return parseNameStatus(root, out), nil
 }
 
-// validateRef rejects refs that git could misparse as command-line options. A
-// leading '-' lets a crafted ref like "--output=evil" turn `git diff` into an
-// arbitrary-file-write (git treats option-like positional args as flags); git
-// ref names can never begin with '-', so this only ever rejects invalid refs.
-// Callers additionally pass "--end-of-options" before the refs as belt-and-
-// suspenders for any git that predates strict positional parsing.
+// validateRef rejects option-like refs: one such as "--output=evil" would turn `git diff` into an
+// arbitrary file write. Valid ref names never start with '-'; callers also pass --end-of-options.
 func validateRef(ref string) error {
 	if ref == "" {
 		return fmt.Errorf("git: empty ref")
@@ -123,9 +110,8 @@ func validateRef(ref string) error {
 }
 
 func run(root string, args ...string) (string, error) {
-	// core.quotepath=false stops git from octal-escaping non-ASCII path bytes
-	// (e.g. "caf\303\251.go"), which would otherwise reach the filesystem as a
-	// bogus path and silently skip / mis-delete UTF-8-named files.
+	// core.quotepath=false stops git octal-escaping non-ASCII paths (e.g. "caf\303\251.go"), which
+	// would otherwise skip or mis-delete UTF-8-named files.
 	full := append([]string{"-C", root, "-c", "core.quotepath=false"}, args...)
 	cmd := exec.Command("git", full...)
 	var stdout, stderr bytes.Buffer
@@ -137,17 +123,12 @@ func run(root string, args ...string) (string, error) {
 	return stdout.String(), nil
 }
 
-// parseNameStatus parses `git diff --name-status` / `diff-tree` output into
-// Changes, resolving repo-relative paths against root.
-//
-// Lines look like:
-//
-//	M\tpath/to/file.go
-//	A\tnew.go
-//	D\tgone.go
-//	R100\told/path.go\tnew/path.go     (rename → delete old, upsert new)
-//	C75\tsrc.go\tcopy.go               (copy → upsert new only)
+// parseNameStatus parses `git diff --name-status` output into Changes with absolute paths. A rename
+// (R###) deletes the old path and upserts the new one; a copy (C###) upserts only the destination.
 func parseNameStatus(root, out string) []Change {
+	if absRoot, err := filepath.Abs(root); err == nil {
+		root = absRoot
+	}
 	var changes []Change
 	for line := range strings.SplitSeq(out, "\n") {
 		line = strings.TrimRight(line, "\r")
@@ -187,17 +168,10 @@ func parseNameStatus(root, out string) []Change {
 	return changes
 }
 
-// abs resolves a git repo-relative path (forward slashes) to an absolute
-// filesystem path. root is resolved to absolute first so Change.Path is
-// absolute regardless of the process working directory (honoring the
-// Change.Path contract even when --root is given as ".").
+// abs resolves a git repo-relative path (forward slashes) against the already-absolute root.
 func abs(root, rel string) string {
 	if filepath.IsAbs(rel) {
 		return filepath.Clean(rel)
 	}
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		absRoot = root
-	}
-	return filepath.Join(absRoot, filepath.FromSlash(rel))
+	return filepath.Join(root, filepath.FromSlash(rel))
 }

@@ -4,10 +4,12 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/Eric-Fernald/chiton/internal/analyze"
 	_ "github.com/Eric-Fernald/chiton/internal/analyze/rules" // register rules
+	extast "github.com/Eric-Fernald/chiton/internal/extract/ast"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 	badgerstore "github.com/Eric-Fernald/chiton/internal/graph/store/badger"
 )
@@ -93,10 +95,8 @@ func TestPruneFileURI(t *testing.T) {
 	}
 }
 
-// TestPruneFileURI_RemovesLLMFindings verifies the delete path prunes LLM
-// findings (rule_provenance=LLM), not just deterministic ones — otherwise a
-// deleted file's LLM findings linger forever (live-sync never re-runs LLM
-// rules to supersede them).
+// TestPruneFileURI_RemovesLLMFindings verifies file deletion also prunes LLM findings, which
+// live sync never re-runs rules to supersede.
 func TestPruneFileURI_RemovesLLMFindings(t *testing.T) {
 	gs := openStore(t)
 	ctx := context.Background()
@@ -137,11 +137,8 @@ func TestPruneFileURI_RemovesLLMFindings(t *testing.T) {
 	}
 }
 
-// TestAnalyzeFile_PreservesGraphScopeFindings verifies a single-file re-analyze
-// does NOT delete deterministic GraphScope findings (architecture/dead-symbol)
-// for that file. AnalyzeFile runs only FileRules, so it must scope its prune to
-// the rules it ran — otherwise it wipes GraphScope findings that never
-// regenerate until the next full `chiton analyze`.
+// TestAnalyzeFile_PreservesGraphScopeFindings verifies a single-file re-analyze keeps the file's
+// deterministic GraphScope findings, which only a full `chiton analyze` regenerates.
 func TestAnalyzeFile_PreservesGraphScopeFindings(t *testing.T) {
 	gs := openStore(t)
 	ctx := context.Background()
@@ -179,6 +176,39 @@ func TestAnalyzeFile_PreservesGraphScopeFindings(t *testing.T) {
 	}
 	if got, _ := gs.GetNode(ctx, id); got == nil {
 		t.Error("GraphScope finding was wrongly pruned by a single-file re-analyze")
+	}
+}
+
+// TestAnalyzeExtractedMatchesAnalyzeFile checks a caller-supplied extraction yields AnalyzeFile's findings.
+func TestAnalyzeExtractedMatchesAnalyzeFile(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "a.go")
+	src := []byte("package a\n\nimport \"fmt\"\n\n// TODO: fix this\nfunc A() {\n\tdefer fmt.Println(\"x\")\n\tfor {\n\t\tdefer fmt.Println(\"y\")\n\t}\n}\n")
+	write(t, path, string(src))
+
+	wantStore, gotStore := openStore(t), openStore(t)
+	want, err := analyze.New(wantStore, nil).AnalyzeFile(ctx, path)
+	if err != nil {
+		t.Fatalf("AnalyzeFile: %v", err)
+	}
+	nodes, edges, err := extast.ForFile(path).ExtractSource(ctx, path, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := analyze.New(gotStore, nil).AnalyzeExtracted(ctx, path, src, nodes, edges)
+	if err != nil {
+		t.Fatalf("AnalyzeExtracted: %v", err)
+	}
+	if len(want.Findings) < 2 {
+		t.Fatalf("fixture should trip several rules, got %d findings", len(want.Findings))
+	}
+	if got.FilesScanned != want.FilesScanned || got.RulesRun != want.RulesRun || !reflect.DeepEqual(got.Findings, want.Findings) {
+		t.Errorf("AnalyzeExtracted = %+v\nwant %+v", got, want)
+	}
+	wantViews, _ := analyze.List(ctx, wantStore, analyze.ListOptions{})
+	gotViews, _ := analyze.List(ctx, gotStore, analyze.ListOptions{})
+	if !reflect.DeepEqual(gotViews, wantViews) {
+		t.Errorf("stored findings differ:\n got %+v\nwant %+v", gotViews, wantViews)
 	}
 }
 

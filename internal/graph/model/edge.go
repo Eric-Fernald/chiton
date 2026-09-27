@@ -3,6 +3,7 @@ package model
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"time"
 )
 
@@ -66,4 +67,16 @@ type Edge struct {
 func NewEdgeID(src, dst string, kind EdgeKind) string {
 	h := sha256.Sum256([]byte(src + "::" + string(kind) + "::" + dst))
 	return hex.EncodeToString(h[:16])
+}
+
+// ParseEdgeKinds upper-cases user-supplied edge kind names; nil (every kind) when none are given.
+func ParseEdgeKinds(names []string) []EdgeKind {
+	if len(names) == 0 {
+		return nil
+	}
+	kinds := make([]EdgeKind, len(names))
+	for i, k := range names {
+		kinds[i] = EdgeKind(strings.ToUpper(k))
+	}
+	return kinds
 }

@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"maps"
 	"math/rand"
 	"time"
 
@@ -9,27 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// RunIncremental re-clusters only the 2-hop neighborhood of the touched nodes,
-// freezing every other node's community assignment from prev. It is the
-// incremental counterpart of Run used by the live-sync engine (Phase 3) after a
-// handful of files change: re-clustering a small neighborhood is dramatically
-// cheaper than a full pass on a large graph.
-//
-// Semantics:
-//   - prev nil/empty → a full clustering + exact betweenness, identical to what
-//     `chiton cluster` produces (so the first incremental call bootstraps).
-//   - otherwise the induced subgraph over {touched ∪ their ≤2-hop neighbors} is
-//     clustered fresh; nodes outside that neighborhood keep their prev
-//     community. New community IDs are namespaced then compacted so the output
-//     is always a contiguous 0-based range.
-//   - Degree is recomputed for every node (cheap, O(edges)).
-//   - Betweenness is a GLOBAL metric, so it is carried forward unchanged from
-//     prev for surviving nodes (new nodes get 0). A full `chiton cluster`
-//     refreshes betweenness / god-node ranking; incremental keeps communities
-//     current, which is what live sync needs between full passes.
-//
-// touched may contain IDs that no longer exist (deleted files); those are
-// simply absent from the result. nodes/edges are the full current graph.
+// RunIncremental re-clusters only the ≤2-hop neighborhood of touched, keeping other nodes' prev communities;
+// prev nil/empty runs a full pass. Betweenness is global, so it is carried over from prev (new nodes get 0).
 func RunIncremental(prev *Results, nodes []model.Node, edges []model.Edge, touched map[string]bool, resolution float64, rng *rand.Rand) *Results {
 	if len(nodes) == 0 {
 		return &Results{GeneratedAt: time.Now(), Nodes: map[string]NodeResult{}}
@@ -37,22 +17,15 @@ func RunIncremental(prev *Results, nodes []model.Node, edges []model.Edge, touch
 	if rng == nil {
 		rng = rand.New(rand.NewSource(42))
 	}
+	// Cold start (or sidecar lost): do the same full pass as `chiton cluster`.
+	if prev == nil || len(prev.Nodes) == 0 {
+		return Full(nodes, edges, resolution, rng)
+	}
 
 	adj := buildAdjacency(nodes, edges)
 	degree := make(map[string]int, len(nodes))
 	for _, n := range nodes {
 		degree[n.ID] = len(adj[n.ID])
-	}
-
-	// Cold start (or sidecar lost): do a full pass with exact metrics.
-	if prev == nil || len(prev.Nodes) == 0 {
-		comm := Run(nodes, edges, resolution, rng)
-		met := metrics.Compute(nodes, edges)
-		bet := make(map[string]float64, len(nodes))
-		for id, m := range met {
-			bet[id] = m.Betweenness
-		}
-		return buildResults(nodes, comm, bet, degree)
 	}
 
 	// 2-hop neighborhood of the touched nodes (present nodes only).
@@ -63,8 +36,8 @@ func RunIncremental(prev *Results, nodes []model.Node, edges []model.Edge, touch
 	localComm := Run(subNodes, subEdges, resolution, rng)
 
 	// Retained communities for nodes outside the neighborhood.
+	comm := make(map[string]int, len(nodes))
 	maxRetained := -1
-	retained := make(map[string]int)
 	for _, n := range nodes {
 		if hood[n.ID] {
 			continue
@@ -73,22 +46,15 @@ func RunIncremental(prev *Results, nodes []model.Node, edges []model.Edge, touch
 		if !ok {
 			continue // new node outside the hood (rare) — assigned a singleton below
 		}
-		retained[n.ID] = pr.CommunityID
-		if pr.CommunityID > maxRetained {
-			maxRetained = pr.CommunityID
-		}
+		comm[n.ID] = pr.CommunityID
+		maxRetained = max(maxRetained, pr.CommunityID)
 	}
 
 	base := maxRetained + 1
 	maxLocal := -1
 	for _, c := range localComm {
-		if c > maxLocal {
-			maxLocal = c
-		}
+		maxLocal = max(maxLocal, c)
 	}
-
-	comm := make(map[string]int, len(nodes))
-	maps.Copy(comm, retained)
 	for id, c := range localComm {
 		comm[id] = base + c
 	}
@@ -112,6 +78,20 @@ func RunIncremental(prev *Results, nodes []model.Node, edges []model.Edge, touch
 		}
 	}
 
+	return buildResults(nodes, comm, bet, degree)
+}
+
+// Full is a whole-graph pass: Leiden communities plus betweenness and degree for every node. A nil rng
+// uses Run's fixed seed.
+func Full(nodes []model.Node, edges []model.Edge, resolution float64, rng *rand.Rand) *Results {
+	comm := Run(nodes, edges, resolution, rng)
+	met := metrics.Compute(nodes, edges)
+	bet := make(map[string]float64, len(met))
+	degree := make(map[string]int, len(met))
+	for id, m := range met {
+		bet[id] = m.Betweenness
+		degree[id] = m.Degree
+	}
 	return buildResults(nodes, comm, bet, degree)
 }
 
@@ -153,11 +133,8 @@ func buildAdjacency(nodes []model.Node, edges []model.Edge) map[string][]string 
 	return out
 }
 
-// neighborhood returns the set of node IDs within depth hops of any seed that
-// is present in adj. Seeds absent from adj (deleted, or isolated with no edges)
-// are included when present as graph nodes — callers pass touched IDs and the
-// result only contains IDs reachable in the current graph. An isolated touched
-// node has no adjacency entry, so it is added explicitly when it is a real node.
+// neighborhood returns the IDs within depth hops of the seeds. Every seed is included, even one with no
+// adjacency entry (isolated or deleted); induce later drops IDs that are not graph nodes.
 func neighborhood(adj map[string][]string, seeds map[string]bool, depth int) map[string]bool {
 	hood := make(map[string]bool)
 	var frontier []string

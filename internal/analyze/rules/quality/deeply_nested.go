@@ -1,8 +1,6 @@
 package quality
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -11,9 +9,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// DeeplyNested flags any function that contains a line indented deeper than
-// MaxIndent levels (treating one tab or four spaces as a level). High
-// indentation correlates with high cognitive complexity.
+// DeeplyNested flags lines indented deeper than MaxIndent levels (a tab or four spaces per level), once per
+// contiguous deep run; deep indentation correlates with high cognitive complexity.
 type DeeplyNested struct{}
 
 // MaxIndent is the threshold: 5 levels = `func / for / if / for / if / line`.
@@ -33,13 +30,8 @@ func (DeeplyNested) Meta() analyze.Meta {
 
 func (DeeplyNested) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
-	emitted := map[int]bool{} // line of the deepest run, to dedupe blocks
-	for sc.Scan() {
-		line++
-		text := sc.Text()
+	lastDeep := -1 // most recent deep line, to emit once per contiguous deep block
+	for line, text := range analyze.Lines(t.Content) {
 		if strings.TrimSpace(text) == "" {
 			continue
 		}
@@ -47,12 +39,11 @@ func (DeeplyNested) MatchFile(_ context.Context, t analyze.FileTarget) []analyze
 		if level <= MaxIndent {
 			continue
 		}
-		// Emit at most one finding per contiguous deep block.
-		if emitted[line-1] {
-			emitted[line] = true
+		prevDeep := lastDeep == line-1
+		lastDeep = line
+		if prevDeep {
 			continue
 		}
-		emitted[line] = true
 		out = append(out, analyze.Finding{
 			RuleID:       "quality/deeply-nested",
 			Severity:     analyze.SeverityLow,

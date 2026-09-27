@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -19,9 +17,8 @@ import (
 
 const chitonDir = ".chiton"
 
-// analyzeCmd is the parent for rule analysis: the deterministic run lives on the
-// parent itself (chiton analyze <path>), while the LLM-rule subagent cycle lives
-// in the pending/submit subcommands, mirroring `chiton extract pending|submit`.
+// analyzeCmd runs deterministic rules itself (chiton analyze <path>); the LLM-rule subagent
+// cycle lives in its pending/submit subcommands, mirroring `chiton extract pending|submit`.
 func analyzeCmd() *cobra.Command {
 	var category, minSeverity, since string
 	var diff, noLLM bool
@@ -47,13 +44,9 @@ this command only reports how many LLM-rule tasks are pending (unless --no-llm).
 				return fmt.Errorf("analyze requires a <path> (or use a subcommand: pending, submit)")
 			}
 			path := args[0]
-			cfg, err := config.Load()
+			cfg, gs, err := loadStore(false)
 			if err != nil {
 				return err
-			}
-			gs, err := openGraphStore(cfg.GraphPath, false)
-			if err != nil {
-				return fmt.Errorf("open store: %w", err)
 			}
 			defer gs.Close()
 
@@ -161,10 +154,8 @@ func runDiff(ctx context.Context, out io.Writer, gs store.GraphStore, diff bool,
 		if label == "" {
 			label = "working"
 		}
-		// Write-once per commit: if a baseline for this commit already exists,
-		// preserve it. Otherwise re-running --diff in a dirty working tree would
-		// overwrite the original snapshot and then self-compare against it,
-		// silently masking the findings the change introduced.
+		// Write-once per commit: overwriting from a dirty tree would later self-compare
+		// and silently mask the findings the change introduced.
 		if existing, _ := analyze.LoadBaseline(baselineDir, label); existing != nil {
 			fmt.Fprintf(out, "diff: baseline for %s already recorded; not overwriting\n", short(label))
 			return nil
@@ -248,20 +239,8 @@ results back with 'chiton analyze submit'. chiton calls no LLM itself.`,
 			if err != nil {
 				return err
 			}
-			b, err := json.MarshalIndent(specs, "", "  ")
-			if err != nil {
-				return err
-			}
-			out := cmd.OutOrStdout()
-			if outFile != "" {
-				if err := os.WriteFile(outFile, b, 0o644); err != nil {
-					return fmt.Errorf("write %s: %w", outFile, err)
-				}
-				fmt.Fprintf(out, "analyze: %d pending LLM task(s) written to %s\n", len(specs), outFile)
-				return nil
-			}
-			fmt.Fprintln(out, string(b))
-			return nil
+			return emitSpecs(cmd.OutOrStdout(), specs, outFile,
+				fmt.Sprintf("analyze: %d pending LLM task(s)", len(specs)))
 		},
 	}
 	cmd.Flags().StringVar(&rule, "rule", "", "Limit to one LLM rule (exact id or substring, e.g. 'llm/injection-risk')")
@@ -285,13 +264,13 @@ func analyzeSubmitCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("read %s: %w", args[0], err)
 			}
-			results, err := parseLLMResults(data)
+			results, err := parseOneOrMany[analyze.LLMResult](data, "an LLMResult")
 			if err != nil {
 				return err
 			}
 			gs, err := openGraphStore(cfg.GraphPath, false)
 			if err != nil {
-				return fmt.Errorf("open store: %w", err)
+				return err
 			}
 			defer gs.Close()
 
@@ -314,19 +293,4 @@ func analyzeSubmitCmd() *cobra.Command {
 		},
 	}
 	return cmd
-}
-
-// parseLLMResults accepts either a single LLMResult object or a JSON array of
-// them, stripping a leading UTF-8 BOM (common on Windows-authored files).
-func parseLLMResults(data []byte) ([]analyze.LLMResult, error) {
-	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
-	var arr []analyze.LLMResult
-	if err := json.Unmarshal(data, &arr); err == nil {
-		return arr, nil
-	}
-	var single analyze.LLMResult
-	if err := json.Unmarshal(data, &single); err != nil {
-		return nil, fmt.Errorf("parse results: expected an LLMResult object or array: %w", err)
-	}
-	return []analyze.LLMResult{single}, nil
 }

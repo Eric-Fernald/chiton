@@ -1,8 +1,5 @@
-// Package cache tracks content_sha256 per source_uri so chiton build can skip
-// re-extraction of files whose content has not changed since the last run.
-//
-// The cache is safe for concurrent use: the live-sync engine (Phase 3) drives
-// it from a worker pool, so Changed/Mark/Delete/Save are all guarded by a mutex.
+// Package cache tracks content_sha256 per source_uri so builds skip unchanged files. It is safe for
+// concurrent use because the live-sync engine drives it from a worker pool.
 package cache
 
 import (
@@ -10,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/Eric-Fernald/chiton/internal/fsutil"
 )
 
 // Cache maps source_uri to the SHA256 hex string last seen for that file.
@@ -44,9 +43,8 @@ func (c *Cache) Changed(uri, sha256 string) bool {
 	return c.entries[uri] != sha256
 }
 
-// Mark records sha256 as the current hash for uri.
-// Call this only after a successful extract + upsert so a failed upsert
-// doesn't leave a stale cache entry that would suppress re-extraction.
+// Mark records sha256 as uri's current hash. Call it only after a successful extract + upsert, so a
+// failed upsert doesn't leave an entry that suppresses re-extraction.
 func (c *Cache) Mark(uri, sha256 string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -61,9 +59,7 @@ func (c *Cache) Delete(uri string) {
 	delete(c.entries, uri)
 }
 
-// URIs returns a snapshot of every source_uri currently cached. Used by the
-// live-sync one-shot reconciler to find files that were indexed previously but
-// are now gone from the tree.
+// URIs returns a snapshot of every cached source_uri, so the reconciler can find files since removed.
 func (c *Cache) URIs() []string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -74,9 +70,8 @@ func (c *Cache) URIs() []string {
 	return out
 }
 
-// Save writes the cache to disk. It creates the parent directory if needed
-// and writes atomically via a temp file so a crash mid-write leaves the
-// previous cache intact.
+// Save writes the cache to disk, creating the parent directory if needed. It writes atomically, so a crash
+// mid-write leaves the previous cache intact and concurrent Saves never share a temp file.
 func (c *Cache) Save() error {
 	c.mu.RLock()
 	data, err := json.MarshalIndent(c.entries, "", "  ")
@@ -87,9 +82,5 @@ func (c *Cache) Save() error {
 	if err := os.MkdirAll(filepath.Dir(c.path), 0o755); err != nil {
 		return err
 	}
-	tmp := c.path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, c.path)
+	return fsutil.WriteFileAtomic(c.path, append(data, '\n'), 0o644)
 }

@@ -1,8 +1,6 @@
 package architecture
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"regexp"
 	"strings"
@@ -11,10 +9,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// DotImport flags Go dot imports (`import . "pkg"` and dot entries inside an
-// `import ( ... )` block). Dot imports merge another package's exported names
-// into the file scope, making it impossible to tell where an identifier comes
-// from and risking silent shadowing.
+// DotImport flags Go dot imports (`import . "pkg"`, or a `. "pkg"` entry in an import block),
+// which hide where identifiers come from and risk silent shadowing.
 type DotImport struct{}
 
 func (DotImport) Meta() analyze.Meta {
@@ -39,13 +35,9 @@ var (
 
 func (DotImport) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	sc := bufio.NewScanner(bytes.NewReader(t.Content))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	line := 0
 	inBlock := false
-	for sc.Scan() {
-		line++
-		text := strings.TrimSpace(stripArchLineComment("go", sc.Text()))
+	for line, raw := range analyze.Lines(t.Content) {
+		text := strings.TrimSpace(stripArchLineComment("go", raw))
 		switch {
 		case inBlock:
 			if strings.HasPrefix(text, ")") {

@@ -5,9 +5,7 @@ import (
 	"testing"
 )
 
-// These tests cover the false-positive fixes: literal/comment masking for the
-// rust-unwrap rule, broadened entrypoint detection for abrupt-exit, and the
-// per-file block-comment masking applied to the Go line-scan rules.
+// False-positive regressions: rust-unwrap literal masking, abrupt-exit entrypoints, Go block-comment masking.
 
 // ---- rust-unwrap: string-literal & block-comment masking ----
 

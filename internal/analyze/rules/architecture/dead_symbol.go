@@ -9,16 +9,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// DeadSymbol flags non-exported symbols with zero non-CONTAINS in-edges.
-// A symbol still imported via CONTAINS (its enclosing file) is fine — that
-// edge isn't a "use" of the symbol, just structural.
-//
-// Heuristics:
-//   - Test files contribute their CALLS edges (so symbols used only from
-//     tests count as live). Some shops do want to flag test-only code but
-//     that's a separate rule.
-//   - Exported names (capitalized in Go, public in others) are skipped to
-//     avoid noise on API surfaces a chiton run doesn't see callers for.
+// DeadSymbol flags non-exported func-like symbols with no non-CONTAINS in-edges; CALLS from tests
+// count as uses, and exported names are skipped since their callers may lie outside the graph.
 type DeadSymbol struct{}
 
 func (DeadSymbol) Meta() analyze.Meta {
@@ -58,10 +50,8 @@ func (DeadSymbol) MatchGraph(_ context.Context, t analyze.GraphTarget) []analyze
 		if n.Label == "init" || n.Label == "main" {
 			continue
 		}
-		// Methods ("Type.method"): the Go extractor emits no CALLS edges for
-		// receiver-method calls, so every private method called only via its
-		// receiver would look dead. Skip them until call extraction covers
-		// selector expressions.
+		// Skip methods ("Type.method"): the Go extractor emits no CALLS edges for receiver calls,
+		// so every private method would look dead.
 		if strings.Contains(n.Label, ".") {
 			continue
 		}
@@ -75,7 +65,7 @@ func (DeadSymbol) MatchGraph(_ context.Context, t analyze.GraphTarget) []analyze
 		// Make sure the node is a function-like — flagging unused types adds
 		// too much noise for a starter rule.
 		lk, _ := n.Attrs["lang_kind"].(string)
-		if !isFuncLike(lk) {
+		if !analyze.IsFuncKind(lk) {
 			continue
 		}
 		out = append(out, analyze.Finding{
@@ -92,18 +82,8 @@ func (DeadSymbol) MatchGraph(_ context.Context, t analyze.GraphTarget) []analyze
 	return out
 }
 
-func isFuncLike(langKind string) bool {
-	switch langKind {
-	case "func", "method", "arrow":
-		return true
-	}
-	return false
-}
-
-// isExportedName is a language-agnostic heuristic: a leading uppercase letter
-// (Go), a leading underscore being absent (Python convention), or a public
-// keyword on the same line — we only have the label here so use the cheapest
-// signal that catches Go exports.
+// isExportedName reports whether the label's last dotted segment starts with an ASCII capital
+// (the Go export rule), the only signal a bare label offers.
 func isExportedName(label string) bool {
 	if label == "" {
 		return false

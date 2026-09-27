@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	extast "github.com/Eric-Fernald/chiton/internal/extract/ast"
@@ -20,6 +21,9 @@ type Analyzer struct {
 	store    store.GraphStore
 	registry *Registry
 	now      func() time.Time
+
+	fileRulesOnce sync.Once
+	fileRules     fileRuleSet // AnalyzeFile's rule list, built lazily by fileRuleSet
 }
 
 // New returns an Analyzer wired to the given store and rule registry.
@@ -43,9 +47,8 @@ type Result struct {
 	Duration     time.Duration
 }
 
-// Analyze walks root, extracts each supported source file, runs FileScope
-// rules over each file, then runs GraphScope rules over the full extracted
-// set. All findings (and the rules they violated) are upserted into the store.
+// Analyze runs FileScope rules over each supported file under root, then GraphScope rules over
+// the whole extracted set, and upserts every finding plus the rules they violated.
 func (a *Analyzer) Analyze(ctx context.Context, root string) (*Result, error) {
 	start := a.now()
 	rules := a.registry.All()
@@ -67,12 +70,13 @@ func (a *Analyzer) Analyze(ctx context.Context, root string) (*Result, error) {
 	}
 	findings := append(w.findings, a.matchGraphRules(ctx, graphRules, w.nodes, w.edges)...)
 
-	if err := a.persist(ctx, rules, findings); err != nil {
+	ids, err := a.persist(ctx, rules, findings)
+	if err != nil {
 		return nil, err
 	}
 	// A full Analyze runs every rule, so all deterministic findings for the
 	// scanned files are in scope to prune (ruleScope nil = no restriction).
-	if err := a.pruneResolved(ctx, w.scannedURIs, findings, nil); err != nil {
+	if err := a.pruneResolved(ctx, w.scannedURIs, ids, nil); err != nil {
 		return nil, err
 	}
 
@@ -91,9 +95,7 @@ type walkResult struct {
 	nodes    []model.Node
 	edges    []model.Edge
 	findings []Finding
-	// scannedURIs records every file extracted this run, so pruneResolved
-	// only removes stale findings for files actually re-analysed (a partial
-	// `analyze <subdir>` never touches findings outside its scope).
+	// scannedURIs scopes pruneResolved to files re-analysed now, so `analyze <subdir>` spares the rest.
 	scannedURIs  map[string]bool
 	filesScanned int
 }
@@ -102,6 +104,10 @@ type walkResult struct {
 // applicable FileScope rules over it.
 func (a *Analyzer) walkAndMatch(ctx context.Context, root string, fileRules []FileRule) (*walkResult, error) {
 	w := &walkResult{scannedURIs: map[string]bool{}}
+	langs := make([][]string, len(fileRules))
+	for i, fr := range fileRules {
+		langs[i] = fr.Meta().Languages
+	}
 	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -113,43 +119,24 @@ func (a *Analyzer) walkAndMatch(ctx context.Context, root string, fileRules []Fi
 			}
 			return nil
 		}
-		ex := extast.ForFile(path)
-		if ex == nil {
-			return nil
-		}
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return nil // skip unreadable
-		}
-		nodes, edges, err := ex.ExtractFile(ctx, path)
-		if err != nil {
+		ft, nodes, ok := loadFileTarget(ctx, path)
+		if !ok {
 			return nil
 		}
 		w.filesScanned++
-
-		fileNode := findFileNode(nodes)
-		if fileNode.SourceURI != "" {
-			w.scannedURIs[fileNode.SourceURI] = true
-		}
-		ft := FileTarget{
-			Path:     path,
-			URI:      fileNode.SourceURI,
-			Content:  content,
-			FileNode: fileNode,
-			Nodes:    nonFileNodes(nodes),
-			Edges:    edges,
+		if ft.URI != "" {
+			w.scannedURIs[ft.URI] = true
 		}
 
-		ext := fileExt(path)
-		for _, fr := range fileRules {
-			if !ruleApplies(fr.Meta().Languages, ext) {
-				continue
+		ext := FileExt(path)
+		for i, fr := range fileRules {
+			if ruleApplies(langs[i], ext) {
+				w.findings = append(w.findings, fr.MatchFile(ctx, ft)...)
 			}
-			w.findings = append(w.findings, fr.MatchFile(ctx, ft)...)
 		}
 
 		w.nodes = append(w.nodes, nodes...)
-		w.edges = append(w.edges, edges...)
+		w.edges = append(w.edges, ft.Edges...)
 		return nil
 	})
 	if walkErr != nil {
@@ -168,73 +155,58 @@ func (a *Analyzer) matchGraphRules(ctx context.Context, graphRules []GraphRule, 
 	return findings
 }
 
-// persist upserts rule nodes (so VIOLATES edges resolve), finding nodes,
-// and VIOLATES/AFFECTS edges.
-func (a *Analyzer) persist(ctx context.Context, rules []Rule, findings []Finding) error {
+// persist upserts rule nodes (so VIOLATES edges resolve), finding nodes, and VIOLATES/AFFECTS edges,
+// returning the set of finding IDs so each is hashed once.
+func (a *Analyzer) persist(ctx context.Context, rules []Rule, findings []Finding) (map[string]bool, error) {
 	now := a.now()
 
 	nodes := make([]model.Node, 0, len(rules)+len(findings))
+	ruleNodes := make(map[string]string, len(rules)) // rule ID -> RuleNodeID
 	for _, r := range rules {
-		nodes = append(nodes, RuleAsNode(r.Meta(), now))
+		n := RuleAsNode(r.Meta(), now)
+		ruleNodes[n.Label] = n.ID
+		nodes = append(nodes, n)
 	}
+	edges := make([]model.Edge, 0, len(findings)*2)
+	ids := make(map[string]bool, len(findings))
 	for _, f := range findings {
-		nodes = append(nodes, f.AsNode(now))
+		id := f.FindingID()
+		ids[id] = true
+		rule, ok := ruleNodes[f.RuleID]
+		if !ok {
+			rule = RuleNodeID(f.RuleID)
+			ruleNodes[f.RuleID] = rule
+		}
+		nodes, edges = f.appendGraph(nodes, edges, id, rule, now)
 	}
 	if err := a.store.UpsertNodes(ctx, nodes); err != nil {
-		return fmt.Errorf("upsert nodes: %w", err)
-	}
-
-	edges := make([]model.Edge, 0, len(findings)*2)
-	for _, f := range findings {
-		edges = append(edges, f.ViolatesEdge(now))
-		if ae := f.AffectsEdge(now); ae.ID != "" {
-			edges = append(edges, ae)
-		}
+		return nil, fmt.Errorf("upsert nodes: %w", err)
 	}
 	if err := a.store.UpsertEdges(ctx, edges); err != nil {
-		return fmt.Errorf("upsert edges: %w", err)
+		return nil, fmt.Errorf("upsert edges: %w", err)
 	}
-	return nil
+	return ids, nil
 }
 
-// pruneResolved deletes deterministic findings that are no longer produced for
-// a re-scanned file, so the store reflects live truth (and `--diff` can detect
-// resolved findings). LLM findings are left alone — they have their own
-// lifecycle via LLMService — as are findings for files outside this scan.
-//
-// ruleScope, when non-nil, restricts pruning to findings whose rule_id is in the
-// set. The incremental AnalyzeFile runs only FileRules, so it passes the IDs of
-// the rules it ran: without this, GraphScope findings (architecture/dead-symbol)
-// — which target the same file URI and are also DETERMINISTIC — would be wiped on
-// every single-file edit and never regenerate until a full `chiton analyze`. A
-// nil scope (full Analyze, which runs every rule) prunes all deterministic kinds.
-func (a *Analyzer) pruneResolved(ctx context.Context, scanned map[string]bool, current []Finding, ruleScope map[string]bool) error {
+// pruneResolved deletes deterministic findings not in newIDs for a scanned file (LLM findings keep
+// their own lifecycle); a non-nil ruleScope limits it to the rule IDs that actually ran.
+func (a *Analyzer) pruneResolved(ctx context.Context, scanned map[string]bool, newIDs map[string]bool, ruleScope map[string]bool) error {
 	if len(scanned) == 0 {
 		return nil
 	}
-	newIDs := make(map[string]bool, len(current))
-	for _, f := range current {
-		newIDs[f.FindingID()] = true
-	}
-	all, err := a.store.AllNodes(ctx)
+	findings, err := store.NodesMatching(ctx, a.store, store.NodeFilter{
+		Kinds: []model.NodeKind{model.KindFinding},
+		Attrs: map[string]string{"rule_provenance": string(ProvenanceDeterministic)},
+	})
 	if err != nil {
 		return fmt.Errorf("load nodes for prune: %w", err)
 	}
 	var stale []model.Node
-	for _, n := range all {
-		if n.Kind != model.KindFinding {
-			continue
+	for _, n := range findings {
+		if ruleScope != nil && !ruleScope[model.AttrString(n.Attrs, "rule_id")] {
+			continue // a rule not run in this pass — leave its findings intact
 		}
-		if rp, _ := n.Attrs["rule_provenance"].(string); rp != string(ProvenanceDeterministic) {
-			continue
-		}
-		if ruleScope != nil {
-			if rid, _ := n.Attrs["rule_id"].(string); !ruleScope[rid] {
-				continue // a rule not run in this pass — leave its findings intact
-			}
-		}
-		turi, _ := n.Attrs["target_uri"].(string)
-		if !scanned[turi] || newIDs[n.ID] {
+		if !scanned[model.AttrString(n.Attrs, "target_uri")] || newIDs[n.ID] {
 			continue
 		}
 		stale = append(stale, n)
@@ -242,10 +214,8 @@ func (a *Analyzer) pruneResolved(ctx context.Context, scanned map[string]bool, c
 	return deleteFindingNodes(ctx, a.store, stale)
 }
 
-// deleteFindingNodes removes the given finding nodes (and their edges) using the
-// store's batch NodeDeleter capability when available, falling back to per-node
-// DeleteBySourceURI otherwise. Finding source URIs are unique, so both paths
-// delete exactly the intended nodes.
+// deleteFindingNodes removes the nodes (and edges) via NodeDeleter when available, else per-node
+// DeleteBySourceURI; finding source URIs are unique, so both delete exactly these nodes.
 func deleteFindingNodes(ctx context.Context, gs store.GraphStore, nodes []model.Node) error {
 	if len(nodes) == 0 {
 		return nil
@@ -268,6 +238,38 @@ func deleteFindingNodes(ctx context.Context, gs store.GraphStore, nodes []model.
 	return nil
 }
 
+// loadFileTarget reads and extracts path; ok is false for unsupported, unreadable, or unparsable
+// files. nodes is the full extraction, including the file node that ft.Nodes omits.
+func loadFileTarget(ctx context.Context, path string) (ft FileTarget, nodes []model.Node, ok bool) {
+	ex := extast.ForFile(path)
+	if ex == nil {
+		return ft, nil, false
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return ft, nil, false
+	}
+	nodes, edges, err := ex.ExtractSource(ctx, path, content)
+	if err != nil {
+		return ft, nil, false
+	}
+	return newFileTarget(path, content, nodes, edges), nodes, true
+}
+
+// newFileTarget builds path's FileTarget from its content and full extraction (file node included).
+func newFileTarget(path string, content []byte, nodes []model.Node, edges []model.Edge) FileTarget {
+	fileNode := findFileNode(nodes)
+	return FileTarget{
+		Path:     path,
+		URI:      fileNode.SourceURI,
+		Content:  content,
+		FileNode: fileNode,
+		Nodes:    nonFileNodes(nodes),
+		Edges:    edges,
+		memo:     &fileMemo{m: map[string]any{}},
+	}
+}
+
 func findFileNode(nodes []model.Node) model.Node {
 	for _, n := range nodes {
 		if n.Kind == model.KindFile {
@@ -285,15 +287,6 @@ func nonFileNodes(nodes []model.Node) []model.Node {
 		}
 	}
 	return out
-}
-
-// fileExt returns the lowercase extension without the leading dot.
-func fileExt(path string) string {
-	e := strings.ToLower(filepath.Ext(path))
-	if strings.HasPrefix(e, ".") {
-		return e[1:]
-	}
-	return e
 }
 
 // ruleApplies returns true if the rule's language filter accepts the file.
