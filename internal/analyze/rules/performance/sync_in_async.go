@@ -36,7 +36,7 @@ var (
 func (SyncInAsync) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
 	asyncIndent := -1
-	for line, text := range analyze.Lines(t.Content) {
+	for line, text := range analyze.FileLines(t) {
 		trimmed := strings.TrimSpace(text)
 		if trimmed == "" {
 			continue

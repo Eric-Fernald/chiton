@@ -48,16 +48,28 @@ func serveUnix(cmd *cobra.Command, sse *mcpsdk.SSEServer, path string) error {
 	})
 }
 
-// serveUntilDone runs serve until it fails or ctx is cancelled (Ctrl-C). On cancel it waits for shutdown
-// (bounded to 5s) so in-flight handlers finish before the caller's deferred store Close runs.
+// baseContext derives every request context from ctx, so Ctrl-C cancels in-flight handler work (e.g. a
+// network re-ingest) instead of letting it outlive the shutdown.
+func baseContext(ctx context.Context) func(net.Listener) context.Context {
+	return func(net.Listener) context.Context { return ctx }
+}
+
+// shutdownGrace is how long serveUntilDone drains gracefully before waiting on handlers without a deadline.
+var shutdownGrace = 5 * time.Second
+
+// serveUntilDone runs serve until it fails or ctx is cancelled (Ctrl-C). On cancel it returns only once every
+// in-flight handler has finished, so the caller's deferred store Close never runs under one.
 func serveUntilDone(ctx context.Context, serve func() error, shutdown func(context.Context) error) error {
 	errCh := make(chan error, 1)
 	go func() { errCh <- serve() }()
 	select {
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		graceCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 		defer cancel()
-		_ = shutdown(shutdownCtx)
+		if shutdown(graceCtx) != nil {
+			// Past the grace period: keep waiting, since returning would close the store under the handlers.
+			_ = shutdown(context.Background())
+		}
 		return nil
 	case err := <-errCh:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {

@@ -34,7 +34,7 @@ func (SwallowedPanic) MatchFile(_ context.Context, t analyze.FileTarget) []analy
 		return nil
 	}
 	var out []analyze.Finding
-	for line, text := range analyze.Lines(t.Content) {
+	for line, text := range analyze.FileLines(t) {
 		if swallowedRecoverRe.MatchString(text) {
 			out = append(out, analyze.Finding{
 				RuleID:       "reliability/swallowed-panic",

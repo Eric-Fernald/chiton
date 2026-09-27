@@ -3,6 +3,8 @@ package subagent
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -371,6 +373,36 @@ func TestSubmitEmbedFallsBackPerConcept(t *testing.T) {
 				t.Fatalf("embedded concepts = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// downEmbedder fails every call the way an unreachable Ollama does (a transport error), counting calls.
+type downEmbedder struct {
+	embed.Embedder
+	calls *int
+}
+
+func (d downEmbedder) Embed(context.Context, []string) ([][]float32, error) {
+	*d.calls++
+	return nil, fmt.Errorf("ollama: POST failed: %w", &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")})
+}
+
+// TestSubmitEmbedUnreachableSkipsFallback verifies an unreachable embedder costs one call, not one per concept.
+func TestSubmitEmbedUnreachableSkipsFallback(t *testing.T) {
+	gs := newStore(t)
+	ctx := context.Background()
+	_ = gs.UpsertNodes(ctx, []model.Node{docSection("d1", "Auth", "jwt auth")})
+	calls := 0
+	emb := downEmbedder{Embedder: embed.NewHashEmbedder(64), calls: &calls}
+
+	res := SubmitResult{TaskID: "d1", Concepts: []ConceptResult{
+		{Label: "JWT", Confidence: 0.9}, {Label: "Session", Confidence: 0.9}, {Label: "Token", Confidence: 0.9},
+	}}
+	if _, err := New(gs, emb, 0.5).Submit(ctx, res); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("embedder called %d times, want 1 (no per-concept retries when unreachable)", calls)
 	}
 }
 

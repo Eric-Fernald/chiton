@@ -29,7 +29,7 @@ var mutableDefaultRe = regexp.MustCompile(`^\s*(async\s+)?def\s+\w+\s*\([^)]*?=\
 
 func (MutableDefaultArg) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	for line, text := range analyze.Lines(t.Content) {
+	for line, text := range analyze.FileLines(t) {
 		if mutableDefaultRe.MatchString(text) {
 			out = append(out, analyze.Finding{
 				RuleID:       "bugs/mutable-default-arg",

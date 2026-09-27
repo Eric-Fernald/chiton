@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -26,6 +27,13 @@ type NodeResult struct {
 	CommunityID int     `json:"community_id"`
 	Betweenness float64 `json:"betweenness"`
 	Degree      int     `json:"degree"`
+}
+
+// CompareByBetweenness orders results by descending betweenness, then label and source URI, so every god-node
+// listing (CLI, report, MCP) breaks ties the same way.
+func CompareByBetweenness(a, b NodeResult) int {
+	return cmp.Or(cmp.Compare(b.Betweenness, a.Betweenness), cmp.Compare(a.Label, b.Label),
+		cmp.Compare(a.SourceURI, b.SourceURI))
 }
 
 // SidecarPath returns the cluster sidecar path for a graph store path

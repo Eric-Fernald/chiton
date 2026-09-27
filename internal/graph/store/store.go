@@ -56,6 +56,12 @@ type NodeScanner interface {
 	NodesMatching(ctx context.Context, f NodeFilter) ([]model.Node, error)
 }
 
+// NodeGetter is an optional capability loading many nodes by ID in one read; callers use the GetNodes helper.
+type NodeGetter interface {
+	// GetNodes returns the nodes with the given IDs that exist, in ids order.
+	GetNodes(ctx context.Context, ids []string) ([]model.Node, error)
+}
+
 // EmbeddingIDLister is an optional EmbeddingStore capability listing embedded node IDs without decoding
 // vectors; callers use the EmbeddingIDs helper.
 type EmbeddingIDLister interface {

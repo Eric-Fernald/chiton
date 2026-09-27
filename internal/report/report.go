@@ -1,8 +1,10 @@
 package report
 
 import (
+	"cmp"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 
@@ -36,11 +38,9 @@ func Generate(w io.Writer, results *cluster.Results, edges []model.Edge, opts Op
 	for id, r := range results.Nodes {
 		all = append(all, entry{id, r})
 	}
-	sort.Slice(all, func(i, j int) bool {
-		if all[i].r.Betweenness != all[j].r.Betweenness {
-			return all[i].r.Betweenness > all[j].r.Betweenness
-		}
-		return all[i].id < all[j].id // stable tie-break so output is reproducible
+	slices.SortFunc(all, func(a, b entry) int {
+		// Same ranking as the CLI and MCP god-node lists; ID last so output is fully reproducible.
+		return cmp.Or(cluster.CompareByBetweenness(a.r, b.r), cmp.Compare(a.id, b.id))
 	})
 
 	limit := min(opts.MaxGodNodes, len(all))

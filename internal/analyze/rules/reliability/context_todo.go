@@ -36,7 +36,7 @@ func (ContextTODO) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.
 		return nil
 	}
 	var out []analyze.Finding
-	for line, text := range analyze.Lines(t.Content) {
+	for line, text := range analyze.FileLines(t) {
 		if contextTodoRe.MatchString(text) {
 			out = append(out, analyze.Finding{
 				RuleID:       "reliability/context-without-deadline",

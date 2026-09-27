@@ -94,6 +94,25 @@ func NodesMatching(ctx context.Context, gs GraphStore, f NodeFilter) ([]model.No
 	return out, nil
 }
 
+// GetNodes returns the nodes with the given IDs that exist, in ids order, reading them in one pass via
+// NodeGetter when gs has it (else one GetNode per ID).
+func GetNodes(ctx context.Context, gs GraphStore, ids []string) ([]model.Node, error) {
+	if g, ok := gs.(NodeGetter); ok {
+		return g.GetNodes(ctx, ids)
+	}
+	var out []model.Node
+	for _, id := range ids {
+		n, err := gs.GetNode(ctx, id)
+		if err != nil {
+			return out, err
+		}
+		if n != nil {
+			out = append(out, *n)
+		}
+	}
+	return out, nil
+}
+
 // EmbeddingIDs returns the node IDs es holds embeddings for, via EmbeddingIDLister when es has it.
 func EmbeddingIDs(ctx context.Context, es EmbeddingStore) ([]string, error) {
 	if l, ok := es.(EmbeddingIDLister); ok {

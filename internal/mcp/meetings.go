@@ -390,9 +390,24 @@ func buildMeetingViews(ctx context.Context, gs store.GraphStore) ([]meetingView,
 		return nil, err
 	}
 
-	byID := make(map[string]*model.Node, len(nodes)) // nil caches a missing node
+	byID := make(map[string]*model.Node, len(nodes))
 	for i := range nodes {
 		byID[nodes[i].ID] = &nodes[i]
+	}
+	// Load the other DECIDED_IN targets (the symbols decisions govern) in one read.
+	var missing []string
+	for _, e := range edges {
+		if _, ok := byID[e.Dst]; !ok && e.Kind == model.EdgeDecidedIn {
+			byID[e.Dst] = nil // nil marks an absent node; also dedupes missing
+			missing = append(missing, e.Dst)
+		}
+	}
+	targets, err := store.GetNodes(ctx, gs, missing)
+	if err != nil {
+		return nil, err
+	}
+	for i := range targets {
+		byID[targets[i].ID] = &targets[i]
 	}
 
 	// Index decision → (governed symbol labels, meeting id) and meeting → label.
@@ -402,13 +417,7 @@ func buildMeetingViews(ctx context.Context, gs store.GraphStore) ([]meetingView,
 		if e.Kind != model.EdgeDecidedIn {
 			continue
 		}
-		dst, ok := byID[e.Dst]
-		if !ok {
-			if dst, err = gs.GetNode(ctx, e.Dst); err != nil {
-				return nil, err
-			}
-			byID[e.Dst] = dst
-		}
+		dst := byID[e.Dst]
 		if dst == nil {
 			continue
 		}

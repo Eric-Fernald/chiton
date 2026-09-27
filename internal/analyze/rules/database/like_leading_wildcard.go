@@ -31,7 +31,7 @@ var likeLeadingWildcardRe = regexp.MustCompile(`(?i)\bLIKE\s+(['"])%`)
 func (LikeLeadingWildcard) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
 	py := analyze.FileExt(t.URI) == "py"
-	for line, raw := range analyze.Lines(maskedDB(t, py)) {
+	for line, raw := range analyze.LinesOf(maskedDBText(t, py)) {
 		text := stripDBComment(raw, py)
 		if likeLeadingWildcardRe.MatchString(text) {
 			out = append(out, analyze.Finding{

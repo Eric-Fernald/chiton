@@ -48,7 +48,7 @@ func (HardcodedSecret) MatchFile(_ context.Context, t analyze.FileTarget) []anal
 		return nil
 	}
 	var out []analyze.Finding
-	for line, text := range analyze.Lines(t.Content) {
+	for line, text := range analyze.FileLines(t) {
 		// aws-secret-key is (?i) but still needs its literal ':' or '='.
 		if !containsAny(text, "AKIA", ":", "=", "AIza", "gh", "xox", "-----BEGIN ", "eyJ") {
 			continue

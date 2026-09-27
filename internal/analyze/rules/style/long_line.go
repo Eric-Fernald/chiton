@@ -30,7 +30,7 @@ func (LongLine) Meta() analyze.Meta {
 
 func (LongLine) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	for line, text := range analyze.Lines(t.Content) {
+	for line, text := range analyze.FileLines(t) {
 		// Count runes, not bytes, so multi-byte characters aren't over-counted.
 		if len(text) <= LongLineLimit || utf8.RuneCountInString(text) <= LongLineLimit {
 			continue

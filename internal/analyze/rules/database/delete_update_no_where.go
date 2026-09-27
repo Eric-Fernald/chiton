@@ -37,7 +37,7 @@ var (
 func (DeleteUpdateNoWhere) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
 	py := analyze.FileExt(t.URI) == "py"
-	for line, raw := range analyze.Lines(maskedDB(t, py)) {
+	for line, raw := range analyze.LinesOf(maskedDBText(t, py)) {
 		text := stripDBComment(raw, py)
 		// A WHERE anywhere on the line means the statement is bounded.
 		if whereClauseRe.MatchString(text) {

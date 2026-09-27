@@ -39,7 +39,7 @@ func (StringConcatInLoop) MatchFile(_ context.Context, t analyze.FileTarget) []a
 	var out []analyze.Finding
 	depth := 0
 	loopDepth := 0
-	for line, text := range analyze.Lines(t.Content) {
+	for line, text := range analyze.FileLines(t) {
 		if forStartRe.MatchString(text) {
 			loopDepth = depth + 1
 		}

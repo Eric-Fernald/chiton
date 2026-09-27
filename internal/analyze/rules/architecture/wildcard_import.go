@@ -31,7 +31,7 @@ var pyWildcardRe = regexp.MustCompile(`^from\s+[.\w]+\s+import\s+\*\s*$`)
 
 func (WildcardImport) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	for line, raw := range analyze.Lines(t.Content) {
+	for line, raw := range analyze.FileLines(t) {
 		text := strings.TrimSpace(stripArchLineComment("py", raw))
 		if pyWildcardRe.MatchString(text) {
 			out = append(out, analyze.Finding{

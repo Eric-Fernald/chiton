@@ -121,7 +121,7 @@ public URL for the subscription itself.`,
 
 			mux := http.NewServeMux()
 			mux.Handle("/notifications", handler)
-			srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+			srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second, BaseContext: baseContext(cmd.Context())}
 
 			fmt.Fprintf(out, "teams: webhook listening on %s/notifications (Ctrl-C to stop)\n", addr)
 			return serveUntilDone(cmd.Context(), srv.ListenAndServe, srv.Shutdown)

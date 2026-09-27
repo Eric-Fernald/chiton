@@ -39,7 +39,7 @@ func (ErrorNotWrapped) MatchFile(_ context.Context, t analyze.FileTarget) []anal
 		return nil
 	}
 	var out []analyze.Finding
-	for line, raw := range analyze.Lines(t.Content) {
+	for line, raw := range analyze.FileLines(t) {
 		// String contents are kept: the format verbs live inside the format string.
 		text := analyze.StripLineComment(raw, false)
 		if !errorfCallRe.MatchString(text) {

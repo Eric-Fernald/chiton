@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 )
 
 // TestWriteFileAtomic checks content and that each write leaves the mode os.WriteFile gives a new file
@@ -106,5 +107,30 @@ func assertOnly(t *testing.T, dir string, names ...string) {
 		if got[i] != names[i] {
 			t.Fatalf("dir holds %v, want %v", got, names)
 		}
+	}
+}
+
+// On Windows, replacing a file another handle briefly holds open must succeed once the handle closes.
+func TestWriteFileAtomicRetriesHeldFileOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("rename-over-open-file only fails on Windows")
+	}
+	path := filepath.Join(t.TempDir(), "cluster.json")
+	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	held, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		held.Close()
+	}()
+	if err := WriteFileAtomic(path, []byte("new"), 0o644); err != nil {
+		t.Fatalf("WriteFileAtomic over a briefly held file: %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "new" {
+		t.Fatalf("content = %q, want %q", got, "new")
 	}
 }

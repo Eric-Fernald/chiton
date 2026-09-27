@@ -80,31 +80,28 @@ for CI and demos). Restart 'chiton serve' afterwards to load the new vectors.`,
 				}
 			}
 
-			// Work is the embeddable nodes (non-empty TextFor) still lacking a vector, as parallel ids/texts.
-			var ids, texts []string
+			// Work is the embeddable nodes (non-empty TextFor) still lacking a vector; texts are rebuilt per batch
+			// so only one batch of (possibly large doc-section) text is live at a time.
+			var work []model.Node
 			for _, n := range nodes {
-				if all || !existing[n.ID] {
-					if t := embed.TextFor(n); t != "" {
-						ids = append(ids, n.ID)
-						texts = append(texts, t)
-					}
+				if (all || !existing[n.ID]) && embed.TextFor(n) != "" {
+					work = append(work, n)
 				}
 			}
-			if len(ids) == 0 {
+			if len(work) == 0 {
 				fmt.Fprintln(out, "embed: nothing to do (all embeddable nodes already have vectors; use --all to re-embed)")
 				return nil
 			}
-			fmt.Fprintf(out, "embed: %d node(s) to embed\n", len(ids))
+			fmt.Fprintf(out, "embed: %d node(s) to embed\n", len(work))
 
 			written := 0
-			for start := 0; start < len(ids); start += embedBatchSize {
+			for start := 0; start < len(work); start += embedBatchSize {
 				// Stop between batches on Ctrl-C (root context cancelled) so
 				// the deferred store close runs cleanly.
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				end := min(start+embedBatchSize, len(ids))
-				embs, _, err := embed.TextEmbeddings(ctx, emb, ids[start:end], texts[start:end])
+				embs, _, err := embed.NodeEmbeddings(ctx, emb, work[start:min(start+embedBatchSize, len(work))])
 				if err != nil {
 					return fmt.Errorf("embed batch: %w", err)
 				}
@@ -112,7 +109,7 @@ for CI and demos). Restart 'chiton serve' afterwards to load the new vectors.`,
 					return fmt.Errorf("store embeddings: %w", err)
 				}
 				written += len(embs)
-				fmt.Fprintf(out, "embed: %d/%d\n", written, len(ids))
+				fmt.Fprintf(out, "embed: %d/%d\n", written, len(work))
 			}
 
 			fmt.Fprintf(out, "embed: done — %d embeddings written (dim %d)\n", written, emb.Dim())
@@ -145,7 +142,7 @@ func linkSimilarNodes(ctx context.Context, gs store.GraphStore, es store.Embeddi
 	if err != nil {
 		return 0, err
 	}
-	idx := newFlatIndex(slices.Clone(embs)) // a header copy: embs keeps its raw vectors, the queries below
+	idx := consumeIntoFlatIndex(slices.Clone(embs)) // a header copy: embs keeps its raw vectors, the queries below
 
 	seen := map[[2]string]bool{}
 	var edges []model.Edge
@@ -183,9 +180,9 @@ func linkSimilarNodes(ctx context.Context, gs store.GraphStore, es store.Embeddi
 	return len(edges), nil
 }
 
-// newFlatIndex builds an in-memory vector index over embs, nil-ing each embs[i].Vec once indexed (the index keeps a
-// normalized copy) so the raw and normalized sets are never both fully live.
-func newFlatIndex(embs []store.Embedding) *vector.Flat {
+// consumeIntoFlatIndex indexes embs and consumes them: each embs[i].Vec is nil afterwards (the index keeps a
+// normalized copy), so raw and normalized vectors are never both fully live. Pass a clone to keep them.
+func consumeIntoFlatIndex(embs []store.Embedding) *vector.Flat {
 	idx := vector.NewFlatSized(len(embs))
 	item := make([]vector.Item, 1)
 	for i := range embs {
@@ -231,7 +228,7 @@ func searchCmd() *cobra.Command {
 				return err
 			}
 			clusterResults, _ := cluster.LoadSidecar(cluster.SidecarPath(cfg.GraphPath))
-			eng := retrieve.New(gs, newFlatIndex(embs), emb, clusterResults)
+			eng := retrieve.New(gs, consumeIntoFlatIndex(embs), emb, clusterResults)
 
 			query := strings.Join(args, " ")
 			res, err := eng.Query(cmd.Context(), query, retrieve.Options{

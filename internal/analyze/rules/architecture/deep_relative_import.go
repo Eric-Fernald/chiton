@@ -32,7 +32,7 @@ var deepRelativeRe = regexp.MustCompile(`['"](\.\./){3,}`)
 
 func (DeepRelativeImport) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	for line, raw := range analyze.Lines(t.Content) {
+	for line, raw := range analyze.FileLines(t) {
 		// Only consider lines that are plausibly imports to avoid matching deep
 		// relative paths inside string data unrelated to module resolution.
 		text := stripArchLineComment("js", raw)

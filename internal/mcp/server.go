@@ -592,17 +592,8 @@ func graphSummaryHandler(gs store.GraphStore, overlay *cluster.Results) mcpsdk.T
 	}
 }
 
-// sortByBetweenness orders cluster results by descending betweenness, ties by label then source
-// so output doesn't depend on map iteration order.
-func sortByBetweenness(rs []cluster.NodeResult) {
-	slices.SortFunc(rs, func(a, b cluster.NodeResult) int {
-		return cmp.Or(
-			cmp.Compare(b.Betweenness, a.Betweenness),
-			cmp.Compare(a.Label, b.Label),
-			cmp.Compare(a.SourceURI, b.SourceURI),
-		)
-	})
-}
+// sortByBetweenness orders cluster results with cluster.CompareByBetweenness, the shared god-node ranking.
+func sortByBetweenness(rs []cluster.NodeResult) { slices.SortFunc(rs, cluster.CompareByBetweenness) }
 
 // pendingResult renders a pending-task listing: "<tool, spaced> failed" on error, empty when there are
 // no specs, else the specs as JSON.

@@ -32,7 +32,7 @@ var selectStarRe = regexp.MustCompile(`(?i)SELECT\s+\*\s+FROM\s+[\w."` + "`" + `
 func (SelectStarFromUnbounded) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
 	py := analyze.FileExt(t.URI) == "py"
-	for line, raw := range analyze.Lines(maskedDB(t, py)) {
+	for line, raw := range analyze.LinesOf(maskedDBText(t, py)) {
 		text := stripDBComment(raw, py)
 		if !selectStarRe.MatchString(text) {
 			continue

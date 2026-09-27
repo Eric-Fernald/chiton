@@ -34,7 +34,7 @@ var indexOfMembershipRe = regexp.MustCompile(
 func (IndexOfNotIncludes) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	const ruleID = "performance/indexof-not-includes"
 	var out []analyze.Finding
-	for line, raw := range analyze.Lines(t.Content) {
+	for line, raw := range analyze.FileLines(t) {
 		stripped := analyze.StripLineComment(raw, true)
 		if indexOfMembershipRe.MatchString(stripped) {
 			out = append(out, analyze.Finding{

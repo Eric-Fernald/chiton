@@ -26,7 +26,7 @@ func (NestedTernary) Meta() analyze.Meta {
 
 func (NestedTernary) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	for line, raw := range analyze.Lines(t.Content) {
+	for line, raw := range analyze.FileLines(t) {
 		if hasNestedTernary(raw) {
 			out = append(out, analyze.Finding{
 				RuleID:       "quality/nested-ternary",

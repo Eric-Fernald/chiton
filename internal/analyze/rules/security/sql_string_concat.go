@@ -34,7 +34,7 @@ var sqlConcatRe = regexp.MustCompile(
 
 func (SQLStringConcat) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	for line, text := range analyze.Lines(t.Content) {
+	for line, text := range analyze.FileLines(t) {
 		if sqlConcatRe.MatchString(text) {
 			out = append(out, analyze.Finding{
 				RuleID:       "security/sql-string-concat",

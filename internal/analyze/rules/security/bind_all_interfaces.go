@@ -35,7 +35,7 @@ func (BindAllInterfaces) MatchFile(_ context.Context, t analyze.FileTarget) []an
 		return nil
 	}
 	var out []analyze.Finding
-	for line, text := range analyze.Lines(t.Content) {
+	for line, text := range analyze.FileLines(t) {
 		if !strings.Contains(text, "0.0.0.0") {
 			continue
 		}

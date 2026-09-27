@@ -6,11 +6,13 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
+	"time"
 )
 
-// WriteFileAtomic is os.WriteFile via a unique temp file renamed over path, so a crash or concurrent writer never
-// leaves path half-written; the file gets perm minus the umask. path's directory must exist.
+// WriteFileAtomic is os.WriteFile via a unique temp file, fsynced then renamed over path, so a crash or concurrent
+// writer never leaves path half-written; the file gets perm minus the umask. path's directory must exist.
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	tmp, err := createTemp(filepath.Dir(path), perm)
 	if err != nil {
@@ -22,10 +24,26 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 		tmp.Close()
 		return err
 	}
+	// Without the sync, a power loss after the rename can leave path pointing at an empty file.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	return rename(tmpName, path)
+}
+
+// rename is os.Rename, retried for about a second on Windows, where replacing a file that another process
+// (a reader, an antivirus scan) briefly holds open fails with "Access is denied".
+func rename(from, to string) error {
+	err := os.Rename(from, to)
+	for i := 1; err != nil && runtime.GOOS == "windows" && i <= 10; i++ {
+		time.Sleep(time.Duration(i) * 20 * time.Millisecond)
+		err = os.Rename(from, to)
+	}
+	return err
 }
 
 // createTemp is os.CreateTemp(dir, ".chiton-*.tmp") but creates the file with perm (umask applied), not 0600.

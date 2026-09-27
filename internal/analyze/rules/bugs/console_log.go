@@ -38,7 +38,7 @@ func (ConsoleLog) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.F
 		return nil
 	}
 	var out []analyze.Finding
-	for line, raw := range analyze.Lines(t.Content) {
+	for line, raw := range analyze.FileLines(t) {
 		if consoleRe.MatchString(analyze.StripLineComment(raw, false)) {
 			out = append(out, analyze.Finding{
 				RuleID:       "bugs/console-log",

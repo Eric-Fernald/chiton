@@ -32,7 +32,7 @@ var (
 
 func (LeftoverDebugger) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	for line, raw := range analyze.Lines(t.Content) {
+	for line, raw := range analyze.FileLines(t) {
 		// Strip both // (js) and # (py) line comments; harmless to apply both.
 		text := analyze.StripPyComment(analyze.StripLineComment(raw, false))
 		if jsDebuggerRe.MatchString(text) || pyPdbRe.MatchString(text) {

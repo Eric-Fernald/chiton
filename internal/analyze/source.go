@@ -49,9 +49,17 @@ const maxLineBytes = 1024 * 1024
 
 // Lines yields each 1-based line of content exactly as a 1 MiB-limited bufio.ScanLines Scanner would (stopping
 // at the first line that won't fit).
-func Lines(content []byte) iter.Seq2[int, string] {
+func Lines(content []byte) iter.Seq2[int, string] { return LinesOf(string(content)) }
+
+// FileLines is Lines(t.Content) with the content converted to a string once per file and shared by every rule.
+func FileLines(t FileTarget) iter.Seq2[int, string] {
+	return LinesOf(Cached(t, "text", func() string { return string(t.Content) }))
+}
+
+// LinesOf is Lines over a string, so a caller already holding (or caching) one doesn't copy it again.
+func LinesOf(s string) iter.Seq2[int, string] {
 	return func(yield func(int, string) bool) {
-		src := string(content)
+		src := s // per-iteration cursor, so the sequence can be ranged more than once
 		for n := 1; src != ""; n++ {
 			line, rest, _ := strings.Cut(src, "\n")
 			if len(line) >= maxLineBytes {

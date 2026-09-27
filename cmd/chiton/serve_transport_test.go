@@ -45,6 +45,44 @@ func TestServeUntilDoneWaitsForInFlightHandlers(t *testing.T) {
 	}
 }
 
+// A handler that outlives the grace period must still finish before serveUntilDone returns.
+func TestServeUntilDoneWaitsPastGracePeriod(t *testing.T) {
+	old := shutdownGrace
+	shutdownGrace = 20 * time.Millisecond
+	defer func() { shutdownGrace = old }()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	var finished atomic.Bool
+	srv := &http.Server{Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		close(started)
+		time.Sleep(300 * time.Millisecond)
+		finished.Store(true)
+	})}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- serveUntilDone(ctx, func() error { return srv.Serve(ln) }, srv.Shutdown) }()
+	go func() {
+		if resp, err := http.Get("http://" + ln.Addr().String()); err == nil {
+			resp.Body.Close()
+		}
+	}()
+
+	<-started
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("serveUntilDone: %v", err)
+	}
+	if !finished.Load() {
+		t.Fatal("serveUntilDone returned before a handler slower than the grace period finished")
+	}
+}
+
 func TestServeUntilDoneReturnsServeErrors(t *testing.T) {
 	boom := errors.New("boom")
 	noShutdown := func(context.Context) error { return nil }

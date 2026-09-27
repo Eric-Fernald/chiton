@@ -30,7 +30,7 @@ var jsonDeepCloneRe = regexp.MustCompile(`JSON\.parse\s*\(\s*JSON\.stringify\s*\
 func (JSONDeepClone) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	const ruleID = "performance/json-deep-clone"
 	var out []analyze.Finding
-	for line, raw := range analyze.Lines(t.Content) {
+	for line, raw := range analyze.FileLines(t) {
 		stripped := analyze.StripLineComment(raw, true)
 		if jsonDeepCloneRe.MatchString(stripped) {
 			out = append(out, analyze.Finding{

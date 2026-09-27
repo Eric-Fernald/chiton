@@ -54,7 +54,7 @@ func (RawQueryEscapeHatch) MatchFile(_ context.Context, t analyze.FileTarget) []
 	sqlalchemyImported := sqlalchemyImportRe.Match(masked)
 
 	var out []analyze.Finding
-	for line, raw := range analyze.Lines(masked) {
+	for line, raw := range analyze.LinesOf(maskedDBText(t, py)) {
 		text := stripDBComment(raw, py)
 
 		var name string

@@ -34,7 +34,7 @@ var unsafeDeserPatterns = []*regexp.Regexp{
 
 func (UnsafeDeserialize) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	for line, text := range analyze.Lines(t.Content) {
+	for line, text := range analyze.FileLines(t) {
 		if !containsAny(text, "ickle.load", "yaml.load", "Function") {
 			continue
 		}

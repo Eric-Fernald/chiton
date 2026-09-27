@@ -34,7 +34,7 @@ func (TodoComment) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.
 		return nil
 	}
 	var out []analyze.Finding
-	for line, raw := range analyze.Lines(t.Content) {
+	for line, raw := range analyze.FileLines(t) {
 		text := blankStringLiterals(raw)
 		if m := todoRe.FindString(text); m != "" {
 			out = append(out, analyze.Finding{

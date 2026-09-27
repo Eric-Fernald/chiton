@@ -31,7 +31,7 @@ var credsInURLRe = regexp.MustCompile(`\b[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s:/@"']+:
 
 func (CredentialsInURL) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	for line, text := range analyze.Lines(t.Content) {
+	for line, text := range analyze.FileLines(t) {
 		if strings.Contains(text, "://") && credsInURLRe.MatchString(text) {
 			out = append(out, analyze.Finding{
 				RuleID:       "security/credentials-in-url",

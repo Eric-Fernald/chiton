@@ -58,7 +58,7 @@ func (SQLFormatInjection) MatchFile(_ context.Context, t analyze.FileTarget) []a
 
 	var out []analyze.Finding
 	py := ext == "py"
-	for line, raw := range analyze.Lines(maskedDB(t, py)) {
+	for line, raw := range analyze.LinesOf(maskedDBText(t, py)) {
 		text := stripDBComment(raw, py)
 		for _, re := range res {
 			if re.MatchString(text) {

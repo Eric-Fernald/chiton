@@ -12,7 +12,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -836,29 +835,17 @@ needed. Restart chiton serve after clustering to load the new results.`,
 			fmt.Fprintf(out, "cluster: results written to %s\n", sidecarPath)
 			fmt.Fprintln(out, "cluster: restart chiton serve to load the new community data")
 
-			// Print top-N god nodes by betweenness.
-			type godNode struct {
-				label       string
-				betweenness float64
-				degree      int
-				community   int
-			}
-			god := make([]godNode, 0, len(nodes))
+			// Print top-N god nodes by betweenness, ranked like the report and the MCP god_nodes tool.
+			god := make([]cluster.NodeResult, 0, len(nodes))
 			for _, n := range nodes {
-				r := results.Nodes[n.ID]
-				god = append(god, godNode{n.Label, r.Betweenness, r.Degree, r.CommunityID})
+				god = append(god, results.Nodes[n.ID])
 			}
-			sort.Slice(god, func(i, j int) bool {
-				return god[i].betweenness > god[j].betweenness
-			})
-			if topN > len(god) {
-				topN = len(god)
-			}
+			slices.SortStableFunc(god, cluster.CompareByBetweenness)
+			topN = max(0, min(topN, len(god)))
 			fmt.Fprintf(out, "\nTop %d god nodes (highest betweenness):\n", topN)
-			for i := range topN {
-				g := god[i]
+			for _, g := range god[:topN] {
 				fmt.Fprintf(out, "  %-40s  betweenness=%.4f  degree=%d  community=%d\n",
-					g.label, g.betweenness, g.degree, g.community)
+					g.Label, g.Betweenness, g.Degree, g.CommunityID)
 			}
 			return nil
 		},
@@ -978,7 +965,7 @@ func buildSemanticDeps(cmd *cobra.Command, cfg *config.Config, gs store.GraphSto
 		fmt.Fprintln(errOut, "serve: note: no embeddings indexed — semantic_search disabled (run 'chiton embed')")
 		return deps
 	}
-	deps.Retriever = retrieve.New(gs, newFlatIndex(embs), emb, clusterResults)
+	deps.Retriever = retrieve.New(gs, consumeIntoFlatIndex(embs), emb, clusterResults)
 	fmt.Fprintf(errOut, "serve: semantic_search enabled (%d embeddings)\n", len(embs))
 	return deps
 }

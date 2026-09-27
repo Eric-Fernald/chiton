@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	badgerdb "github.com/dgraph-io/badger/v4"
+
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
 )
@@ -112,3 +114,47 @@ func TestReadOnlyReflectsOpenMode(t *testing.T) {
 		t.Fatal("OpenReadOnly should report read-only")
 	}
 }
+
+// An imported edge kind may contain ':'; adjacency keys must still resolve to the right endpoints.
+func TestColonEdgeKindAdjacency(t *testing.T) {
+	ctx := context.Background()
+	gs, err := Open(filepath.Join(t.TempDir(), "graph.badger"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gs.Close()
+
+	if err := gs.UpsertNodes(ctx, []model.Node{{ID: "a", Label: "a"}, {ID: "b", Label: "b"}}); err != nil {
+		t.Fatal(err)
+	}
+	const kind = model.EdgeKind("x:y")
+	if err := gs.UpsertEdges(ctx, []model.Edge{{ID: "ab", Src: "a", Dst: "b", Kind: kind}}); err != nil {
+		t.Fatal(err)
+	}
+
+	sub, err := gs.Neighbors(ctx, "b", 1, []model.EdgeKind{kind})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sub.Edges) != 1 || sub.Edges[0].ID != "ab" {
+		t.Fatalf("Neighbors(b, %q) edges = %+v, want [ab]", kind, sub.Edges)
+	}
+
+	if _, err := gs.DeleteByIDs(ctx, []string{"a"}); err != nil {
+		t.Fatal(err)
+	}
+	var left []string
+	if err := gs.db.View(func(txn *badgerdb.Txn) error {
+		return scan(txn, "", func(k, _ []byte) error {
+			left = append(left, string(k))
+			return nil
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 1 || left[0] != nodeKeyString("b") {
+		t.Fatalf("keys after deleting a = %q, want only b's node key", left)
+	}
+}
+
+func nodeKeyString(id string) string { return string(nodeKey(id)) }

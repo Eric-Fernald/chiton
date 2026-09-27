@@ -35,7 +35,7 @@ var weakHashPatterns = []*regexp.Regexp{
 
 func (WeakHash) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	for line, text := range analyze.Lines(t.Content) {
+	for line, text := range analyze.FileLines(t) {
 		// The (?i) patterns still need a literal digit before the closing quote.
 		if !containsAny(text, "md5", "sha1", `5"`, `5'`, `1"`, `1'`) {
 			continue

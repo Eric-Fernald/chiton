@@ -41,7 +41,7 @@ func (DeferInLoop) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.
 	var loopDepths []int // brace depth at each open for-line's opening brace
 	depth := 0
 
-	for line, text := range analyze.Lines(t.Content) {
+	for line, text := range analyze.FileLines(t) {
 		stripped := stripGoComment(text)
 
 		// Open new loop frame if this line begins a for-statement.

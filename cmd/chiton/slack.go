@@ -120,7 +120,7 @@ a tunnel/reverse proxy; Slack requires a public HTTPS Request URL.`,
 
 			mux := http.NewServeMux()
 			mux.Handle("/slack/events", handler)
-			srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+			srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second, BaseContext: baseContext(cmd.Context())}
 
 			fmt.Fprintf(out, "slack: events receiver listening on %s/slack/events (Ctrl-C to stop)\n", addr)
 			return serveUntilDone(cmd.Context(), srv.ListenAndServe, srv.Shutdown)

@@ -32,7 +32,7 @@ func (MultipleBlankLines) Meta() analyze.Meta {
 func (MultipleBlankLines) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
 	blankRun := 0
-	for line, text := range analyze.Lines(t.Content) {
+	for line, text := range analyze.FileLines(t) {
 		if strings.TrimSpace(text) == "" {
 			blankRun++
 			// Fire exactly once per run, at the first line beyond the limit.

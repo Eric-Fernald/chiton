@@ -77,6 +77,15 @@ func maskedDB(t analyze.FileTarget, py bool) []byte {
 	return analyze.Cached(t, key, func() []byte { return maskDBBlocks(t.Content, py) })
 }
 
+// maskedDBText is maskedDB as a string, also cached, so the database rules' line scans share one copy.
+func maskedDBText(t analyze.FileTarget, py bool) string {
+	key := "database/maskDBBlocks-text"
+	if py {
+		key += "/py"
+	}
+	return analyze.Cached(t, key, func() string { return string(maskedDB(t, py)) })
+}
+
 // maskDBBlocks overwrites /* */ comments and, when py, triple-quoted strings with 'x' (newlines kept),
 // leaving other strings intact for the SQL rules; it may return src itself, so never modify the result.
 func maskDBBlocks(src []byte, py bool) []byte {

@@ -80,7 +80,7 @@ func (h *httpFetcher) fetchFile(path string) (*fetchResult, error) {
 	}
 	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(abs)), ".")
 	return &fetchResult{
-		canonicalURL: model.FileURI(path),
+		canonicalURL: model.FileURI(abs), // abs is already absolute, so FileURI only cleans it
 		contentType:  contentTypeForExt(ext),
 		title:        strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs)),
 		ext:          ext,

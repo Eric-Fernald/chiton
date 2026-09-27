@@ -27,7 +27,7 @@ func (MixedIndent) Meta() analyze.Meta {
 
 func (MixedIndent) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	for line, text := range analyze.Lines(t.Content) {
+	for line, text := range analyze.FileLines(t) {
 		lead := leadingWhitespace(text)
 		if strings.ContainsRune(lead, '\t') && strings.ContainsRune(lead, ' ') {
 			out = append(out, analyze.Finding{

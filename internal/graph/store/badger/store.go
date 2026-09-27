@@ -45,6 +45,7 @@ var (
 	_ store.NodeDeleter       = (*Store)(nil)
 	_ store.ReadOnlyAware     = (*Store)(nil)
 	_ store.NodeScanner       = (*Store)(nil)
+	_ store.NodeGetter        = (*Store)(nil)
 	_ store.EmbeddingIDLister = (*Store)(nil)
 )
 
@@ -206,9 +207,14 @@ func adjacentEdgeKeys(txn *badgerdb.Txn, nodeID string, kinds map[model.EdgeKind
 		if out {
 			pfx = pfxSrc + nodeID + ":"
 		}
-		// The key suffix is {kind}:{other endpoint}; edge kinds contain no ':'.
+		// The key suffix is {kind}:{other endpoint}. Split at the last ':': node IDs contain none (the prefix
+		// scan relies on that), but an imported edge kind may.
 		if err := scan(txn, pfx, func(k, v []byte) error {
-			kind, other, _ := strings.Cut(string(k), ":")
+			i := bytes.LastIndexByte(k, ':')
+			if i < 0 {
+				return nil // malformed adjacency key
+			}
+			kind, other := string(k[:i]), string(k[i+1:])
 			if (kinds != nil && !kinds[model.EdgeKind(kind)]) || seen[string(v)] {
 				return nil
 			}
@@ -326,6 +332,18 @@ func (s *Store) GetNode(_ context.Context, id string) (*model.Node, error) {
 		return err
 	})
 	return result, err
+}
+
+// GetNodes loads the nodes with the given IDs that exist, in ids order, in one read transaction.
+// Implements store.NodeGetter.
+func (s *Store) GetNodes(_ context.Context, ids []string) ([]model.Node, error) {
+	var nodes []model.Node
+	err := s.db.View(func(txn *badgerdb.Txn) error {
+		var err error
+		nodes, err = appendLoaded(nodes, txn, pfxNode, ids)
+		return err
+	})
+	return nodes, err
 }
 
 // Neighbors returns all nodes reachable from id within depth hops,

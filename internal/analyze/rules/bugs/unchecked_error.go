@@ -29,7 +29,7 @@ var uncheckedErrorRe = regexp.MustCompile(`(^|\s)_\s*[:=]=\s*\w[\w.]*\s*\(`)
 
 func (UncheckedError) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	for line, raw := range analyze.Lines(t.Content) {
+	for line, raw := range analyze.FileLines(t) {
 		text := stripGoComment(raw)
 		if uncheckedErrorRe.MatchString(text) {
 			out = append(out, analyze.Finding{

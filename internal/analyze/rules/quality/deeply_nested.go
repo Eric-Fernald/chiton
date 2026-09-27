@@ -31,7 +31,7 @@ func (DeeplyNested) Meta() analyze.Meta {
 func (DeeplyNested) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
 	lastDeep := -1 // most recent deep line, to emit once per contiguous deep block
-	for line, text := range analyze.Lines(t.Content) {
+	for line, text := range analyze.FileLines(t) {
 		if strings.TrimSpace(text) == "" {
 			continue
 		}

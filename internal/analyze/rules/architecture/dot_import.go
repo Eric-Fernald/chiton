@@ -36,7 +36,7 @@ var (
 func (DotImport) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
 	inBlock := false
-	for line, raw := range analyze.Lines(t.Content) {
+	for line, raw := range analyze.FileLines(t) {
 		text := strings.TrimSpace(stripArchLineComment("go", raw))
 		switch {
 		case inBlock:

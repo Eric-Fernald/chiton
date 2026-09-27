@@ -4,7 +4,9 @@ package subagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -260,19 +262,34 @@ func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, err
 	return rep, nil
 }
 
-// embedConcepts embeds concepts in one batch, retrying one concept per call if the batch fails or returns the
-// wrong vector count, so only concepts that fail on their own go without a vector.
+// embedConcepts embeds concepts in one batch, retrying per concept on failure so only concepts that fail alone
+// lose a vector; an unreachable embedder skips the retries, which would each wait out the same timeout.
 func (s *Service) embedConcepts(ctx context.Context, concepts []model.Node) []store.Embedding {
-	if embs, exact, err := embed.NodeEmbeddings(ctx, s.embedder, concepts); err == nil && exact {
+	embs, exact, err := embed.NodeEmbeddings(ctx, s.embedder, concepts)
+	if err == nil && exact {
 		return embs
 	}
-	var embs []store.Embedding
+	if embedderUnreachable(err) {
+		return nil
+	}
+	embs = nil
 	for i := range concepts {
-		if one, exact, err := embed.NodeEmbeddings(ctx, s.embedder, concepts[i:i+1]); err == nil && exact {
+		one, exact, err := embed.NodeEmbeddings(ctx, s.embedder, concepts[i:i+1])
+		if embedderUnreachable(err) {
+			break
+		}
+		if err == nil && exact {
 			embs = append(embs, one...)
 		}
 	}
 	return embs
+}
+
+// embedderUnreachable reports a failure to reach the embedder at all (network error, timeout, cancellation),
+// as opposed to one input it rejected.
+func embedderUnreachable(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 // edgeKind normalises a host-supplied edge kind to a known semantic kind,
