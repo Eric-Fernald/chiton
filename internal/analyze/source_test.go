@@ -48,7 +48,7 @@ func TestCached(t *testing.T) {
 		t.Fatalf("hand-built target should not memoize (calls=%d)", calls)
 	}
 	loaded := FileTarget{memo: &fileMemo{m: map[string]any{}}}
-	copyOf := loaded // rules receive FileTarget by value; copies must share the memo
+	copyOf := loaded // rules receive FileTarget by value, so copies must share the memo
 	if Cached(loaded, "k", fn) != 3 || Cached(copyOf, "k", fn) != 3 || Cached(loaded, "other", fn) != 4 {
 		t.Fatalf("loaded target should memoize per key (calls=%d)", calls)
 	}

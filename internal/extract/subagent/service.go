@@ -1,5 +1,5 @@
 // Package subagent emits semantic-extraction task specs (Pending) for a host assistant and ingests its
-// schema-pinned JSON results (Submit); chiton calls no LLM and has no prompt for ingested text to hijack.
+// schema-pinned JSON results (Submit). chiton calls no LLM and has no prompt for ingested text to hijack.
 package subagent
 
 import (
@@ -26,7 +26,7 @@ const (
 const extractionStatusDone = "done"
 
 // Service emits extraction task specs and ingests their results. With an embedder, Submit embeds new
-// concepts inline so they are immediately retrievable; otherwise the next `chiton embed` does.
+// concepts inline so they are immediately retrievable. Otherwise the next `chiton embed` does.
 type Service struct {
 	store     store.GraphStore
 	embedder  embed.Embedder
@@ -44,7 +44,7 @@ func New(s store.GraphStore, embedder embed.Embedder, threshold float32) *Servic
 }
 
 // TaskSpec is one unit of work for the host assistant: the doc section's text or the image's path, plus
-// the Schema/Instructions for the JSON to return.
+// the Schema and Instructions for the JSON to return.
 type TaskSpec struct {
 	ID           string `json:"id"`    // source node ID (also the submit task_id)
 	Kind         string `json:"kind"`  // doc_concepts | image_description
@@ -55,7 +55,7 @@ type TaskSpec struct {
 	Instructions string `json:"instructions"`
 }
 
-// Pending returns task specs for doc_section and image nodes whose attrs["extraction_status"] != "done".
+// Pending returns task specs for doc_section and image nodes whose attrs["extraction_status"] is not "done".
 // kind filters to one task kind (""=both); limit<=0 means no cap.
 func (s *Service) Pending(ctx context.Context, kind string, limit int) ([]TaskSpec, error) {
 	nodes, err := store.NodesMatching(ctx, s.store, store.NodeFilter{Kinds: []model.NodeKind{model.KindDocSection, model.KindImage}})
@@ -102,7 +102,7 @@ type ConceptResult struct {
 }
 
 // EdgeResult links From (a concept label from the same submission, or "" for the source node) to the
-// concept labelled To. Kind is a semantic edge kind; empty or unknown defaults to DESCRIBES.
+// concept labelled To. Kind is a semantic edge kind, and an empty or unknown Kind defaults to DESCRIBES.
 type EdgeResult struct {
 	From       string  `json:"from"`
 	To         string  `json:"to"`
@@ -126,12 +126,12 @@ type SubmitReport struct {
 }
 
 // Submit writes concept nodes and semantic edges (INFERRED, or AMBIGUOUS below threshold), marks the source
-// done, and embeds the new concepts if an embedder is wired. Stable IDs make re-submits a no-op.
+// done, and embeds the new concepts if the Service has an embedder. Stable IDs make re-submits a no-op.
 func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, error) {
 	if r.TaskID == "" {
 		return SubmitReport{}, fmt.Errorf("submit: task_id is required")
 	}
-	// Reject a read-only store before any work (notably the embed round-trip below), with an actionable message.
+	// Reject a read-only store with an actionable message before any work, such as the embed round-trip below.
 	if store.IsReadOnly(s.store) {
 		return SubmitReport{}, fmt.Errorf("submit: store is read-only — restart 'chiton serve --writable' or use 'chiton extract submit'")
 	}
@@ -179,7 +179,7 @@ func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, err
 		rep.ConceptsAdded++
 	}
 
-	// Embedding is best-effort: a concept left without a vector gets one from the next `chiton embed`.
+	// Embedding is best-effort, since the next `chiton embed` covers any concept left without a vector.
 	var toEmbed []store.Embedding
 	if s.embedder != nil {
 		toEmbed = s.embedConcepts(ctx, nodes)
@@ -223,7 +223,7 @@ func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, err
 		rep.EdgesAdded++
 	}
 
-	// No edge survived (none declared, or all pointed at uncreated concepts): default to DESCRIBES from the
+	// If no edge survived (none declared, or all pointed at uncreated concepts), default to DESCRIBES from the
 	// source to every concept so none is orphaned.
 	if len(edges) == 0 {
 		for _, c := range r.Concepts {
@@ -263,7 +263,7 @@ func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, err
 }
 
 // embedConcepts embeds concepts in one batch, retrying per concept on failure so only concepts that fail alone
-// lose a vector; an unreachable embedder skips the retries, which would each wait out the same timeout.
+// lose a vector. It skips the retries for an unreachable embedder, since each would hit the same timeout.
 func (s *Service) embedConcepts(ctx context.Context, concepts []model.Node) []store.Embedding {
 	embs, exact, err := embed.NodeEmbeddings(ctx, s.embedder, concepts)
 	if err == nil && exact {

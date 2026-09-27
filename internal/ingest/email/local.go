@@ -14,8 +14,8 @@ import (
 	"time"
 )
 
-// maxFileBytes caps how much of one mail file is read; larger archives are truncated rather than risking
-// memory exhaustion on an attacker-influenceable mailbox.
+// maxFileBytes caps how much of one mail file LocalSource reads, truncating larger archives rather than
+// risking memory exhaustion on an attacker-influenceable mailbox.
 const maxFileBytes = 64 << 20
 
 // LocalSource reads .eml messages and .mbox archives from a file or a directory tree, with no network or
@@ -119,7 +119,7 @@ func looksLikeMbox(data []byte) bool {
 	return bytes.HasPrefix(data, mboxFromLine)
 }
 
-// utf8BOM is stripped before parsing: left in place it binds to the first header key and corrupts it.
+// utf8BOM is stripped before parsing because it would bind to the first header key and corrupt it.
 var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 
 // parseMessage parses one RFC 5322 message into a Message.
@@ -210,7 +210,7 @@ func parseAddressList(header string) []Address {
 	}
 	out := make([]Address, 0, len(parsed))
 	for _, a := range parsed {
-		// ParseAddressList already RFC 2047-decodes names; decoding again would mangle a literal "=?...?=" name.
+		// ParseAddressList already RFC 2047-decodes names. Decoding again would mangle a literal "=?...?=" name.
 		out = append(out, Address{Name: a.Name, Email: a.Address})
 	}
 	return out

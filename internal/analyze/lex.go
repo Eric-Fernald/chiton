@@ -34,7 +34,7 @@ func StripPyComment(s string) string {
 }
 
 // StripLineComment cuts s at the first `//` (and, when hash, `#`) outside a ", ' or ` quoted literal,
-// keeping literal contents; block comments are not tracked.
+// keeping literal contents. It does not track block comments.
 func StripLineComment(s string, hash bool) string {
 	var inStr byte
 	for i := 0; i < len(s); i++ {
@@ -65,8 +65,8 @@ func StripLineComment(s string, hash bool) string {
 	return s
 }
 
-// MaskCLiterals returns a copy of src with ", ' and ` quoted literals and //, /* */ comments (delimiters
-// included, tracked across lines) overwritten by MaskFiller, keeping newlines; rawBackticks disables \ in `.
+// MaskCLiterals returns a copy of src with ", ' and ` literals and //, /* */ comments, delimiters included,
+// set to MaskFiller even across lines, keeping newlines. rawBackticks turns off \ escapes in backticks.
 func MaskCLiterals(src []byte, rawBackticks bool) []byte {
 	return maskC(src, rawBackticks, false)
 }
@@ -76,7 +76,7 @@ func MaskGoLiterals(src []byte) []byte {
 	return maskC(src, true, true)
 }
 
-// MaskedCLiterals is MaskCLiterals(t.Content, rawBackticks) computed once per file; never modify it.
+// MaskedCLiterals is MaskCLiterals(t.Content, rawBackticks) computed once per file. Never modify it.
 func MaskedCLiterals(t FileTarget, rawBackticks bool) []byte {
 	key := "MaskCLiterals"
 	if rawBackticks {
@@ -85,7 +85,7 @@ func MaskedCLiterals(t FileTarget, rawBackticks bool) []byte {
 	return Cached(t, key, func() []byte { return MaskCLiterals(t.Content, rawBackticks) })
 }
 
-// MaskedGoLiterals is MaskGoLiterals(t.Content) computed once per file; never modify it.
+// MaskedGoLiterals is MaskGoLiterals(t.Content) computed once per file. Never modify it.
 func MaskedGoLiterals(t FileTarget) []byte {
 	return Cached(t, "MaskGoLiterals", func() []byte { return MaskGoLiterals(t.Content) })
 }
@@ -95,7 +95,7 @@ func maskC(src []byte, rawBackticks, maskLoneEscape bool) []byte {
 	copy(out, src)
 	inLine := false
 	inBlock := false
-	inStr := byte(0) // 0, '"', '\'', or '`'
+	inStr := byte(0) // 0, or the open quote: '"', '\'', or '`'
 	for i := 0; i < len(out); i++ {
 		c := out[i]
 		switch {
@@ -122,7 +122,7 @@ func maskC(src []byte, rawBackticks, maskLoneEscape bool) []byte {
 				} else if maskLoneEscape {
 					out[i] = MaskFiller
 				}
-				i++ // skip escaped char
+				i++ // skip the escaped char
 				continue
 			}
 			if c == inStr {

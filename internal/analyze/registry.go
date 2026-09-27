@@ -7,8 +7,8 @@ import (
 	"sync"
 )
 
-// Registry holds the rules known to an analyzer. Rule packages populate the default one from
-// init(); tests build private registries to avoid cross-test contamination.
+// Registry holds the rules known to an analyzer. Rule packages populate the default one from init().
+// Tests build private registries so they don't share rules with other tests.
 type Registry struct {
 	mu    sync.RWMutex
 	rules map[string]Rule
@@ -19,8 +19,8 @@ func NewRegistry() *Registry {
 	return &Registry{rules: map[string]Rule{}}
 }
 
-// Register adds a rule to the registry. Panics on a duplicate ID or a Meta.Scope that disagrees with the
-// implemented interface — programming errors that should never happen in production.
+// Register adds a rule to the registry. It panics on a duplicate ID or on a Meta.Scope that disagrees
+// with the implemented interface, since both are programming errors that must not reach production.
 func (r *Registry) Register(rule Rule) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -83,5 +83,5 @@ func Register(rule Rule) { defaultRegistry.Register(rule) }
 // AllRules returns every rule in the default registry.
 func AllRules() []Rule { return defaultRegistry.All() }
 
-// DefaultRegistry returns the package-level registry, e.g. to pass to New or NewLLMService.
+// DefaultRegistry returns the package-level registry, for example to pass to New or NewLLMService.
 func DefaultRegistry() *Registry { return defaultRegistry }

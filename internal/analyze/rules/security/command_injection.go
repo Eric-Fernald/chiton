@@ -8,8 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// CommandInjection flags shell-out calls (shell=True, os.system, child_process.exec, sh -c): they
-// run their argument through a shell, so any interpolated variable is an injection vector.
+// CommandInjection flags shell-out calls (shell=True, os.system, child_process.exec, sh -c). They run
+// their argument through a shell, so any interpolated variable can inject commands.
 type CommandInjection struct{}
 
 func (CommandInjection) Meta() analyze.Meta {

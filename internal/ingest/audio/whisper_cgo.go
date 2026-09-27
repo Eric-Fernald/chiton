@@ -1,6 +1,6 @@
 //go:build whisper_cgo
 
-// In-process whisper.cpp backend; build with CGO_ENABLED=1 -tags whisper_cgo against a built libwhisper.
+// Build this in-process whisper.cpp backend with CGO_ENABLED=1 -tags whisper_cgo against a built libwhisper.
 // It accepts only 16 kHz mono PCM WAV, and the binding API drifts between whisper.cpp releases.
 package audio
 
@@ -116,7 +116,7 @@ func readWAVMono16k(path string) ([]float32, error) {
 		}
 		id := string(hdr[0:4])
 		size := binary.LittleEndian.Uint32(hdr[4:8])
-		// A hostile header declaring a huge chunk (0xFFFFFFFF) would OOM in make() before format validation.
+		// A hostile header's huge chunk size (0xFFFFFFFF) would exhaust memory in make() before format validation.
 		if size > maxWAVChunkBytes {
 			return nil, fmt.Errorf("%s: WAV chunk %q declares %d bytes (> %d cap)", path, id, size, maxWAVChunkBytes)
 		}

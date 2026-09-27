@@ -1,7 +1,7 @@
 //go:build !msgraph
 
-// The msgraph-free counterpart of graph_client.go. The Graph SDK's request builders can't be dead-stripped
-// (kiota registers types via interface tables), costing ~117 MB, so `chiton teams` commands need -tags msgraph.
+// This is the msgraph-free counterpart of graph_client.go. Kiota registers types via interface tables, so
+// Graph SDK request builders can't be dead-stripped and add ~117 MB. `chiton teams` needs -tags msgraph.
 
 package teams
 
@@ -20,7 +20,7 @@ type GraphSource struct{}
 // NewGraphSource always fails in a build without the msgraph tag.
 func NewGraphSource(GraphConfig) (*GraphSource, error) { return nil, errNoGraph }
 
-// NewGraphSourceFromEnv always fails in a build without the msgraph tag; both cmd/chiton callers check this
+// NewGraphSourceFromEnv always fails in a build without the msgraph tag. Both cmd/chiton callers check this
 // before opening the graph store.
 func NewGraphSourceFromEnv() (*GraphSource, error) { return nil, errNoGraph }
 

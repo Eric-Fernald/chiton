@@ -9,8 +9,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// YAMLUnsafeLoad flags PyYAML's yaml.load() unless the line names a safe loader: the default
-// loader constructs arbitrary Python objects, so untrusted YAML is an RCE vector.
+// YAMLUnsafeLoad flags PyYAML's yaml.load() unless the line names a safe loader. The default
+// loader constructs arbitrary Python objects, so untrusted YAML can run code.
 type YAMLUnsafeLoad struct{}
 
 func (YAMLUnsafeLoad) Meta() analyze.Meta {

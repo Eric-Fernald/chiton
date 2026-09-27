@@ -1,5 +1,5 @@
-// Package chiton embeds skills/, the single source of truth for what chiton tells an assistant: the plugin
-// loads those files directly and `chiton install` writes these same bytes, so the two can never drift.
+// Package chiton embeds skills/, the single source of truth for what chiton tells an assistant. The plugin
+// loads those files directly and `chiton install` writes the same bytes, so the two always match.
 package chiton
 
 import _ "embed"
@@ -14,7 +14,7 @@ var GraphSkillMarkdown string
 //go:embed skills/subagent-tasks/SKILL.md
 var SubagentTasksSkillMarkdown string
 
-// SetupSkillMarkdown is the first-run skill (/chiton:setup); `chiton install` never writes it.
+// SetupSkillMarkdown is the first-run skill (/chiton:setup). `chiton install` never writes it.
 //
 //go:embed skills/setup/SKILL.md
 var SetupSkillMarkdown string

@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-// Turn is one speaker turn. Start/End are offsets from the meeting start, zero when the format carries no
-// timing (a plain notes file); Speaker is "" when the line had no attribution.
+// Turn is one speaker turn. Start and End are offsets from the meeting start, zero when the format has no
+// timing (a plain notes file). Speaker is "" when the line had no attribution.
 type Turn struct {
 	Speaker string
 	Start   time.Duration
@@ -31,7 +31,7 @@ type Transcript struct {
 	Turns []Turn
 }
 
-// Text renders the transcript as one "Speaker: text" line per turn (just the text when unattributed).
+// Text renders the transcript as one "Speaker: text" line per turn (the bare text when unattributed).
 func (t *Transcript) Text() string {
 	var b strings.Builder
 	for _, turn := range t.Turns {
@@ -54,12 +54,12 @@ const (
 	FormatPlain Format = "plain"
 )
 
-// utf8BOM prefixes Windows-authored and some Teams-exported transcripts. Declared as explicit bytes (not a
-// literal) so the source file itself stays BOM-free.
+// utf8BOM prefixes Windows-authored and some Teams-exported transcripts. It is declared as explicit bytes
+// (not a literal) so the source file itself stays BOM-free.
 var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 
-// proseLeadIn holds line-leading words that share the "Word: text" shape with a speaker label but are prose;
-// splitSpeaker rejects them so a notes file does not sprout phantom speakers.
+// proseLeadIn holds line-leading words that share the "Word: text" shape with a speaker label but are prose.
+// splitSpeaker rejects them so a notes file does not produce false speakers.
 var proseLeadIn = map[string]bool{
 	"note": true, "notes": true, "todo": true, "fixme": true, "warning": true,
 	"action": true, "actions": true, "decision": true, "decisions": true,
@@ -68,7 +68,7 @@ var proseLeadIn = map[string]bool{
 	"topic": true, "subject": true, "date": true, "time": true, "location": true,
 }
 
-// DetectFormat sniffs the format from content (WEBVTT header, else an SRT index + "-->" cue), falling back
+// DetectFormat sniffs the format from content (WEBVTT header, else an SRT index and "-->" cue), falling back
 // to the filename extension, then plain "Speaker: text".
 func DetectFormat(name string, data []byte) Format {
 	trimmed := bytes.TrimLeft(bytes.TrimPrefix(data, utf8BOM), " \t\r\n")
@@ -232,7 +232,7 @@ func parseSRT(data []byte) []Turn {
 
 // --- plain "Speaker: text" ---
 
-// parsePlain parses "Speaker: text" turns, optionally prefixed by a [timestamp]; lines without a speaker
+// parsePlain parses "Speaker: text" turns, optionally prefixed by a [timestamp]. Lines without a speaker
 // prefix continue the current turn.
 func parsePlain(data []byte) []Turn {
 	sc := bufio.NewScanner(bytes.NewReader(data))
@@ -312,8 +312,8 @@ func splitSpeaker(s string) (speaker, text string) {
 	return name, rest
 }
 
-// stripVTTTags removes inline VTT/SRT tags (<c>, <i>, <b>, <00:00:00.000>); a <v Name> voice span's name
-// is hoisted to the front as "Name: " so splitSpeaker picks it up.
+// stripVTTTags removes inline VTT and SRT tags (<c>, <i>, <b>, <00:00:00.000>) and moves a <v Name> voice
+// span's name to the front as "Name: " so splitSpeaker picks it up.
 func stripVTTTags(s string) string {
 	if !strings.Contains(s, "<") {
 		return s
@@ -347,8 +347,8 @@ func stripVTTTags(s string) string {
 	return out
 }
 
-// voiceName returns the speaker from a voice-span tag like <v Alice> or <v.loud Jane Doe>: everything
-// after the first space (classes such as ".loud" attach to the leading "v").
+// voiceName returns the speaker from a voice-span tag like <v Alice> or <v.loud Jane Doe>, which is the text
+// after the first space. Classes such as ".loud" attach to the leading "v".
 func voiceName(tag string) (string, bool) {
 	tag = strings.TrimSpace(tag)
 	if tag != "v" && !strings.HasPrefix(tag, "v ") && !strings.HasPrefix(tag, "v.") {
@@ -436,8 +436,8 @@ func parseTimecode(s string) (time.Duration, bool) {
 	return d, true
 }
 
-// stripLeadingTimestamp removes a leading "[HH:MM:SS]" / "(MM:SS)" / "HH:MM:SS" timestamp, returning the
-// offset and the remainder, or (0, line) when there is none.
+// stripLeadingTimestamp removes a leading "[HH:MM:SS]", "(MM:SS)", or "HH:MM:SS" timestamp, returning the
+// offset and the remainder, or (0, s) when there is none.
 func stripLeadingTimestamp(s string) (time.Duration, string) {
 	s = strings.TrimSpace(s)
 	if s == "" {

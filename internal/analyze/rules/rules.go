@@ -1,5 +1,5 @@
-// Package rules is a barrel import: blank-import it once wherever rule discovery is needed, and
-// every rule sub-package registers its rules with the default registry via init().
+// Package rules imports every rule sub-package. Blank-import it once wherever rule discovery is needed,
+// and each sub-package's init() registers its rules with the default registry.
 package rules
 
 import (

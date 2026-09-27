@@ -8,8 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// InsecureTLSVerify flags code that disables TLS certificate verification (Go, Python, Node);
-// critical because it re-enables active MITM attacks.
+// InsecureTLSVerify flags code that disables TLS certificate verification (Go, Python, Node). It is
+// critical because disabling verification re-enables active MITM attacks.
 type InsecureTLSVerify struct{}
 
 func (InsecureTLSVerify) Meta() analyze.Meta {
@@ -74,7 +74,7 @@ func (InsecureTLSVerify) MatchFile(_ context.Context, t analyze.FileTarget) []an
 }
 
 // stripSlashCommentKeepURL truncates s at a `//` outside a quoted string, keeping string contents and
-// `://` URL separators; block comments are left intact.
+// `://` URL separators. It leaves block comments intact.
 func stripSlashCommentKeepURL(s string) string {
 	var inStr byte
 	for i := 0; i < len(s); i++ {

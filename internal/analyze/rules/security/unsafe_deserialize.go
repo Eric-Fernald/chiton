@@ -8,8 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// UnsafeDeserialize flags common RCE vectors: pickle.load(s), yaml.load without a Loader, and
-// JavaScript's eval-style Function(...) / new Function(...).
+// UnsafeDeserialize flags calls that commonly allow RCE: pickle.load(s), yaml.load without a Loader, and
+// JavaScript's eval-style Function(...) and new Function(...).
 type UnsafeDeserialize struct{}
 
 func (UnsafeDeserialize) Meta() analyze.Meta {

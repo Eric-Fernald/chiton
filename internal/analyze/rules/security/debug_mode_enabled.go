@@ -8,8 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// DebugModeEnabled flags web-framework debug mode left on outside tests; in Flask the Werkzeug
-// debugger console is effectively RCE.
+// DebugModeEnabled flags web-framework debug mode left on outside tests. In Flask the Werkzeug
+// debugger console allows remote code execution.
 type DebugModeEnabled struct{}
 
 func (DebugModeEnabled) Meta() analyze.Meta {

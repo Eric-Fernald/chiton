@@ -113,7 +113,7 @@ func pdfText(body []byte) (out string) {
 	return buf.String()
 }
 
-// transcriptText renders a VTT/SRT file to prose via the meeting parser, dropping timing markup that
+// transcriptText renders a VTT or SRT file to prose via the meeting parser, dropping timing markup that
 // would pollute concept extraction.
 func transcriptText(fr *fetchResult) string {
 	name := "subtitles." + fr.ext

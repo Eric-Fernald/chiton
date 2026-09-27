@@ -55,8 +55,8 @@ func TestGenerateMermaid(t *testing.T) {
 }
 
 func TestGenerateHTMLNoUntrustedInnerHTMLSinks(t *testing.T) {
-	// Regression: node label/uri/kind are untrusted, so the legend and detail panel must never use
-	// innerHTML — otherwise a label like "<img src=x onerror=…>" runs.
+	// This guards a past regression. Node label, uri, and kind are untrusted, so the legend and detail panel
+	// must never use innerHTML, or a label like "<img src=x onerror=…>" would run.
 	evil := []model.Node{sym("a", "<img src=x onerror=alert(1)>"), sym("b", "B")}
 	edges := []model.Edge{{ID: "e1", Src: "a", Dst: "b", Kind: model.EdgeCalls}}
 	var buf bytes.Buffer
@@ -103,8 +103,8 @@ func TestGenerateHTMLEscapesScriptClose(t *testing.T) {
 }
 
 func TestGeneratedPagesCarryACSP(t *testing.T) {
-	// Both pages inline the whole graph and load one remote script; the CSP is what stops an
-	// exported file from phoning that data home.
+	// Both pages inline the whole graph and load one remote script. The CSP stops an exported file
+	// from sending that data over the network.
 	const want = "connect-src 'none'"
 
 	var visual bytes.Buffer

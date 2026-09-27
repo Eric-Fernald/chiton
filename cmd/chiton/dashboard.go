@@ -14,7 +14,7 @@ import (
 )
 
 // dashboardCmd groups the static dashboard commands. The dashboard is a read-only
-// artifact generated from the graph + findings, deliberately not a server.
+// artifact generated from the graph and findings, not a server.
 func dashboardCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "dashboard",
@@ -64,8 +64,8 @@ subtree and --max-nodes to cap dense graphs.`,
 				fmt.Fprintf(cmd.ErrOrStderr(), "dashboard: warning: could not load cluster sidecar: %v\n", err)
 			}
 
-			// All findings (the explorer filters client-side), but AMBIGUOUS ones only on request
-			// so low-confidence LLM findings don't masquerade as confirmed.
+			// Load all findings because the explorer filters client-side, but include AMBIGUOUS ones only
+			// on request so low-confidence LLM findings don't look confirmed.
 			views, err := analyze.List(ctx, gs, analyze.ListOptions{
 				Scope:            scope,
 				IncludeAmbiguous: includeAmbiguous,
@@ -119,8 +119,8 @@ subtree and --max-nodes to cap dense graphs.`,
 	return cmd
 }
 
-// buildDashboardFindings projects findings into the report shape, taking each one's community from its
-// target_node_id, else from a node sharing its target_uri (file node preferred), else -1.
+// buildDashboardFindings projects findings into the report shape. A finding's community comes from its
+// target_node_id, then from a node sharing its target_uri (preferring a file node), and is -1 otherwise.
 func buildDashboardFindings(views []analyze.FindingView, allNodes []model.Node, overlay *cluster.Results) []report.DashboardFinding {
 	nodeComm := func(string) int { return -1 }
 	if overlay != nil {

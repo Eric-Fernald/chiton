@@ -32,7 +32,8 @@ func PersonURI(name string) string {
 	return PersonURIScheme + slug(name)
 }
 
-// slug is model.Slug with this package's fallback, for readable meeting:// / person:// URIs and decision IDs.
+// slug is model.Slug with the "meeting" fallback, used for readable meeting:// and person:// URIs and
+// decision IDs.
 func slug(s string) string { return model.Slug(s, "meeting") }
 
 // PersonID returns the stable node ID for a speaker, so the linkage submit path resolves an action-item
@@ -42,7 +43,7 @@ func PersonID(name string) string {
 }
 
 // ToGraph converts a Transcript into EXTRACTED meeting, meeting_turn, and person nodes (nodes[0] is the
-// meeting). Turns share the meeting's source_uri so a re-ingest replaces them; person nodes survive it.
+// meeting). Turns share the meeting's source_uri so a re-ingest replaces them, but person nodes survive it.
 func ToGraph(t *Transcript, now time.Time) ([]model.Node, []model.Edge) {
 	uri := t.SourceURI
 	if uri == "" {
@@ -137,8 +138,8 @@ func ToGraph(t *Transcript, now time.Time) ([]model.Node, []model.Edge) {
 	return nodes, edges
 }
 
-// Upsert writes tr's ToGraph subgraph to gs and returns the node count; noun names it in errors ("upsert <noun>
-// nodes: ..."). Callers first delete the prior version under tr.SourceURI.
+// Upsert writes tr's ToGraph subgraph to gs and returns the node count, with noun naming it in errors
+// ("upsert <noun> nodes: ..."). Callers first delete the prior version under tr.SourceURI.
 func Upsert(ctx context.Context, gs store.GraphStore, tr *Transcript, now time.Time, noun string) (int, error) {
 	nodes, edges := ToGraph(tr, now)
 	if err := gs.UpsertNodes(ctx, nodes); err != nil {

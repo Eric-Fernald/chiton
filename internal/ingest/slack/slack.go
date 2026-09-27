@@ -1,5 +1,5 @@
 // Package slack ingests Slack channels and threads as meeting subgraphs, mapping messages straight to a
-// meeting.Transcript (no WebVTT parse) so meeting→code linkage applies unchanged.
+// meeting.Transcript without a WebVTT parse, so meeting-to-code linkage applies unchanged.
 package slack
 
 import (
@@ -48,8 +48,8 @@ type ConversationSource interface {
 	Name() string
 }
 
-// ConversationURI returns the stable source_uri slack://<channel>[/<thread-ts>]. The workspace is deliberately
-// omitted so the key never shifts between runs, which would break DeleteBySourceURI replacement.
+// ConversationURI returns the stable source_uri slack://<channel>[/<thread-ts>]. It omits the workspace so
+// the key never shifts between runs, which would break DeleteBySourceURI replacement.
 func ConversationURI(channelID, threadTS string) string {
 	uri := "slack://" + channelID
 	if threadTS != "" {
@@ -130,7 +130,7 @@ func (i *Ingester) ingestOne(ctx context.Context, conv Conversation) (Report, er
 }
 
 // conversationToTranscript maps each message to one Turn timed as its offset from the first message.
-// Empty-text messages (file shares, join/leave notices) are skipped.
+// It skips empty-text messages such as file shares and join or leave notices.
 func conversationToTranscript(conv Conversation, uri string) *meeting.Transcript {
 	tr := &meeting.Transcript{
 		Title:     conversationTitle(conv),
@@ -163,8 +163,8 @@ func conversationToTranscript(conv Conversation, uri string) *meeting.Transcript
 	return tr
 }
 
-// conversationTitle labels a conversation; thread titles include the parent's date so two threads in one
-// channel don't collapse to the same label.
+// conversationTitle labels a conversation. Thread titles include the parent's date so two threads in one
+// channel don't get the same label.
 func conversationTitle(conv Conversation) string {
 	name := conv.ChannelName
 	if name == "" {
@@ -180,8 +180,8 @@ func conversationTitle(conv Conversation) string {
 	return fmt.Sprintf("Slack #%s", name)
 }
 
-// parseSlackTS parses a Slack ts ("1735689600.000600") as UTC; the fraction is a per-second counter, treated
-// as microseconds to preserve ordering.
+// parseSlackTS parses a Slack ts ("1735689600.000600") as UTC. The fraction is a per-second counter, which
+// it treats as microseconds to preserve ordering.
 func parseSlackTS(ts string) (time.Time, error) {
 	ts = strings.TrimSpace(ts)
 	if ts == "" {

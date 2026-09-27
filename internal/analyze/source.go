@@ -8,7 +8,7 @@ import (
 )
 
 // IsTestSource reports whether a source URI (or path) points at a test file: Go *_test.go,
-// JS/TS *.test.* / *.spec.*, or anything under a tests/ dir. Shared so rule packages agree.
+// JS/TS *.test.* or *.spec.*, or anything under a tests/ dir. Rule packages share it so they agree.
 func IsTestSource(sourceURI string) bool {
 	low := strings.ToLower(sourceURI)
 	switch {
@@ -73,14 +73,14 @@ func LinesOf(s string) iter.Seq2[int, string] {
 	}
 }
 
-// fileMemo caches per-file derived data (masked content etc.) for Cached.
+// fileMemo caches per-file derived data, such as masked content, for Cached.
 type fileMemo struct {
 	mu sync.Mutex
 	m  map[string]any
 }
 
 // Cached returns fn() memoized under key for the file t was loaded from, so rules sharing a masker run it
-// once per file. The result is shared: never modify it. Hand-built targets have no memo; fn just runs.
+// once per file. Never modify the shared result. Hand-built targets have no memo, so fn runs on every call.
 func Cached[T any](t FileTarget, key string, fn func() T) T {
 	if t.memo == nil {
 		return fn()
@@ -91,7 +91,7 @@ func Cached[T any](t FileTarget, key string, fn func() T) T {
 	if ok {
 		return v.(T)
 	}
-	r := fn() // computed unlocked so fn may itself call Cached
+	r := fn() // runs without the lock so fn may itself call Cached
 	t.memo.mu.Lock()
 	t.memo.m[key] = r
 	t.memo.mu.Unlock()

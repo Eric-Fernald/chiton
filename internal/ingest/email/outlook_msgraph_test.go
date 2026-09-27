@@ -8,8 +8,8 @@ import (
 	"github.com/microsoftgraph/msgraph-sdk-go/models"
 )
 
-// Behind the msgraph tag because outlookToMessage takes a Graph type; in email_test.go it would drag the
-// Graph SDK into the default test binary.
+// TestOutlookInReplyToFromHeaders needs the msgraph tag because outlookToMessage takes a Graph type.
+// In email_test.go it would pull the Graph SDK into the default test binary.
 func TestOutlookInReplyToFromHeaders(t *testing.T) {
 	gm := models.NewMessage()
 	mid := "<reply@x>"

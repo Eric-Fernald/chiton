@@ -17,7 +17,7 @@ import (
 )
 
 // TestInstallers_ServerLaunch launches the MCP server from the command each installer wrote into its
-// config and checks a real tools/call. Aider is absent: it has no MCP support.
+// config and checks a real tools/call. Aider is absent because it has no MCP support.
 func TestInstallers_ServerLaunch(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the chiton binary and spawns subprocesses; skipped in -short")

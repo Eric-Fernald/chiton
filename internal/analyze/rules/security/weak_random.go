@@ -8,8 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/analyze"
 )
 
-// WeakRandom flags non-test Go files importing math/rand instead of crypto/rand; tests are skipped
-// because they legitimately want determinism.
+// WeakRandom flags non-test Go files importing math/rand instead of crypto/rand. It skips tests
+// because they need determinism.
 type WeakRandom struct{}
 
 func (WeakRandom) Meta() analyze.Meta {

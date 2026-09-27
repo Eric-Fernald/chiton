@@ -97,8 +97,8 @@ func ChangedSince(root, ref string) ([]Change, error) {
 	return parseNameStatus(root, out), nil
 }
 
-// validateRef rejects option-like refs: one such as "--output=evil" would turn `git diff` into an
-// arbitrary file write. Valid ref names never start with '-'; callers also pass --end-of-options.
+// validateRef rejects option-like refs, since one such as "--output=evil" would turn `git diff` into an
+// arbitrary file write. Valid ref names never start with '-', and callers also pass --end-of-options.
 func validateRef(ref string) error {
 	if ref == "" {
 		return fmt.Errorf("git: empty ref")
@@ -124,7 +124,7 @@ func run(root string, args ...string) (string, error) {
 }
 
 // parseNameStatus parses `git diff --name-status` output into Changes with absolute paths. A rename
-// (R###) deletes the old path and upserts the new one; a copy (C###) upserts only the destination.
+// (R###) deletes the old path and upserts the new one. A copy (C###) upserts only the destination.
 func parseNameStatus(root, out string) []Change {
 	if absRoot, err := filepath.Abs(root); err == nil {
 		root = absRoot

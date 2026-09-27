@@ -74,7 +74,7 @@ func TestMissingFinalNewline(t *testing.T) {
 	}
 }
 
-// ruleApplies mirrors the unexported analyze.ruleApplies: an empty filter accepts everything,
+// ruleApplies mirrors the unexported analyze.ruleApplies. An empty filter accepts everything,
 // otherwise the extension must match case-insensitively.
 func ruleApplies(langs []string, ext string) bool {
 	if len(langs) == 0 {

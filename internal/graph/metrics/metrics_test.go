@@ -18,8 +18,8 @@ func edge(src, dst string) model.Edge {
 	}
 }
 
-// TestPathGraph verifies betweenness on a path A-B-C: B lies on the only A–C path, so it must beat the
-// endpoints A and C, which have zero betweenness.
+// TestPathGraph verifies betweenness on the path A-B-C. B lies on the only path from A to C, so it must beat
+// the endpoints A and C, which have zero betweenness.
 func TestPathGraph(t *testing.T) {
 	nodes := []model.Node{node("A"), node("B"), node("C")}
 	edges := []model.Edge{edge("A", "B"), edge("B", "C")}
@@ -86,7 +86,7 @@ func TestBetweennessNormalized(t *testing.T) {
 	}
 }
 
-// TestBetweennessSampledStaysInRange forces sampling on a star whose hub sits on every shortest path, so the
+// TestBetweennessSampledStaysInRange forces sampling on a star whose hub lies on every shortest path, so the
 // n/k extrapolation would overshoot 1 without the clamp in normalize.
 func TestBetweennessSampledStaysInRange(t *testing.T) {
 	const n = samplingThreshold + 1000 // > threshold → sampled path

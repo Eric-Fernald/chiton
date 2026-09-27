@@ -9,7 +9,7 @@ import (
 )
 
 // SelectStar flags any `SELECT * FROM`, bounded or not, at lower severity than
-// select-star-unbounded: it couples callers to the schema and fetches unused columns.
+// select-star-unbounded. The pattern couples callers to the schema and fetches unused columns.
 type SelectStar struct{}
 
 func (SelectStar) Meta() analyze.Meta {

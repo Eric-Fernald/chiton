@@ -9,8 +9,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// BindAllInterfaces flags a service bound to 0.0.0.0 (every interface). Low severity because it is
-// often intentional in containers, but it is also a common accidental exposure.
+// BindAllInterfaces flags a service bound to 0.0.0.0 (every interface). Its severity is low because this
+// is often intentional in containers, but it is also a common accidental exposure.
 type BindAllInterfaces struct{}
 
 func (BindAllInterfaces) Meta() analyze.Meta {

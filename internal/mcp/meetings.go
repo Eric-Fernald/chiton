@@ -300,8 +300,8 @@ type meetingView struct {
 	parsedDate time.Time
 }
 
-// matches reports whether the meeting matches the query. Without includePII participants aren't
-// matched: returning a meeting because a queried name attended would itself disclose that PII.
+// matches reports whether the meeting matches the query. Without includePII it ignores participants,
+// since returning a meeting because a queried name attended would itself disclose that PII.
 func (v meetingView) matches(lowerQuery string, includePII bool) bool {
 	if strings.Contains(strings.ToLower(v.Title), lowerQuery) {
 		return true
@@ -324,8 +324,8 @@ func (v meetingView) matches(lowerQuery string, includePII bool) bool {
 	return false
 }
 
-// public returns a copy safe to serialize: no transcript scratch text and, unless includePII, no
-// participant names or action-item assignees (both PII) — just a participant count and action text.
+// public returns a copy safe to serialize. It drops the transcript scratch text and, unless includePII,
+// participant names and action-item assignees (both PII), keeping a participant count and action text.
 func (v meetingView) public(includePII bool) meetingView {
 	out := v
 	out.text = ""
@@ -379,7 +379,7 @@ func decisionMatchesTopic(d decisionView, topicLower string) bool {
 }
 
 // buildMeetingViews assembles one view per meeting node, newest first, with its decisions and the symbols
-// they govern (DECIDED_IN edges to non-meeting nodes). Scans all edges but loads only the nodes it needs.
+// they govern (DECIDED_IN edges to non-meeting nodes). It scans all edges but loads only the nodes it needs.
 func buildMeetingViews(ctx context.Context, gs store.GraphStore) ([]meetingView, error) {
 	nodes, err := store.NodesMatching(ctx, gs, store.NodeFilter{Kinds: []model.NodeKind{model.KindMeeting, model.KindDecision}})
 	if err != nil {
@@ -398,7 +398,7 @@ func buildMeetingViews(ctx context.Context, gs store.GraphStore) ([]meetingView,
 	var missing []string
 	for _, e := range edges {
 		if _, ok := byID[e.Dst]; !ok && e.Kind == model.EdgeDecidedIn {
-			byID[e.Dst] = nil // nil marks an absent node; also dedupes missing
+			byID[e.Dst] = nil // nil marks an absent node and keeps missing free of duplicates
 			missing = append(missing, e.Dst)
 		}
 	}

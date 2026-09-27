@@ -8,7 +8,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// ImageExtractor emits a single image node per image file. Pixels are never described at build time; the
+// ImageExtractor emits a single image node per image file and never describes pixels at build time. The
 // subagent vision pass picks up image nodes without attrs["extraction_status"] and reads attrs["path"].
 type ImageExtractor struct{}
 

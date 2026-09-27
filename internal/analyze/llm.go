@@ -24,12 +24,12 @@ import (
 // single huge generated file can't blow the host assistant's context budget.
 const maxLLMInputBytes = 60_000
 
-// llmStateFile is the .chiton sidecar recording (rule, file-content) tasks already submitted; it
-// lives outside the graph so clustering and summaries aren't flooded with marker nodes.
+// llmStateFile is the .chiton sidecar file that records submitted (rule, file-content) tasks. It lives
+// outside the graph so marker nodes don't flood clustering and summaries.
 const llmStateFile = "llm-analyzed.json"
 
-// llmSubmitSchema pins the JSON shape the host returns for one task; it is fixed text, so
-// ingested code can never be spliced into a chiton prompt.
+// llmSubmitSchema fixes the JSON shape the host returns for one task. It is constant text, so ingested
+// code can never end up in a chiton prompt.
 const llmSubmitSchema = `{
   "task_id": "<echo the task id>",
   "findings": [
@@ -41,8 +41,8 @@ const llmSubmitSchema = `{
   ]
 }`
 
-// LLMTaskSpec is one LLM rule applied to one file: Input carries the source, and Schema and
-// Instructions define the JSON to return via submit_analysis / `chiton analyze submit`.
+// LLMTaskSpec is one LLM rule applied to one file. Input carries the source, and Schema and
+// Instructions define the JSON to return through submit_analysis or `chiton analyze submit`.
 type LLMTaskSpec struct {
 	ID           string `json:"id"`       // stable: sha256(rule_id + content_sha)
 	RuleID       string `json:"rule_id"`  // also echoed back on submit
@@ -81,8 +81,8 @@ type LLMReport struct {
 	Ambiguous     int    `json:"ambiguous"`
 }
 
-// LLMService emits LLM-rule task specs and ingests the host's findings as INFERRED (or AMBIGUOUS)
-// Finding nodes; chiton calls no LLM itself, and the MCP tools and CLI both wrap this.
+// LLMService emits LLM-rule task specs and ingests the host's findings as INFERRED (or AMBIGUOUS) Finding
+// nodes. Chiton calls no LLM itself, and both the MCP tools and the CLI wrap this service.
 type LLMService struct {
 	store     store.GraphStore
 	registry  *Registry
@@ -120,7 +120,7 @@ type llmStateEntry struct {
 	At        time.Time `json:"at"`
 }
 
-// LLMTaskID is the stable task ID for an (LLM rule, file-content) pair; keying on the content SHA
+// LLMTaskID is the stable task ID for an (LLM rule, file-content) pair. Keying on the content SHA
 // means a changed file yields a fresh task.
 func LLMTaskID(ruleID, contentSHA string) string {
 	h := sha256.Sum256([]byte("llm-task::" + ruleID + "::" + contentSHA))
@@ -140,7 +140,7 @@ func (s *LLMService) LLMRules(filter string) []LLMRule {
 }
 
 // Pending returns task specs for every (LLM rule, file) pair under root not yet recorded in the
-// state sidecar. ruleFilter matches rule IDs by substring; limit<=0 means no cap.
+// state sidecar. ruleFilter matches rule IDs by substring, and limit<=0 means no cap.
 func (s *LLMService) Pending(_ context.Context, root, ruleFilter string, limit int) ([]LLMTaskSpec, error) {
 	llmRules := s.LLMRules(ruleFilter)
 	if len(llmRules) == 0 {
@@ -171,7 +171,7 @@ func (s *LLMService) Pending(_ context.Context, root, ruleFilter string, limit i
 			return nil
 		}
 		ext := FileExt(path)
-		// LLM rules target source code; skip doc/image files even though they have extractors.
+		// LLM rules target source code, so skip doc and image files even though they have extractors.
 		if !isCodeFile(ext) {
 			return nil
 		}
@@ -224,7 +224,7 @@ func (s *LLMService) Pending(_ context.Context, root, ruleFilter string, limit i
 	return specs, nil
 }
 
-// Submit ingests one task's findings (rule node, finding nodes, VIOLATES/AFFECTS edges) and records
+// Submit ingests one task's findings (rule node, finding nodes, VIOLATES and AFFECTS edges) and records
 // the task in the state sidecar. Stable finding IDs make re-submitting a no-op.
 func (s *LLMService) Submit(ctx context.Context, r LLMResult) (LLMReport, error) {
 	if r.TaskID == "" {
@@ -243,7 +243,7 @@ func (s *LLMService) Submit(ctx context.Context, r LLMResult) (LLMReport, error)
 	if _, ok := rule.(LLMRule); !ok {
 		return LLMReport{}, fmt.Errorf("submit: rule %q is not an LLM rule", r.RuleID)
 	}
-	// Security: without this binding, a submit naming another file's URI could delete that file's
+	// Without this binding, a forged submit naming another file's URI could delete that file's
 	// findings via replacePriorFindings below.
 	if err := s.verifyTaskBinding(r.TaskID, r.RuleID, r.TargetURI); err != nil {
 		return LLMReport{}, err
@@ -252,14 +252,14 @@ func (s *LLMService) Submit(ctx context.Context, r LLMResult) (LLMReport, error)
 	now := s.now()
 	rep := LLMReport{TaskID: r.TaskID}
 
-	// Derive the file node ID exactly as the AST extractors do, so AFFECTS hits the real file node.
+	// Derive the file node ID exactly as the AST extractors do, so AFFECTS points at the real file node.
 	var targetNodeID string
 	if r.TargetURI != "" {
 		targetNodeID = model.NewNodeID(r.TargetURI, r.TargetURI)
 	}
 
-	// FindingID ignores the message, so same-line findings collide; keep the highest-confidence one
-	// so a confident INFERRED finding is never downgraded by a colliding AMBIGUOUS one.
+	// FindingID ignores the message, so same-line findings collide. Keep the highest-confidence one so a
+	// colliding AMBIGUOUS finding never downgrades a confident INFERRED one.
 	order := make([]string, 0, len(r.Findings))
 	byID := make(map[string]Finding, len(r.Findings))
 	for _, fr := range r.Findings {
@@ -310,8 +310,8 @@ func (s *LLMService) Submit(ctx context.Context, r LLMResult) (LLMReport, error)
 		rep.FindingsAdded++
 	}
 
-	// Prior LLM findings for this (rule, file) missing from the new set are resolved or moved;
-	// delete them so re-analysing an edited file doesn't accumulate stale findings.
+	// Prior LLM findings for this (rule, file) that are missing from the new set were resolved or moved.
+	// Delete them so re-analysing an edited file doesn't accumulate stale findings.
 	if err := s.replacePriorFindings(ctx, r.RuleID, r.TargetURI, newIDs); err != nil {
 		return LLMReport{}, err
 	}
@@ -325,8 +325,8 @@ func (s *LLMService) Submit(ctx context.Context, r LLMResult) (LLMReport, error)
 		}
 	}
 
-	// Record completion so Pending stops emitting this task, keeping at most one entry per
-	// (rule, file): earlier entries carry a stale content SHA.
+	// Record completion so Pending stops emitting this task. Keep at most one entry per (rule, file),
+	// since earlier entries carry a stale content SHA.
 	s.stateMu.Lock()
 	state := s.loadState()
 	for id, e := range state.Analyzed {
@@ -344,7 +344,7 @@ func (s *LLMService) Submit(ctx context.Context, r LLMResult) (LLMReport, error)
 }
 
 // verifyTaskBinding re-derives LLMTaskID(rule, sha(file)) from target_uri's current content and
-// rejects a mismatch. Non-file or unreadable targets are skipped: they have no findings to clobber.
+// rejects a mismatch. It skips a non-file or unreadable target, which has no findings to overwrite.
 func (s *LLMService) verifyTaskBinding(taskID, ruleID, targetURI string) error {
 	path, ok := model.PathFromFileURI(targetURI)
 	if !ok {
@@ -361,7 +361,7 @@ func (s *LLMService) verifyTaskBinding(taskID, ruleID, targetURI string) error {
 	return nil
 }
 
-// replacePriorFindings deletes LLM findings for (ruleID, targetURI) not in keep; an empty
+// replacePriorFindings deletes LLM findings for (ruleID, targetURI) that are not in keep. An empty
 // targetURI is a no-op, since there is nothing to scope the delete to.
 func (s *LLMService) replacePriorFindings(ctx context.Context, ruleID, targetURI string, keep map[string]bool) error {
 	if targetURI == "" {
@@ -436,7 +436,7 @@ func isCodeFile(ext string) bool {
 	return true
 }
 
-// skipDir reports whether a directory should be skipped by the deterministic and LLM walks.
+// skipDir reports whether the deterministic and LLM walks should skip a directory.
 func skipDir(name string) bool {
 	switch name {
 	case ".git", "node_modules", "vendor", ".chiton", "chiton-out":

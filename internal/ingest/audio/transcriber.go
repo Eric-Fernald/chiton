@@ -1,5 +1,5 @@
-// Package audio transcribes local audio/video into a meeting.Transcript via a whisper CLI (NewShell, pure Go)
-// or, with the whisper_cgo build tag, in-process whisper.cpp bindings (NewCgo).
+// Package audio transcribes local audio or video into a meeting.Transcript. It shells out to a whisper CLI
+// (NewShell, pure Go) or, with the whisper_cgo build tag, uses in-process whisper.cpp bindings (NewCgo).
 package audio
 
 import (

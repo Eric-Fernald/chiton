@@ -97,8 +97,8 @@ func TestIntegration(t *testing.T) {
 	}
 }
 
-// TestMergeCommitChanges verifies LastCommitChanges reports the files a merge brings in; a plain
-// `git diff-tree HEAD` is empty for a merge.
+// TestMergeCommitChanges verifies LastCommitChanges reports the files a merge brings in, even though a plain
+// `git diff-tree HEAD` prints nothing for a merge.
 func TestMergeCommitChanges(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")
@@ -158,8 +158,8 @@ func TestMergeCommitChanges(t *testing.T) {
 	}
 }
 
-// TestRejectsOptionLikeRefs verifies an option-like ref (e.g. "--output=...") is refused before reaching
-// git, so it can't be smuggled in as a file-writing flag.
+// TestRejectsOptionLikeRefs verifies an option-like ref (e.g. "--output=...") fails before reaching git,
+// where it would act as a file-writing flag.
 func TestRejectsOptionLikeRefs(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")

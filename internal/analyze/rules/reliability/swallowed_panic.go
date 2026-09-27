@@ -10,7 +10,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// SwallowedPanic flags Go `recover()` results assigned to the blank identifier: the recovered panic is
+// SwallowedPanic flags Go `recover()` results assigned to the blank identifier. The recovered panic is
 // dropped without logging, re-raising, or surfacing.
 type SwallowedPanic struct{}
 

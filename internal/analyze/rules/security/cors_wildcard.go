@@ -8,8 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// CORSWildcard flags Access-Control-Allow-Origin "*" (header writes or framework config keys): any
-// site can read responses, and with credentials it is an account-takeover vector.
+// CORSWildcard flags Access-Control-Allow-Origin "*" (header writes or framework config keys). Any
+// site can read the responses, and with credentials this allows account takeover.
 type CORSWildcard struct{}
 
 func (CORSWildcard) Meta() analyze.Meta {

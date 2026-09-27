@@ -7,12 +7,12 @@ import (
 	"unicode"
 )
 
-// DefaultHashDim is the dimensionality of the HashEmbedder when none is given; it only needs enough
-// buckets to keep distinct tokens from colliding too often for tests and offline use.
+// DefaultHashDim is the HashEmbedder's dimensionality when none is given. Tests and offline use only need
+// enough buckets to keep distinct tokens from colliding too often.
 const DefaultHashDim = 256
 
-// HashEmbedder is a deterministic, dependency-free embedder for offline/CI runs (--provider hash): signed
-// token hashing into Dim buckets, L2-normalized. It captures lexical overlap only; use Ollama for recall.
+// HashEmbedder is a deterministic, dependency-free embedder for offline and CI runs (--provider hash) that
+// hashes signed tokens into Dim buckets and L2-normalizes. It sees only lexical overlap, unlike Ollama.
 type HashEmbedder struct {
 	dim int
 }
@@ -40,7 +40,7 @@ func (h *HashEmbedder) Embed(_ context.Context, texts []string) ([][]float32, er
 
 func (h *HashEmbedder) embedOne(text string) []float32 {
 	vec := make([]float32, h.dim)
-	// Tokens are lowercased runs of letters/digits.
+	// Tokens are lowercased runs of letters and digits.
 	for tok := range strings.FieldsFuncSeq(strings.ToLower(text), isTokenSep) {
 		bucket, sign := bucketAndSign(tok, h.dim)
 		vec[bucket] += sign
@@ -51,7 +51,7 @@ func (h *HashEmbedder) embedOne(text string) []float32 {
 
 func isTokenSep(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }
 
-// FNV-1a (32-bit) parameters, matching hash/fnv.New32a so existing hash embeddings stay valid.
+// These FNV-1a (32-bit) parameters match hash/fnv.New32a so existing hash embeddings stay valid.
 const (
 	fnvOffset32 = 2166136261
 	fnvPrime32  = 16777619

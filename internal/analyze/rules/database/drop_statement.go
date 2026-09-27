@@ -8,7 +8,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// DropStatement flags DROP TABLE/DATABASE/SCHEMA in source: irreversible DDL that belongs in
+// DropStatement flags DROP TABLE, DATABASE, or SCHEMA in source. That irreversible DDL belongs in
 // reviewed migrations, not application code.
 type DropStatement struct{}
 
@@ -26,7 +26,7 @@ func (DropStatement) Meta() analyze.Meta {
 }
 
 // Require an object keyword after DROP so we don't match the English word
-// "drop" or method names like dropFirst(); `DROP TABLE IF EXISTS` still matches.
+// "drop" or method names like dropFirst(). `DROP TABLE IF EXISTS` still matches.
 var dropStmtRe = regexp.MustCompile(`(?i)\bDROP\s+(?:TABLE|DATABASE|SCHEMA)\b`)
 
 func (DropStatement) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {

@@ -9,7 +9,7 @@ import (
 )
 
 // RawQueryEscapeHatch flags ORM raw-SQL escape hatches (.raw, .extra, sqlalchemy text, sequelize.query),
-// each anchored to a real ORM call site so generic raw/extra/text/query methods stay quiet.
+// each anchored to a real ORM call site so generic raw, extra, text, and query methods don't match.
 type RawQueryEscapeHatch struct{}
 
 func (RawQueryEscapeHatch) Meta() analyze.Meta {

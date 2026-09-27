@@ -1,5 +1,5 @@
-// Package fswatch is a thin recursive wrapper over fsnotify, which only watches single directories: it
-// watches every directory in the tree (including ones created later) and hands file events to a callback.
+// Package fswatch wraps fsnotify, which only watches single directories, to watch every directory in a tree
+// (including ones created later) and pass file events to a callback.
 package fswatch
 
 import (
@@ -23,11 +23,11 @@ type Options struct {
 	Accept func(path string) bool
 	// OnError, if set, receives non-fatal watcher errors.
 	OnError func(error)
-	// OnDirRemove, if set, is called when a watched directory is removed or renamed away; fsnotify
+	// OnDirRemove, if set, is called when a watched directory is removed or renamed away. fsnotify
 	// sends no per-child events for this, so the consumer must prune what it indexed underneath.
 	OnDirRemove func(dir string)
 	// WatchRootOnly watches only root, never its subdirectories (e.g. a huge browser profile dir). Leave
-	// IgnoreDir nil with it: IgnoreDir is also matched against file-event names and would drop wanted events.
+	// IgnoreDir nil with it, since IgnoreDir also matches file-event names and would drop wanted events.
 	WatchRootOnly bool
 }
 
@@ -39,13 +39,13 @@ type Watcher struct {
 	opts    Options
 
 	// mu guards dirs, our own record of watched directories. fsnotify's WatchList can't classify a
-	// removal: on Linux it forgets a deleted dir before the parent's Remove event reaches us.
+	// removal, because on Linux it forgets a deleted dir before the parent's Remove event reaches us.
 	mu   sync.Mutex
 	dirs map[string]bool
 }
 
-// New creates a Watcher rooted at root; enqueue is called from Run's goroutine with each changed file of
-// interest. Call Run to start and Close to release resources.
+// New creates a Watcher rooted at root. Run's goroutine calls enqueue with each changed file of interest.
+// Call Run to start and Close to release resources.
 func New(root string, enqueue func(path string), opts Options) (*Watcher, error) {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -127,7 +127,7 @@ func (w *Watcher) handle(ev fsnotify.Event) {
 		}
 	}
 
-	// A removed/renamed directory yields no per-child events and os.Stat can't classify a gone path, so
+	// A removed or renamed directory yields no per-child events and os.Stat can't classify a gone path, so
 	// ask our own watched set (fsnotify's may already be pruned), then drop the subtree and notify.
 	if ev.Op&(fsnotify.Remove|fsnotify.Rename) != 0 && w.isWatchedDir(path) {
 		w.removeSubtreeWatches(path)
@@ -215,7 +215,7 @@ func (w *Watcher) isWatchedDir(path string) bool {
 }
 
 // removeSubtreeWatches drops and forgets the watches on dir and its descendants. On Linux the kernel has
-// usually invalidated them already, so fsnotify's ErrNonExistentWatch is expected and ignored.
+// usually invalidated them already, so it expects and ignores fsnotify's ErrNonExistentWatch.
 func (w *Watcher) removeSubtreeWatches(dir string) {
 	stale := w.watchedUnder(dir)
 	for _, watched := range stale {

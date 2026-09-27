@@ -8,12 +8,12 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// sourceLangs restricts style rules to source code: Markdown uses two trailing spaces as a hard
-// line break, and image/binary files have no meaningful "lines". Shared; never mutate.
+// sourceLangs limits style rules to source code, since Markdown uses two trailing spaces as a hard line
+// break and image or binary files have no real lines. Rules share it, so never mutate it.
 var sourceLangs = []string{"go", "py", "js", "ts", "jsx", "tsx", "rs", "java"}
 
-// TrailingWhitespace flags trailing spaces/tabs at end-of-line, surfacing editors that aren't
-// configured to strip on save.
+// TrailingWhitespace flags trailing spaces or tabs at the end of a line, a sign of an editor that isn't
+// configured to strip them on save.
 type TrailingWhitespace struct{}
 
 func (TrailingWhitespace) Meta() analyze.Meta {

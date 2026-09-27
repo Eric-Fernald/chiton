@@ -17,21 +17,21 @@ type Finding struct {
 	Message  string
 	Fix      string // optional patch suggestion (free-form text for now)
 
-	// At least one must be set: TargetURI is the file's source_uri, TargetNodeID the symbol/file node.
+	// Set at least one. TargetURI is the file's source_uri, and TargetNodeID is the symbol or file node.
 	TargetURI    string
 	TargetNodeID string
 
 	// Optional positional info; finding ID hashes Span to keep stability.
 	Span *model.SourceSpan
 
-	// Set only for LLM-rule findings; deterministic findings leave them zero (see resolved).
+	// Only LLM-rule findings set these. Deterministic findings leave them zero (see resolved).
 	NodeProvenance model.Provenance
 	Confidence     float32
 	RuleProvenance RuleProvenance
 }
 
-// resolved maps zero provenance fields to EXTRACTED/1.0/DETERMINISTIC; setting either
-// NodeProvenance or RuleProvenance marks the finding LLM-sourced, keeping its confidence.
+// resolved maps zero provenance fields to EXTRACTED, 1.0, and DETERMINISTIC. Setting NodeProvenance
+// or RuleProvenance marks the finding as LLM-sourced and keeps its confidence.
 func (f Finding) resolved() (model.Provenance, float32, RuleProvenance) {
 	if f.NodeProvenance == "" && f.RuleProvenance == "" {
 		return model.ProvExtracted, 1.0, ProvenanceDeterministic
@@ -47,7 +47,7 @@ func (f Finding) resolved() (model.Provenance, float32, RuleProvenance) {
 	return prov, f.Confidence, ruleProv
 }
 
-// FindingID returns the stable ID: a hash of rule, target, and start line (not message), so the
+// FindingID returns the stable ID, a hash of rule, target, and start line but not message, so the
 // same offence at the same place reuses its node across scans.
 func (f Finding) FindingID() string {
 	loc := f.TargetURI
@@ -58,7 +58,7 @@ func (f Finding) FindingID() string {
 	return hex.EncodeToString(h[:16])
 }
 
-// asNode renders the finding as a graph node; id is f.FindingID(), passed in so callers hash it once.
+// asNode renders the finding as a graph node. id is f.FindingID(), passed in so callers hash it once.
 func (f Finding) asNode(id string, now time.Time) model.Node {
 	uri := "finding://" + id
 	label := f.RuleID
@@ -95,7 +95,8 @@ func (f Finding) asNode(id string, now time.Time) model.Node {
 	}
 }
 
-// violatesEdge returns the finding→rule edge; id and rule are f.FindingID() and RuleNodeID(f.RuleID).
+// violatesEdge returns the edge from the finding to its rule. id is f.FindingID() and rule is
+// RuleNodeID(f.RuleID).
 func (f Finding) violatesEdge(id, rule string, now time.Time) model.Edge {
 	prov, conf, _ := f.resolved()
 	return model.Edge{
@@ -109,8 +110,8 @@ func (f Finding) violatesEdge(id, rule string, now time.Time) model.Edge {
 	}
 }
 
-// affectsEdge returns the finding→target edge, or a zero Edge if no target node is set (callers should
-// check Edge.ID != ""); id is f.FindingID().
+// affectsEdge returns the edge from the finding to its target node, or a zero Edge when TargetNodeID is
+// empty, so callers check Edge.ID != "". id is f.FindingID().
 func (f Finding) affectsEdge(id string, now time.Time) model.Edge {
 	target := f.TargetNodeID
 	if target == "" {
@@ -128,7 +129,7 @@ func (f Finding) affectsEdge(id string, now time.Time) model.Edge {
 	}
 }
 
-// appendGraph appends f's node, VIOLATES edge, and AFFECTS edge (when it has a target node); id and rule
+// appendGraph appends f's node, VIOLATES edge, and AFFECTS edge (when it has a target node). id and rule
 // are f.FindingID() and RuleNodeID(f.RuleID).
 func (f Finding) appendGraph(nodes []model.Node, edges []model.Edge, id, rule string, now time.Time) ([]model.Node, []model.Edge) {
 	nodes = append(nodes, f.asNode(id, now))

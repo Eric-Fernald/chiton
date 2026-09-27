@@ -236,7 +236,7 @@ func TestPythonIsLiteral_StringsNotFlagged(t *testing.T) {
 // ---- bugs/self-assignment: inline block comment (FP regression) ----
 
 func TestSelfAssignment_BlockCommentNotFlagged(t *testing.T) {
-	// A trailing /* */ once defeated the end-of-line anchor; a real self-assignment with one must fire.
+	// A trailing /* */ once defeated the end-of-line anchor. A real self-assignment with one must fire.
 	pos := "package x\n" +
 		"func f() {\n" +
 		"\ta = a /* keep */\n" + // genuine self-assignment + trailing block comment

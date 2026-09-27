@@ -1,5 +1,5 @@
-// Package embed provides pluggable embedding providers (local Ollama by default; a deterministic
-// HashEmbedder for offline/CI and tests) and the helpers that turn graph nodes into embeddable text.
+// Package embed provides pluggable embedding providers (local Ollama by default, or a deterministic
+// HashEmbedder for offline runs, CI, and tests) and the helpers that turn graph nodes into embeddable text.
 package embed
 
 import (
@@ -48,8 +48,8 @@ func New(cfg Config) (Embedder, error) {
 	}
 }
 
-// TextFor returns the text chiton embeds for a node — symbol label + docstring, doc section label + text,
-// concept label + description — or "" if the node kind is not embedded.
+// TextFor returns a node's embeddable text: a symbol's label and docstring, a doc section's label and text,
+// or a concept's label and description. It returns "" for any other node kind.
 func TextFor(n model.Node) string {
 	switch n.Kind {
 	case model.KindSymbol:
@@ -66,7 +66,8 @@ func TextFor(n model.Node) string {
 	}
 }
 
-// NodeEmbeddings embeds, in one Embed call, each node TextFor gives text for; results as for TextEmbeddings.
+// NodeEmbeddings embeds each node that TextFor gives text for in one Embed call and returns results as
+// TextEmbeddings does.
 func NodeEmbeddings(ctx context.Context, e Embedder, nodes []model.Node) (embs []store.Embedding, exact bool, err error) {
 	var ids, texts []string
 	for _, n := range nodes {
@@ -78,8 +79,8 @@ func NodeEmbeddings(ctx context.Context, e Embedder, nodes []model.Node) (embs [
 	return TextEmbeddings(ctx, e, ids, texts)
 }
 
-// TextEmbeddings embeds texts in one call (none if empty), pairing vectors with ids in order, truncated to the
-// shorter list; exact reports whether the embedder returned exactly one vector per text.
+// TextEmbeddings embeds texts in one call, skipped when texts is empty, and pairs vectors with ids in order
+// up to the shorter list. exact reports whether the embedder returned exactly one vector per text.
 func TextEmbeddings(ctx context.Context, e Embedder, ids, texts []string) (embs []store.Embedding, exact bool, err error) {
 	if len(texts) == 0 {
 		return nil, true, nil

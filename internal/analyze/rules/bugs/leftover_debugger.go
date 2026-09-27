@@ -8,8 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// LeftoverDebugger flags breakpoints left in source (`debugger;` in JS/TS, `pdb.set_trace()` /
-// `breakpoint()` in Python); they halt execution and must never reach production.
+// LeftoverDebugger flags breakpoints left in source: `debugger;` in JS/TS, and `pdb.set_trace()` or
+// `breakpoint()` in Python. They halt execution and must never reach production.
 type LeftoverDebugger struct{}
 
 func (LeftoverDebugger) Meta() analyze.Meta {

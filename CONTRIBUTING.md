@@ -217,11 +217,12 @@ copy.
    fire. Existing examples: an `import "fake"` inside a comment must not count
    toward the import threshold; a package flagged `external: true` must not be
    reported as a circular import; a threshold rule gets both an over- and an
-   under-threshold case. Comment-induced false positives are common enough that
-   there are strippers and maskers to reuse rather than re-derive — `StripLineComment`,
-   `StripPyComment`, and `MaskCLiterals`/`MaskGoLiterals` in `internal/analyze/lex.go`
-   (use the `MaskedCLiterals`/`MaskedGoLiterals` variants to share one mask per file),
-   and `stripArchLineComment` in `internal/analyze/rules/architecture/too_many_imports.go`.
+   under-threshold case. Comment-induced false positives are common, so reuse the
+   existing comment strippers and literal maskers instead of writing new ones.
+   `internal/analyze/lex.go` has `StripLineComment`, `StripPyComment`, `MaskCLiterals`,
+   and `MaskGoLiterals`. Call `MaskedCLiterals` or `MaskedGoLiterals` to get a mask that
+   every rule shares for the file. `stripArchLineComment` in
+   `internal/analyze/rules/architecture/too_many_imports.go` also handles line comments.
 
    Precision matters more than recall here: re-analysing a file prunes findings
    that no longer fire, so a noisy rule does not add noise once, it churns the

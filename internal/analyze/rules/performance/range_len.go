@@ -9,7 +9,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// RangeLen flags Python `for i in range(len(x))`; only the single-argument form matches, so
+// RangeLen flags Python `for i in range(len(x))`. Only the single-argument form matches, so
 // index-arithmetic loops like `range(len(x) - 1)` are left alone.
 type RangeLen struct{}
 
@@ -26,12 +26,12 @@ func (RangeLen) Meta() analyze.Meta {
 	}
 }
 
-// `for <var> in range(len(<expr>))` where len(...) is range's only argument.
+// rangeLenRe matches `for <var> in range(len(<expr>))` where len(...) is range's only argument.
 var rangeLenRe = regexp.MustCompile(`\bfor\s+\w+\s+in\s+range\s*\(\s*len\s*\([^()]*\)\s*\)`)
 
 func (RangeLen) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	const ruleID = "performance/range-len"
-	// Exact prefilter: masking writes only 'x', so a masked `range` is a raw one too.
+	// The prefilter is exact because masking writes only 'x', so a masked `range` is a raw one too.
 	if !bytes.Contains(t.Content, []byte("range")) {
 		return nil
 	}

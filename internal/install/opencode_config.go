@@ -1,7 +1,7 @@
 package install
 
 // OpenCode keeps MCP servers under a top-level "mcp" object (not "mcpServers"), and a local server's
-// executable and arguments share one flat "command" array; there is no separate "args" field.
+// executable and arguments share one flat "command" array. There is no separate "args" field.
 
 const openCodeSchema = "https://opencode.ai/config.json"
 

@@ -291,8 +291,8 @@ func TestLLMPendingKeepsInjectionPayloadInInputOnly(t *testing.T) {
 	}
 }
 
-// TestLLMSubmitRejectsMismatchedTarget verifies a submit whose target_uri doesn't match its task_id
-// is rejected, so it can't delete another file's findings.
+// TestLLMSubmitRejectsMismatchedTarget verifies that Submit rejects a result whose target_uri doesn't
+// match its task_id, so it can't delete another file's findings.
 func TestLLMSubmitRejectsMismatchedTarget(t *testing.T) {
 	ctx := context.Background()
 	gs := newTestStore(t)

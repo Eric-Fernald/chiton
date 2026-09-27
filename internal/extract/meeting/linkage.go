@@ -16,19 +16,19 @@ import (
 const KindMeetingLinkage = "meeting_linkage"
 
 // linkageStatusDone marks a linked meeting so Pending skips it. It shares the extraction_status attr with
-// semantic extraction; no collision, since each Pending scans only its own node kinds.
+// semantic extraction without collision, since each Pending scans only its own node kinds.
 const linkageStatusDone = "done"
 
 // defaultMaxCandidates caps a task spec's candidate-symbol menu to protect the host's context budget. The
-// menu is only a hint: submit resolves any returned label against the whole graph.
+// menu is only a hint, because submit resolves any returned label against the whole graph.
 const defaultMaxCandidates = 300
 
-// defaultDiscussedConfidence scores a "merely discussed" symbol link (the host gives no per-item score); it
-// goes through model.ResolveProvenance like every other INFERRED edge.
+// defaultDiscussedConfidence scores a "merely discussed" symbol link, since the host gives no per-item score.
+// The link goes through model.ResolveProvenance like every other INFERRED edge.
 const defaultDiscussedConfidence float32 = 0.7
 
-// LinkService runs meeting→code linkage in subagent mode: Pending emits one task spec per un-linked meeting,
-// Submit writes the host's decisions as INFERRED (or AMBIGUOUS) nodes/edges. chiton calls no LLM itself.
+// LinkService runs meeting-to-code linkage in subagent mode. Pending emits a task spec per unlinked meeting,
+// and Submit writes the host's decisions as INFERRED (or AMBIGUOUS) nodes and edges. chiton calls no LLM.
 type LinkService struct {
 	store         store.GraphStore
 	threshold     float32
@@ -46,7 +46,7 @@ func NewLinkService(s store.GraphStore, threshold float32) *LinkService {
 }
 
 // LinkTaskSpec is one unit of linkage work: the transcript text, a hint menu of code-symbol labels it seems
-// to reference, and the Schema/Instructions pinning the JSON returned via submit_meeting_links.
+// to reference, and the Schema and Instructions that define the JSON returned via submit_meeting_links.
 type LinkTaskSpec struct {
 	ID               string   `json:"id"`   // meeting node ID (also the submit task_id)
 	Kind             string   `json:"kind"` // meeting_linkage
@@ -151,8 +151,8 @@ func (s *LinkService) Pending(ctx context.Context, limit int) ([]LinkTaskSpec, e
 	return specs, nil
 }
 
-// Submit ingests one meeting's linkage results idempotently (stable IDs); prior decision/rationale nodes for
-// the meeting that are absent from the new result are deleted as superseded.
+// Submit ingests one meeting's linkage results idempotently (stable IDs). It deletes the meeting's prior
+// decision and rationale nodes absent from the new result, which supersedes them.
 func (s *LinkService) Submit(ctx context.Context, r LinkResult) (LinkReport, error) {
 	if r.TaskID == "" {
 		return LinkReport{}, fmt.Errorf("submit: task_id is required")
@@ -191,7 +191,7 @@ func (s *LinkService) Submit(ctx context.Context, r LinkResult) (LinkReport, err
 		if prov == model.ProvAmbiguous {
 			rep.Ambiguous++
 		}
-		// Key on position as well as summary so identical summaries in one meeting stay distinct nodes;
+		// Key on position as well as summary so identical summaries in one meeting stay distinct nodes.
 		// deleteSupersededDecisions prunes any prior decision not in this submission's keep set.
 		disambig := fmt.Sprintf("%d:%s", i, slug(summary))
 		decID := model.NewNodeID(meetingURI, "decision:"+disambig)
@@ -253,7 +253,7 @@ func (s *LinkService) Submit(ctx context.Context, r LinkResult) (LinkReport, err
 			edges = append(edges, typedEdge(decID, symID, model.EdgeDecidedIn, prov, conf, now, nil))
 			// symbol --DISCUSSED_IN--> meeting (code discussed in the meeting).
 			edges = append(edges, typedEdge(symID, r.TaskID, model.EdgeDiscussedIn, prov, conf, now, nil))
-			// meeting --MENTIONED--> symbol, so "what did this meeting mention?" also covers
+			// A MENTIONED edge from meeting to symbol lets "what did this meeting mention?" also cover
 			// decision-governed symbols, matching the discussed-only path below.
 			edges = append(edges, typedEdge(r.TaskID, symID, model.EdgeMentioned, prov, conf, now, nil))
 			rep.EdgesAdded += 3
@@ -332,8 +332,8 @@ func (s *LinkService) Submit(ctx context.Context, r LinkResult) (LinkReport, err
 	return rep, nil
 }
 
-// resolveSymbol resolves a label to a node ID: exact (case-insensitive) symbol match, then exact
-// file/other match, then substring match. Returns "" rather than fabricate a link to an unknown symbol.
+// resolveSymbol resolves a label to a node ID by exact case-insensitive symbol match, then exact match on
+// another node kind, then substring match. It returns "" rather than invent a link to an unknown symbol.
 func (s *LinkService) resolveSymbol(ctx context.Context, label string) string {
 	label = strings.TrimSpace(label)
 	if label == "" {
@@ -370,8 +370,8 @@ func (s *LinkService) resolveSymbol(ctx context.Context, label string) string {
 	return contains
 }
 
-// deleteSupersededDecisions removes decision/rationale nodes under meetingURI not in keep, via NodeDeleter
-// (which drops adjacent edges too); stores without it keep stale decisions until a rebuild.
+// deleteSupersededDecisions removes decision and rationale nodes under meetingURI not in keep. It uses
+// NodeDeleter, which drops adjacent edges too. Stores without it keep stale decisions until a rebuild.
 func (s *LinkService) deleteSupersededDecisions(ctx context.Context, meetingURI string, keep map[string]bool) error {
 	prior, err := store.NodesMatching(ctx, s.store, store.NodeFilter{
 		Kinds:     []model.NodeKind{model.KindDecision, model.KindRationale},
@@ -475,8 +475,8 @@ func candidatesFor(text string, symbols []symbolCandidate, max int) []string {
 	return out
 }
 
-// identifierTokens splits a symbol label into camelCase/snake_case/dotted/slashed word tokens
-// (fetchAll → [fetch All], pkg.Method → [pkg Method]).
+// identifierTokens splits a symbol label into tokens at camelCase, snake_case, dot, and slash boundaries,
+// so fetchAll gives [fetch All] and pkg.Method gives [pkg Method].
 func identifierTokens(s string) []string {
 	var tokens []string
 	var cur strings.Builder

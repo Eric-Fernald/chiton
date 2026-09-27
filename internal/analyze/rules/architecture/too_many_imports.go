@@ -10,8 +10,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// TooManyImportsThreshold is the import-statement count above which a file is flagged; set high
-// so only genuinely import-heavy files are reported.
+// TooManyImportsThreshold is the import-statement count above which TooManyImports flags a file. It is
+// set high so only import-heavy files are reported.
 const TooManyImportsThreshold = 25
 
 // TooManyImports flags a file with more than TooManyImportsThreshold import statements (a coupling
@@ -33,8 +33,8 @@ func (TooManyImports) Meta() analyze.Meta {
 
 var (
 	pyImportRe = regexp.MustCompile(`^(import\s+\S|from\s+\S+\s+import\s)`)
-	// ES import statement: the first char after `import` may not be `(` or `.`, so dynamic
-	// import(...) and import.meta don't count.
+	// jsImportRe matches an ES import statement. The first char after `import` may not be `(` or `.`, so
+	// dynamic import(...) and import.meta don't count.
 	jsImportRe   = regexp.MustCompile(`^import\b\s*[^(.]`)
 	jsRequireRe  = regexp.MustCompile(`\brequire\s*\(\s*['"]`)
 	rustUseRe    = regexp.MustCompile(`^use\s+\S`)
@@ -112,14 +112,14 @@ func countImports(ext string, content []byte) int {
 }
 
 // stripArchLineComment cuts s at the first `//` (`#` for Python) unless the quotes before it are
-// unbalanced; block comments are not handled.
+// unbalanced. It does not handle block comments.
 func stripArchLineComment(ext, s string) string {
 	marker := "//"
 	if ext == "py" {
 		marker = "#"
 	}
 	if idx := strings.Index(s, marker); idx >= 0 {
-		// Unbalanced quotes mean the first marker sits inside a string; keep the line whole.
+		// Unbalanced quotes mean the first marker sits inside a string, so keep the line whole.
 		before := s[:idx]
 		if strings.Count(before, `"`)%2 == 0 && strings.Count(before, "'")%2 == 0 {
 			return before

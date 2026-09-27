@@ -2,7 +2,7 @@ package subagent
 
 import "github.com/Eric-Fernald/chiton/internal/graph/model"
 
-// submitSchema is shared by both task kinds: concepts plus typed edges, returned via submit_extraction /
+// submitSchema describes the concepts and typed edges that both task kinds return via submit_extraction or
 // `chiton extract submit`.
 const submitSchema = `{
   "task_id": "<echo the task id>",

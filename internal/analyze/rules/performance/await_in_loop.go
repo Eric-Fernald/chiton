@@ -10,7 +10,7 @@ import (
 )
 
 // AwaitInLoop flags an `await` expression inside a for/while loop body, which serializes the
-// iterations; the `for await (... of ...)` header itself is not flagged.
+// iterations. It does not flag the `for await (... of ...)` header itself.
 type AwaitInLoop struct{}
 
 func (AwaitInLoop) Meta() analyze.Meta {
@@ -27,15 +27,15 @@ func (AwaitInLoop) Meta() analyze.Meta {
 }
 
 var (
-	// `await` (not a member name) followed by an operand, so a bare prose "await" that survives
-	// masking does not match.
+	// awaitExprRe matches `await` (not a member name) followed by an operand, so a bare prose "await"
+	// that survives masking does not match.
 	awaitExprRe = regexp.MustCompile(`(?:^|[^.\w])await\s+[\w$([{]`)
 	forAwaitRe  = regexp.MustCompile(`^\s*for\s+await\b`)
 )
 
 func (AwaitInLoop) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	const ruleID = "performance/await-in-loop"
-	// Exact prefilter: masking writes only 'x', so a masked `await` is a raw one too.
+	// The prefilter is exact because masking writes only 'x', so a masked `await` is a raw one too.
 	if !bytes.Contains(t.Content, []byte("await")) {
 		return nil
 	}

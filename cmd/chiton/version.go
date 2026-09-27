@@ -8,8 +8,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Build metadata. Zero values mean a source build; release builds inject real values via
-// -ldflags "-X main.version=... -X main.commit=... -X main.date=...".
+// These variables hold build metadata. Zero values mean a source build, and release builds inject real
+// values via -ldflags "-X main.version=... -X main.commit=... -X main.date=...".
 var (
 	version = "dev"
 	commit  = ""

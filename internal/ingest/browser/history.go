@@ -1,5 +1,5 @@
 // Package browser ingests Chromium-family browser history as `url` nodes, reading only page metadata from a
-// copy of the locked SQLite History file; it never fetches pages, so it has no network or SSRF surface.
+// copy of the locked SQLite History file. It never fetches pages, so it has no network access or SSRF risk.
 package browser
 
 import (
@@ -44,7 +44,7 @@ func readHistory(ctx context.Context, dbPath string, opts readOptions) ([]Visit,
 	}
 	defer cleanup()
 
-	// The copy is disposable, so opening it read-write is harmless; a forward-slashed path is the most
+	// The copy is disposable, so opening it read-write is harmless. A forward-slashed path is the most
 	// portable DSN for the modernc driver.
 	db, err := sql.Open("sqlite", filepath.ToSlash(tmp))
 	if err != nil {
@@ -107,7 +107,7 @@ func buildQuery(opts readOptions) (string, []any) {
 	return q, args
 }
 
-// sidecarSuffixes are the WAL/SHM/rollback-journal files SQLite keeps beside a History DB.
+// sidecarSuffixes are the WAL, SHM, and rollback-journal files SQLite keeps beside a History DB.
 var sidecarSuffixes = []string{"-wal", "-shm", "-journal"}
 
 // copyForRead copies path and any sidecars into a new temp dir, returning the copy's path and a

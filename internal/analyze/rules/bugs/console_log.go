@@ -11,7 +11,7 @@ import (
 )
 
 // ConsoleLog flags console.log statements in JavaScript/TypeScript source.
-// Test files (`.test.` / `.spec.` in the path) are skipped.
+// It skips test files (`.test.` or `.spec.` in the path).
 type ConsoleLog struct{}
 
 func (ConsoleLog) Meta() analyze.Meta {

@@ -9,7 +9,7 @@ import (
 )
 
 // MissingFinalNewline flags files whose last line lacks a terminating newline, which POSIX text
-// files need; its absence yields "\ No newline at end of file" diffs.
+// files need. Without it, diffs show "\ No newline at end of file".
 type MissingFinalNewline struct{}
 
 func (MissingFinalNewline) Meta() analyze.Meta {

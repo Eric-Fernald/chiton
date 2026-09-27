@@ -15,8 +15,8 @@ import (
 	badgerstore "github.com/Eric-Fernald/chiton/internal/graph/store/badger"
 )
 
-// TestAnalyzeEndToEnd runs all registered rules over a tiny synthetic repo and checks that
-// findings and rule nodes land in the store and resolve via List/Explain.
+// TestAnalyzeEndToEnd runs all registered rules over a tiny synthetic repo and checks that the
+// store holds the findings and rule nodes and that List and Explain resolve them.
 func TestAnalyzeEndToEnd(t *testing.T) {
 	tmp := t.TempDir()
 

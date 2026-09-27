@@ -8,8 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/fsutil"
 )
 
-// readDoc reads and parses the config map at path (doc is nil for a JSON/YAML "null"). A missing file is
-// found=false with no error.
+// readDoc reads and parses the config map at path (doc is nil for a JSON or YAML "null"). For a missing
+// file it returns found=false and no error.
 func readDoc(path string, unmarshal func([]byte, any) error) (doc map[string]any, found bool, err error) {
 	existing, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
@@ -25,8 +25,8 @@ func readDoc(path string, unmarshal func([]byte, any) error) (doc map[string]any
 	return doc, true, nil
 }
 
-// openDoc prepares the config map at path for an upsert: a missing, empty, or null file is an empty map,
-// which created reports. It creates path's parent directory.
+// openDoc creates path's parent directory and prepares the config map at path for an upsert. A missing,
+// empty, or null file yields an empty map, and created reports whether the file was missing or empty.
 func openDoc(path string, unmarshal func([]byte, any) error) (doc map[string]any, created bool, err error) {
 	if err := mkdirParent(path); err != nil {
 		return nil, false, err
@@ -99,7 +99,7 @@ func anyExists(dir string, rels ...string) bool {
 	return false
 }
 
-// fileExists is a Doctor probe: a failed stat just means "not installed", never an error.
+// fileExists is a Doctor probe. It treats a failed stat as "not installed" and never returns an error.
 func fileExists(path string) (bool, error) {
 	_, err := os.Stat(path)
 	return err == nil, nil

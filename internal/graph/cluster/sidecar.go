@@ -36,8 +36,8 @@ func CompareByBetweenness(a, b NodeResult) int {
 		cmp.Compare(a.SourceURI, b.SourceURI))
 }
 
-// SidecarPath returns the cluster sidecar path for a graph store path
-// (e.g. ./chiton-out/graph.kuzu → ./chiton-out/cluster.json).
+// SidecarPath returns the cluster sidecar path for a graph store path. For example, ./chiton-out/graph.kuzu
+// maps to ./chiton-out/cluster.json.
 func SidecarPath(graphPath string) string {
 	return filepath.Join(filepath.Dir(graphPath), "cluster.json")
 }

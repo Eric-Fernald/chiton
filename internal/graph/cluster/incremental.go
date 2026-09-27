@@ -8,8 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// RunIncremental re-clusters only the ≤2-hop neighborhood of touched, keeping other nodes' prev communities;
-// prev nil/empty runs a full pass. Betweenness is global, so it is carried over from prev (new nodes get 0).
+// RunIncremental re-clusters only nodes within 2 hops of touched, keeping other nodes' prev communities.
+// A nil or empty prev runs a full pass. Betweenness is global, so it comes from prev (new nodes get 0).
 func RunIncremental(prev *Results, nodes []model.Node, edges []model.Edge, touched map[string]bool, resolution float64, rng *rand.Rand) *Results {
 	if len(nodes) == 0 {
 		return &Results{GeneratedAt: time.Now(), Nodes: map[string]NodeResult{}}
@@ -17,7 +17,7 @@ func RunIncremental(prev *Results, nodes []model.Node, edges []model.Edge, touch
 	if rng == nil {
 		rng = rand.New(rand.NewSource(42))
 	}
-	// Cold start (or sidecar lost): do the same full pass as `chiton cluster`.
+	// On a cold start or a lost sidecar, do the same full pass as `chiton cluster`.
 	if prev == nil || len(prev.Nodes) == 0 {
 		return Full(nodes, edges, resolution, rng)
 	}
@@ -81,7 +81,7 @@ func RunIncremental(prev *Results, nodes []model.Node, edges []model.Edge, touch
 	return buildResults(nodes, comm, bet, degree)
 }
 
-// Full is a whole-graph pass: Leiden communities plus betweenness and degree for every node. A nil rng
+// Full computes Leiden communities, betweenness, and degree for every node in one whole-graph pass. A nil rng
 // uses Run's fixed seed.
 func Full(nodes []model.Node, edges []model.Edge, resolution float64, rng *rand.Rand) *Results {
 	comm := Run(nodes, edges, resolution, rng)
@@ -134,7 +134,7 @@ func buildAdjacency(nodes []model.Node, edges []model.Edge) map[string][]string 
 }
 
 // neighborhood returns the IDs within depth hops of the seeds. Every seed is included, even one with no
-// adjacency entry (isolated or deleted); induce later drops IDs that are not graph nodes.
+// adjacency entry (isolated or deleted). induce later drops IDs that are not graph nodes.
 func neighborhood(adj map[string][]string, seeds map[string]bool, depth int) map[string]bool {
 	hood := make(map[string]bool)
 	var frontier []string

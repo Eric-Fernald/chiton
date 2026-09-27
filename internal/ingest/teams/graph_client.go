@@ -16,7 +16,7 @@ import (
 	"github.com/microsoftgraph/msgraph-sdk-go/users"
 )
 
-// graphScopes is the app-only .default scope; it needs OnlineMeetingTranscript.Read.All plus an application
+// graphScopes is the app-only .default scope. It needs OnlineMeetingTranscript.Read.All and an application
 // access policy covering the organizer's meetings.
 var graphScopes = []string{"https://graph.microsoft.com/.default"}
 
@@ -86,8 +86,8 @@ func (g *GraphSource) ListTranscripts(ctx context.Context, meetingID string) ([]
 	return metas, nil
 }
 
-// FetchContent fetches a transcript as WebVTT; our Accept: text/vtt wins because ToGetRequestInformation only
-// TryAdds its own Accept header.
+// FetchContent fetches a transcript as WebVTT. Our Accept: text/vtt header wins because
+// ToGetRequestInformation only TryAdds its own Accept header.
 func (g *GraphSource) FetchContent(ctx context.Context, meetingID, transcriptID string) ([]byte, error) {
 	headers := abstractions.NewRequestHeaders()
 	headers.Add("Accept", "text/vtt")

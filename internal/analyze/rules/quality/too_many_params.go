@@ -10,8 +10,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// TooManyParams flags a function/method declaration with more than MaxParams parameters; a long list
-// usually signals a missing struct/options object.
+// TooManyParams flags a function or method declaration with more than MaxParams parameters. A long
+// list usually means a struct or options object is missing.
 type TooManyParams struct{}
 
 // MaxParams is the threshold; lists with more than this many parameters fire.
@@ -31,7 +31,7 @@ func (TooManyParams) Meta() analyze.Meta {
 }
 
 // funcDeclRe matches a keyword-led declaration up to its parameter list's open paren, so call expressions
-// never count. It allows a Go receiver and `[...]`/`<...>` type parameters before the list.
+// never count. It allows a Go receiver and `[...]` or `<...>` type parameters before the list.
 var funcDeclRe = regexp.MustCompile(
 	`(?:\bfunc\b|\bdef\b|\bfn\b|\bfunction\b)\s*` + // go/py/rust/js keyword form
 		`(?:\([^)]*\)\s*)?` + // optional Go method receiver
@@ -39,8 +39,8 @@ var funcDeclRe = regexp.MustCompile(
 		`\s*(?:\[[^\]]*\]|<[^>]*>)?` + // optional generic/type params ([..] or <..>)
 		`\s*\(`)
 
-// methodDeclRe matches a Java/TS-style method declaration: a modifier keyword, then `name(`; requiring the
-// modifier keeps arbitrary `foo(` call sites out.
+// methodDeclRe matches a Java or TS method declaration as a modifier keyword followed by `name(`.
+// Requiring the modifier keeps arbitrary `foo(` call sites out.
 var methodDeclRe = regexp.MustCompile(
 	`(?:\bpublic\b|\bprivate\b|\bprotected\b|\bstatic\b|\bfinal\b|\babstract\b)` +
 		`[^;={}()]*\b[A-Za-z_][A-Za-z0-9_]*\s*\(`)
@@ -63,7 +63,8 @@ func (TooManyParams) MatchFile(_ context.Context, t analyze.FileTarget) []analyz
 		// Both regexes end at the parameter list's opening paren.
 		params, ok := paramList(text[loc[1]-1:])
 		if !ok {
-			// Not closed on this line: skip rather than guess across continuations (keeps FP low).
+			// The list does not close on this line. Skip it rather than guess across continuations,
+			// which keeps false positives low.
 			continue
 		}
 		n := countParams(params)
@@ -99,8 +100,8 @@ func hasLeadingSelf(params string) bool {
 	return first == "self" || first == "cls"
 }
 
-// paramList returns the text between the '(' that s starts with and its matching ')'; ok is false when the
-// list is not balanced on this line (e.g. a multi-line signature).
+// paramList returns the text between the '(' that s starts with and its matching ')'. ok is false when
+// the list is not balanced on this line, as with a multi-line signature.
 func paramList(s string) (string, bool) {
 	if len(s) == 0 || s[0] != '(' {
 		return "", false
@@ -120,8 +121,8 @@ func paramList(s string) (string, bool) {
 	return "", false
 }
 
-// countParams counts top-level comma-separated parameters, skipping commas nested in brackets or generics;
-// an empty or blank list counts as zero.
+// countParams counts top-level comma-separated parameters, skipping commas nested in brackets or
+// generics. An empty or blank list counts as zero.
 func countParams(s string) int {
 	if strings.TrimSpace(s) == "" {
 		return 0

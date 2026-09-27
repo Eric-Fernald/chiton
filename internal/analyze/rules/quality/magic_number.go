@@ -9,8 +9,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// MagicNumber flags 3+-digit integer literals on lines that bind no name (no const/var/let/`= `...);
-// a conservative heuristic.
+// MagicNumber flags integer literals of three or more digits on lines that bind no name (no const, var,
+// let, `= `, or similar). The heuristic is conservative.
 type MagicNumber struct{}
 
 func (MagicNumber) Meta() analyze.Meta {

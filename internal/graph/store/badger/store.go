@@ -1,5 +1,5 @@
 // Package badger implements GraphStore using BadgerDB (pure Go, no CGo).
-// It is chiton's working backend; the kuzu package is only a stub.
+// It is chiton's working backend. The kuzu package is only a stub.
 package badger
 
 import (
@@ -56,7 +56,7 @@ func (s *Store) ReadOnly() bool { return s.readOnly }
 // Options configures store opens. The zero value is a plaintext store with
 // default Badger settings — historic callers can keep using Open/OpenReadOnly.
 type Options struct {
-	// EncryptionKey, when non-nil, enables Badger's at-rest encryption; it must be 16, 24, or 32 bytes.
+	// EncryptionKey, when non-nil, enables Badger's at-rest encryption. It must be 16, 24, or 32 bytes.
 	EncryptionKey []byte
 }
 
@@ -90,8 +90,8 @@ func OpenReadOnlyWith(path string, opts Options) (*Store, error) {
 	return &Store{db: db, readOnly: true}, nil
 }
 
-// applyEncryption enables Badger encryption when key is non-empty; Badger then
-// requires a non-zero IndexCacheSize.
+// applyEncryption enables Badger encryption when key is non-empty, plus the non-zero IndexCacheSize that
+// Badger then requires.
 func applyEncryption(bopts badgerdb.Options, key []byte) badgerdb.Options {
 	if len(key) == 0 {
 		return bopts
@@ -122,8 +122,8 @@ func dstKey(e *model.Edge) []byte {
 // errStopScan, returned from a scan callback, ends the scan early without error.
 var errStopScan = errors.New("stop scan")
 
-// prefixIterator iterates the keys under pfx without prefetching values: they are small and inline in the
-// LSM tree, so prefetching would only add overhead.
+// prefixIterator iterates the keys under pfx without prefetching values. Values are small and inline in
+// the LSM tree, so prefetching would only add overhead.
 func prefixIterator(txn *badgerdb.Txn, pfx string) *badgerdb.Iterator {
 	opts := badgerdb.DefaultIteratorOptions
 	opts.Prefix = []byte(pfx)
@@ -131,7 +131,7 @@ func prefixIterator(txn *badgerdb.Txn, pfx string) *badgerdb.Iterator {
 	return txn.NewIterator(opts)
 }
 
-// scan calls fn, in key order, with the key suffix and value of every entry under pfx; both are valid only
+// scan calls fn, in key order, with the key suffix and value of every entry under pfx. Both are valid only
 // during the call.
 func scan(txn *badgerdb.Txn, pfx string, fn func(key, val []byte) error) error {
 	it := prefixIterator(txn, pfx)
@@ -197,8 +197,8 @@ func appendLoaded[T any](dst []T, txn *badgerdb.Txn, pfx string, ids []string) (
 	return dst, nil
 }
 
-// adjacentEdgeKeys returns, deduplicated by edge ID, the edges touching nodeID as parsed from its adjacency
-// keys (ID, Src, Dst and Kind only): outgoing first, each direction in key order. A nil kinds keeps every kind.
+// adjacentEdgeKeys parses nodeID's adjacency keys into its edges (only ID, Src, Dst, and Kind), deduplicated
+// by edge ID, with outgoing edges first and each direction in key order. A nil kinds keeps every kind.
 func adjacentEdgeKeys(txn *badgerdb.Txn, nodeID string, kinds map[model.EdgeKind]bool) ([]model.Edge, error) {
 	var edges []model.Edge
 	seen := map[string]bool{}
@@ -207,8 +207,8 @@ func adjacentEdgeKeys(txn *badgerdb.Txn, nodeID string, kinds map[model.EdgeKind
 		if out {
 			pfx = pfxSrc + nodeID + ":"
 		}
-		// The key suffix is {kind}:{other endpoint}. Split at the last ':': node IDs contain none (the prefix
-		// scan relies on that), but an imported edge kind may.
+		// The key suffix is {kind}:{other endpoint}. Split at the last ':', because node IDs contain none (the
+		// prefix scan relies on that) but an imported edge kind may.
 		if err := scan(txn, pfx, func(k, v []byte) error {
 			i := bytes.LastIndexByte(k, ':')
 			if i < 0 {
@@ -505,7 +505,8 @@ func newNodeProbe(f store.NodeFilter) nodeProbe {
 		vals = append(vals, v)
 	}
 	for _, v := range vals {
-		// Empty SourceURI doesn't constrain, and an empty attr value also matches an absent attr: no probe.
+		// An empty value gets no probe. An empty SourceURI doesn't constrain, and an empty attr value also
+		// matches an absent attr.
 		if v == "" {
 			continue
 		}
@@ -624,7 +625,7 @@ func (s *Store) SearchNodes(_ context.Context, query string, limit int) ([]model
 	var results []model.Node
 	err := s.db.View(func(txn *badgerdb.Txn) error {
 		return scan(txn, pfxNode, func(_, v []byte) error {
-			// Decode just the label first; most nodes miss, so the full decode is skipped for them.
+			// Decode only the label first. Most nodes miss, so they skip the full decode.
 			var probe struct {
 				Label string `json:"label"`
 			}
@@ -744,7 +745,7 @@ func (s *Store) Snapshot(_ context.Context, w io.Writer) error {
 	var out snap
 
 	if err := s.db.View(func(txn *badgerdb.Txn) error {
-		// Embeddings are attached to their nodes, keeping the export self-contained and portable.
+		// Attach embeddings to their nodes so the export is self-contained and portable.
 		embByID := map[string][]float32{}
 		if err := scan(txn, pfxEmb, func(k, v []byte) error {
 			embByID[string(k)] = decodeVec(v)

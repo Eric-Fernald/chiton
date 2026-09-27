@@ -10,8 +10,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/bench"
 )
 
-// benchCmd compares the token cost of answering dependency questions naively, via grep+read, and via
-// chiton. The graph is built in memory (no store or server), so it runs anywhere reproducibly.
+// benchCmd compares the token cost of answering dependency questions naively, with grep and read, and with
+// chiton. It builds the graph in memory with no store or server, so it runs the same anywhere.
 func benchCmd() *cobra.Command {
 	var name string
 	var queries, synth int

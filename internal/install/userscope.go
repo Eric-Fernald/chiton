@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 )
 
-// homeDir resolves the current user's home directory; it is a var so tests can redirect user-scope
+// homeDir resolves the current user's home directory. It is a var so tests can redirect user-scope
 // writes to a temp directory.
 var homeDir = os.UserHomeDir
 
@@ -18,8 +18,8 @@ func userPath(parts ...string) (string, error) {
 	return filepath.Join(append([]string{home}, parts...)...), nil
 }
 
-// copilotConfigDir returns Copilot CLI's config directory: $COPILOT_HOME, which replaces the whole
-// ~/.copilot path when set, else ~/.copilot.
+// copilotConfigDir returns Copilot CLI's config directory, ~/.copilot. A set $COPILOT_HOME replaces that
+// whole path.
 func copilotConfigDir() (string, error) {
 	if h := os.Getenv("COPILOT_HOME"); h != "" {
 		return h, nil

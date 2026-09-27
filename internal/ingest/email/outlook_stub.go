@@ -1,7 +1,7 @@
 //go:build !msgraph
 
-// The msgraph-free counterpart of outlook.go: the Graph SDK adds ~117 MB to the binary, so `chiton email
-// outlook` needs `-tags msgraph`; local and Gmail ingest are always available.
+// This is the msgraph-free counterpart of outlook.go. The Graph SDK adds ~117 MB to the binary, so
+// `chiton email outlook` needs `-tags msgraph`. Local and Gmail ingest are always available.
 
 package email
 
@@ -20,7 +20,7 @@ type OutlookSource struct{}
 // NewOutlookSource always fails in a build without the msgraph tag.
 func NewOutlookSource(OutlookConfig) (*OutlookSource, error) { return nil, errNoGraph }
 
-// NewOutlookSourceFromEnv always fails in a build without the msgraph tag; cmd/chiton checks this before
+// NewOutlookSourceFromEnv always fails in a build without the msgraph tag, and cmd/chiton checks this before
 // opening the store for writing.
 func NewOutlookSourceFromEnv() (*OutlookSource, error) { return nil, errNoGraph }
 

@@ -17,8 +17,8 @@ func (CopilotCLI) Detect(dir string) bool {
 	return anyExists(dir, ".copilot")
 }
 
-// copilotEntry is Copilot CLI's documented local-server shape; bare {command,args} also works, but
-// type/env/tools match the official example and are cross-client safe.
+// copilotEntry is Copilot CLI's documented local-server shape. A bare {command,args} also works, but the
+// type, env, and tools fields match the official example and are safe across clients.
 type copilotEntry struct {
 	Type    string            `json:"type"`
 	Command string            `json:"command"`

@@ -15,15 +15,15 @@ import (
 )
 
 // serveUnix serves the MCP SSE transport over a Unix domain socket, a low-latency shared-daemon
-// transport where filesystem permissions gate access. A stale socket is removed before binding.
+// transport where filesystem permissions control access. It removes a stale socket before binding.
 func serveUnix(cmd *cobra.Command, sse *mcpsdk.SSEServer, path string) error {
-	// AF_UNIX and socket-file cleanup are unreliable on Windows; fail fast instead of an opaque listen error.
+	// AF_UNIX and socket-file cleanup are unreliable on Windows, so fail fast with a clear error.
 	if runtime.GOOS == "windows" {
 		return fmt.Errorf("the --unix transport is supported on Linux/macOS; on Windows use --http or --stdio")
 	}
 
-	// Remove a stale socket only if it IS a socket: --unix is user-supplied and a typo must not delete
-	// a real file. Lstat so a symlink is inspected, not its target.
+	// Remove a stale socket only if it IS a socket, because --unix is user-supplied and a typo must not
+	// delete a real file. Lstat inspects a symlink itself, not its target.
 	if info, err := os.Lstat(path); err == nil {
 		if info.Mode()&os.ModeSocket == 0 {
 			return fmt.Errorf("--unix path %s already exists and is not a socket; refusing to overwrite it", path)
@@ -43,7 +43,7 @@ func serveUnix(cmd *cobra.Command, sse *mcpsdk.SSEServer, path string) error {
 	srv := &http.Server{Handler: sse}
 	fmt.Fprintf(cmd.OutOrStdout(), "serve: listening on unix:%s (SSE)\n", path)
 	return serveUntilDone(cmd.Context(), func() error { return srv.Serve(ln) }, func(ctx context.Context) error {
-		sse.CloseSessions() // as SSEServer.Shutdown does, so open SSE streams don't stall the drain
+		sse.CloseSessions() // as SSEServer.Shutdown does, so open SSE streams don't block shutdown
 		return srv.Shutdown(ctx)
 	})
 }
@@ -58,7 +58,7 @@ func baseContext(ctx context.Context) func(net.Listener) context.Context {
 var shutdownGrace = 5 * time.Second
 
 // serveUntilDone runs serve until it fails or ctx is cancelled (Ctrl-C). On cancel it returns only once every
-// in-flight handler has finished, so the caller's deferred store Close never runs under one.
+// in-flight handler has finished, so the caller's deferred store Close never overlaps a handler.
 func serveUntilDone(ctx context.Context, serve func() error, shutdown func(context.Context) error) error {
 	errCh := make(chan error, 1)
 	go func() { errCh <- serve() }()
@@ -67,7 +67,7 @@ func serveUntilDone(ctx context.Context, serve func() error, shutdown func(conte
 		graceCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 		defer cancel()
 		if shutdown(graceCtx) != nil {
-			// Past the grace period: keep waiting, since returning would close the store under the handlers.
+			// Past the grace period, keep waiting, since returning would close the store while handlers run.
 			_ = shutdown(context.Background())
 		}
 		return nil

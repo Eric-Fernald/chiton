@@ -1,5 +1,5 @@
-// Package metrics computes undirected degree and [0,1]-normalized Brandes betweenness for chiton nodes;
-// above samplingThreshold nodes, betweenness is estimated from a seeded sample of pivot sources.
+// Package metrics computes undirected degree and [0,1]-normalized Brandes betweenness for chiton nodes.
+// Above samplingThreshold nodes, it estimates betweenness from a seeded sample of pivot sources.
 package metrics
 
 import (
@@ -35,7 +35,7 @@ func Compute(nodes []model.Node, edges []model.Edge) map[string]NodeMetrics {
 
 	g := buildIntGraph(len(nodes), edges, idToIdx)
 
-	// Exact: every node is a source. Sampled: k seeded pivots, each contribution scaled by n/k.
+	// Exact mode makes every node a source. Sampling uses k seeded pivots, scaling each contribution by n/k.
 	var raw []float64
 	if g.n <= samplingThreshold {
 		sources := make([]int, g.n)
@@ -92,7 +92,7 @@ func buildIntGraph(n int, edges []model.Edge, idToIdx map[string]int) *intGraph 
 // ── Brandes algorithm ─────────────────────────────────────────────────────────
 
 // betweenness runs Brandes from each source, scaling every contribution by scale, and normalizes the sums.
-// O(len(sources)·m).
+// It runs in O(len(sources)·m).
 func betweenness(g *intGraph, sources []int, scale float64) []float64 {
 	bet := make([]float64, g.n)
 	b := newBrandes(g)
@@ -103,14 +103,14 @@ func betweenness(g *intGraph, sources []int, scale float64) []float64 {
 	return bet
 }
 
-// brandes holds scratch buffers reused across sources; only entries a BFS reached are reset afterwards,
+// brandes holds scratch buffers reused across sources. Only entries a BFS reached are reset afterwards,
 // so each source costs O(reached nodes + edges) rather than O(n).
 type brandes struct {
 	g     *intGraph
 	sigma []float64
 	dist  []int
 	delta []float64
-	order []int // BFS visit order: the queue, and reversed, the stack
+	order []int // BFS visit order, used as the queue and, reversed, as the stack
 }
 
 func newBrandes(g *intGraph) *brandes {
@@ -161,7 +161,7 @@ func (b *brandes) accumulate(s int, bet []float64, scale float64) {
 	b.order = order
 }
 
-// normalize divides raw sums by (n-1)(n-2): twice the undirected pair count, because Brandes
+// normalize divides raw sums by (n-1)(n-2), twice the undirected pair count, because Brandes
 // accumulates each shortest path once from each endpoint.
 func normalize(bet []float64, n int) {
 	if n <= 2 {
@@ -170,7 +170,7 @@ func normalize(bet []float64, n int) {
 	norm := float64((n - 1) * (n - 2))
 	for i := range bet {
 		bet[i] /= norm
-		// Sampling extrapolates by n/k, which can overshoot 1 per node; clamp to the documented [0,1] range.
+		// Sampling extrapolates by n/k, which can push a node past 1, so clamp to the documented [0,1] range.
 		if bet[i] > 1 {
 			bet[i] = 1
 		}

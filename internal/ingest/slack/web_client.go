@@ -30,8 +30,8 @@ const pageLimit = 200
 // permanently degrade a name in the long-lived Events receiver.
 const userNegativeTTL = time.Minute
 
-// WebClient is a net/http Slack Web API client implementing ConversationSource. It is safe for concurrent use:
-// the user-name cache is mutex-guarded because the Events receiver shares one client across handlers.
+// WebClient is a net/http Slack Web API client implementing ConversationSource. It is safe for concurrent
+// use because a mutex guards its user-name cache, which the Events receiver's handlers all share.
 type WebClient struct {
 	token  string
 	client *http.Client
@@ -165,8 +165,8 @@ func (c *WebClient) fetchRaw(ctx context.Context, channelID, threadTS string) ([
 	return all, nil
 }
 
-// resolveUser returns an author's display name, cached; on failure it returns the user id, cached negatively
-// for userNegativeTTL.
+// resolveUser returns and caches an author's display name. On failure it returns the user id and caches that
+// failure for userNegativeTTL.
 func (c *WebClient) resolveUser(ctx context.Context, userID string) string {
 	c.mu.Lock()
 	ce, hit := c.userCache[userID]
@@ -217,7 +217,7 @@ func (c *WebClient) resolveChannelName(ctx context.Context, channelID string) (s
 }
 
 // apiGet performs an authenticated GET and decodes the response. Slack reports logical failures as HTTP 200
-// with "ok":false, so the envelope is checked too.
+// with "ok":false, so apiGet checks the envelope too.
 func (c *WebClient) apiGet(ctx context.Context, method string, params url.Values, out slackResult) error {
 	reqURL := c.base + "/" + method
 	if enc := params.Encode(); enc != "" {

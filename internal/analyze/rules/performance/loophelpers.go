@@ -17,7 +17,7 @@ func (b *braceLoopScanner) popExited() {
 	}
 }
 
-// feed advances by one line (isLoopLine: it holds a for/while header) and reports whether the
+// feed advances one line (isLoopLine says it holds a for or while header) and reports whether the
 // line, after its own brace accounting, is inside a loop body.
 func (b *braceLoopScanner) feed(stripped string, isLoopLine bool) (insideLoop bool) {
 	open := strings.Count(stripped, "{")

@@ -1,4 +1,4 @@
-// Package url ingests web sources (PDF, HTML, text/markdown, YouTube transcripts via yt-dlp) as a `url` node
+// Package url ingests web sources (PDF, HTML, text, Markdown, YouTube transcripts via yt-dlp) as a `url` node
 // with `doc_section` children, which the existing pending_extractions flow extracts concepts from.
 package url
 
@@ -34,8 +34,8 @@ type Ingester struct {
 func New(s store.GraphStore) *Ingester {
 	client := &http.Client{
 		Timeout: 30 * time.Second,
-		// Block redirects to private/loopback/link-local hosts: add_url is reachable over MCP, so a hostile
-		// page could otherwise redirect into the internal network (e.g. cloud metadata at 169.254.169.254).
+		// Block redirects to private, loopback, and link-local hosts. add_url is reachable over MCP, so a
+		// hostile page could otherwise redirect into the internal network (e.g. cloud metadata at 169.254.169.254).
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return fmt.Errorf("stopped after 10 redirects")
@@ -71,8 +71,8 @@ type Report struct {
 	NodesUpserted int    `json:"nodes_upserted"`
 }
 
-// Add fetches a URL (or local file) and upserts a url node plus doc_section children. It is idempotent:
-// all share the URL as source_uri, so a re-add deletes the prior version first.
+// Add fetches a URL (or local file) and upserts a url node and its doc_section children. It is idempotent
+// because they all share the URL as source_uri, so a re-add deletes the prior version first.
 func (ing *Ingester) Add(ctx context.Context, rawURL string, opts AddOptions) (Report, error) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
@@ -202,7 +202,7 @@ func (ing *Ingester) Add(ctx context.Context, rawURL string, opts AddOptions) (R
 	}, nil
 }
 
-// chunkText splits text into chunks of at most size bytes at paragraph boundaries; once maxChunks is
+// chunkText splits text into chunks of at most size bytes at paragraph boundaries. Once maxChunks is
 // reached, the final chunk absorbs the remainder.
 func chunkText(text string, size, maxChunks int) []string {
 	if size <= 0 {

@@ -8,8 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/analyze"
 )
 
-// HighComplexity flags a function whose approximate cyclomatic complexity (1 + branch keywords + `&&`/`||`)
-// exceeds MaxComplexity.
+// HighComplexity flags a function whose approximate cyclomatic complexity (1, plus one per branch
+// keyword, `&&`, and `||`) exceeds MaxComplexity.
 type HighComplexity struct{}
 
 // MaxComplexity is the threshold; functions above it fire.
@@ -56,8 +56,8 @@ func (HighComplexity) MatchFile(_ context.Context, t analyze.FileTarget) []analy
 	return out
 }
 
-// complexity estimates cyclomatic complexity from pre-masked body lines: 1 plus each branch keyword and
-// short-circuit operator.
+// complexity estimates cyclomatic complexity from pre-masked body lines as 1 plus the number of branch
+// keywords and short-circuit operators.
 func complexity(lines [][]byte) int {
 	c := 1
 	for _, ln := range lines {

@@ -11,8 +11,8 @@ import (
 // LongLineLimit is the maximum line length (in runes) before a finding fires.
 const LongLineLimit = 120
 
-// LongLine flags source lines longer than LongLineLimit characters; the generous limit means only
-// genuinely over-wide lines trip it.
+// LongLine flags source lines longer than LongLineLimit characters. The limit is generous, so ordinary
+// long lines pass.
 type LongLine struct{}
 
 func (LongLine) Meta() analyze.Meta {

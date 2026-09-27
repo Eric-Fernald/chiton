@@ -8,7 +8,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// JWTNoneAlg flags an alg/algorithm(s) key set to the literal "none", which produces unsigned
+// JWTNoneAlg flags an alg, algorithm, or algorithms key set to the literal "none", which produces unsigned
 // tokens that anyone can forge.
 type JWTNoneAlg struct{}
 

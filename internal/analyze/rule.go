@@ -60,7 +60,7 @@ const (
 )
 
 // Scope declares whether a rule runs once per matching file or once over the whole graph. Dispatch
-// actually uses the implemented interface (FileRule/GraphRule), so the two must agree.
+// uses the implemented interface (FileRule or GraphRule), so the two must agree.
 type Scope int
 
 const (
@@ -89,7 +89,7 @@ type FileTarget struct {
 	FileNode model.Node   // file node already in the graph
 	Nodes    []model.Node // symbols extracted from this file (excluding the file node)
 	Edges    []model.Edge // edges whose Src or Dst is in this file
-	memo     *fileMemo    // per-file cache behind Cached; set by loadFileTarget
+	memo     *fileMemo    // per-file cache behind Cached, set by loadFileTarget
 }
 
 // GraphTarget is the input to a GraphScope rule.
@@ -98,8 +98,8 @@ type GraphTarget struct {
 	Edges []model.Edge
 }
 
-// Rule is the unified rule interface; whether a rule implements FileRule, GraphRule, or LLMRule
-// decides how it is dispatched.
+// Rule is the unified rule interface. Whether a rule implements FileRule, GraphRule, or LLMRule
+// decides how the analyzer dispatches it.
 type Rule interface {
 	Meta() Meta
 }
@@ -116,11 +116,11 @@ type GraphRule interface {
 	MatchGraph(ctx context.Context, t GraphTarget) []Finding
 }
 
-// LLMRule is evaluated by the host assistant via subagent dispatch, never by chiton itself. Its
-// Meta sets Provenance=ProvenanceLLM and Scope=FileScope; it must not implement FileRule/GraphRule.
+// LLMRule is a rule the host assistant evaluates through subagent dispatch, never chiton itself. Its
+// Meta sets Provenance=ProvenanceLLM and Scope=FileScope, and it must not implement FileRule or GraphRule.
 type LLMRule interface {
 	Rule
-	// Prompt says what to look for; the code arrives separately as task input, so it must never
+	// Prompt says what to look for. The code arrives separately as task input, so the prompt must never
 	// reference a specific file or embed input.
 	Prompt() string
 }

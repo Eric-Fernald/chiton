@@ -8,7 +8,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/analyze"
 )
 
-// TooManyReturns flags a function with more than MaxReturns return statements: many exit points make it
+// TooManyReturns flags a function with more than MaxReturns return statements. Many exit points make it
 // harder to follow and to reason about resource cleanup.
 type TooManyReturns struct{}
 
@@ -28,7 +28,7 @@ func (TooManyReturns) Meta() analyze.Meta {
 	}
 }
 
-// returnStmtRe matches `return` as a whole word; masking keeps comments and strings from counting.
+// returnStmtRe matches `return` as a whole word. Masking keeps comments and strings from counting.
 var returnStmtRe = regexp.MustCompile(`\breturn\b`)
 
 func (TooManyReturns) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {

@@ -15,7 +15,7 @@ import (
 var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 
 // MarkdownExtractor emits a file node plus one doc_section per ATX heading, nested via CONTAINS by heading
-// level; each section's body is kept in attrs["text"] for embedding and subagent concept extraction.
+// level. It keeps each section's body in attrs["text"] for embedding and subagent concept extraction.
 type MarkdownExtractor struct{}
 
 func (m *MarkdownExtractor) ExtractFile(ctx context.Context, path string) ([]model.Node, []model.Edge, error) {

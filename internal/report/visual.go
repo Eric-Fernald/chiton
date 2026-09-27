@@ -15,7 +15,7 @@ import (
 
 // VisualOptions controls the graph visual exports (interactive HTML, Mermaid).
 type VisualOptions struct {
-	// MaxNodes caps rendered nodes (0 = no cap), keeping the highest-degree then highest-betweenness
+	// MaxNodes caps rendered nodes (0 means no cap), keeping the highest-degree then highest-betweenness
 	// nodes and dropping the rest with their dangling edges.
 	MaxNodes int
 	// Title is shown in the HTML <title>/heading and as a Mermaid comment.
@@ -23,14 +23,14 @@ type VisualOptions struct {
 }
 
 // DefaultVisual is the standard configuration for visual exports. vis-network stays interactive
-// into the low thousands of nodes; Mermaid gets its own, far lower cap (mermaidMaxNodes).
+// into the low thousands of nodes. Mermaid gets its own, far lower cap (mermaidMaxNodes).
 var DefaultVisual = VisualOptions{MaxNodes: 600, Title: "chiton graph"}
 
-// mermaidMaxNodes is a hard ceiling for Mermaid output regardless of VisualOptions.MaxNodes:
+// mermaidMaxNodes is a hard ceiling for Mermaid output regardless of VisualOptions.MaxNodes, because
 // Mermaid's layout degrades badly past a few hundred nodes.
 const mermaidMaxNodes = 160
 
-// viewNode is the render-ready projection of a graph node, with community/centrality overlaid
+// viewNode is the render-ready projection of a graph node, with community and centrality overlaid
 // from a cluster pass when one is available.
 type viewNode struct {
 	ID          string
@@ -42,8 +42,8 @@ type viewNode struct {
 	Degree      int
 }
 
-// buildView projects nodes+edges into capped view nodes plus the edges whose endpoints both survive.
-// Degree comes from the edges (so no cluster run is needed); overlay-less nodes get community -1.
+// buildView projects nodes and edges into capped view nodes plus the edges whose endpoints both survive.
+// Degree comes from the edges, so no cluster run is needed. Nodes without overlay data get community -1.
 func buildView(nodes []model.Node, edges []model.Edge, overlay *cluster.Results, maxNodes int) ([]viewNode, []model.Edge) {
 	degree := make(map[string]int, len(nodes))
 	for _, e := range edges {
@@ -104,7 +104,7 @@ func buildView(nodes []model.Node, edges []model.Edge, overlay *cluster.Results,
 }
 
 // GenerateMermaid writes a Mermaid flowchart of the graph to w, one subgraph per community, for
-// Markdown renderers that draw it inline. Large graphs are trimmed (see mermaidMaxNodes).
+// Markdown renderers that draw it inline. It trims large graphs (see mermaidMaxNodes).
 func GenerateMermaid(w io.Writer, nodes []model.Node, edges []model.Edge, overlay *cluster.Results, opts VisualOptions) error {
 	cap := opts.MaxNodes
 	if cap == 0 || cap > mermaidMaxNodes {
@@ -156,8 +156,8 @@ func GenerateMermaid(w io.Writer, nodes []model.Node, edges []model.Edge, overla
 	return nil
 }
 
-// mermaidEscaper neutralises characters that break Mermaid's "..." labels. '#' → &#35; because Mermaid
-// reads a '#…;' run as an entity; a Replacer never re-scans its output, so &quot; is not re-encoded.
+// mermaidEscaper neutralises characters that break Mermaid's "..." labels. It maps '#' to &#35; because
+// Mermaid reads '#…;' as an entity. A Replacer never re-scans its output, so &quot; is not re-encoded.
 var mermaidEscaper = strings.NewReplacer(
 	"#", "&#35;",
 	"\"", "&quot;",
@@ -209,15 +209,15 @@ func toHTMLData(views []viewNode, edges []model.Edge) ([]htmlNode, []htmlEdge) {
 	return hn, he
 }
 
-// GenerateHTML writes a self-contained interactive graph page to w: data inline, only vis-network
-// from a CDN. Nodes are coloured by community and sized by degree.
+// GenerateHTML writes a self-contained interactive graph page to w. The data is inline and only vis-network
+// loads from a CDN. Nodes are coloured by community and sized by degree.
 func GenerateHTML(w io.Writer, nodes []model.Node, edges []model.Edge, overlay *cluster.Results, opts VisualOptions) error {
 	hn, he := toHTMLData(buildView(nodes, edges, overlay, opts.MaxNodes))
 	return writePage(w, htmlTemplate, cmp.Or(opts.Title, "chiton graph"), hn, he)
 }
 
 // writePage fills tmpl's graph placeholders (__TITLE__, __NODE_COUNT__, __EDGE_COUNT__, __NODES__, __EDGES__)
-// plus the extra old/new pairs, and writes the page to w.
+// plus the extra (old, new) replacement pairs, and writes the page to w.
 func writePage(w io.Writer, tmpl, title string, hn []htmlNode, he []htmlEdge, extra ...string) error {
 	nodesJSON, err := marshalForScript(hn)
 	if err != nil {
@@ -240,7 +240,7 @@ func writePage(w io.Writer, tmpl, title string, hn []htmlNode, he []htmlEdge, ex
 }
 
 // marshalForScript JSON-encodes v for a <script> block. json.Marshal already escapes '<' '>' '&' as
-// \u00XX, so "</script>" can't break out; the "</" → "<\/" rewrite is belt-and-braces.
+// \u00XX, so "</script>" can't break out. Rewriting "</" to "<\/" adds a second safeguard.
 func marshalForScript(v any) (string, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -254,8 +254,8 @@ var htmlTextEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;"
 
 func htmlTextEscape(s string) string { return htmlTextEscaper.Replace(s) }
 
-// htmlTemplate is the self-contained page GenerateHTML fills in (__NODES__ etc.); the
-// vis-network bundle is its only external resource.
+// htmlTemplate is the self-contained page GenerateHTML fills in through placeholders such as __NODES__.
+// The vis-network bundle is its only external resource.
 const htmlTemplate = `<!DOCTYPE html>
 <html lang="en">
 <head>

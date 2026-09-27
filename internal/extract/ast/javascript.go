@@ -45,10 +45,10 @@ func (j *JavaScriptExtractor) ExtractSource(_ context.Context, path string, src 
 
 	g := newFileGraph(newFileNode(path, src, map[string]any{"language": lang}))
 	lines := splitLines(src)
-	var scopes braceScopes // kinds: "class" (named for the class) or "func"
+	var scopes braceScopes // scope kinds are "class" (named for the class) and "func"
 	var funcs []funcRecord
 
-	// Pass 1: collect symbols. A line wholly inside a /* */ block contributes none.
+	// Pass 1 collects symbols. A line wholly inside a /* */ block contributes none.
 	scopes.scan(lines, nil, func(i int, line string, pre, _ int) {
 		if t := scopes.top(); t != nil && t.kind == "class" && pre > t.pushDepth {
 			if m := reJSMethod.FindStringSubmatch(line); m != nil && !isJSKeyword(m[1]) {

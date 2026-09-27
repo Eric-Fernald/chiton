@@ -7,8 +7,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// NestedTernary flags a nested ternary expression (`a ? b ? c : d : e`) on one line of JS/TS source;
-// nested ternaries are notoriously hard to read. Sibling ternaries on the same line do not fire.
+// NestedTernary flags a nested ternary expression (`a ? b ? c : d : e`) on one line of JS/TS source,
+// since nested ternaries are hard to read. Sibling ternaries on the same line do not fire.
 type NestedTernary struct{}
 
 func (NestedTernary) Meta() analyze.Meta {
@@ -78,7 +78,7 @@ func hasNestedTernary(raw string) bool {
 			// A statement boundary ends any ternary; siblings start fresh.
 			depth = 0
 		case ',':
-			// Only a top-level comma separates sibling expressions; one inside brackets keeps the depth.
+			// Only a top-level comma separates sibling expressions. A comma inside brackets keeps the depth.
 			if bracket == 0 {
 				depth = 0
 			}

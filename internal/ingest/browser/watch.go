@@ -10,12 +10,12 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/jobs"
 )
 
-// defaultWatchDebounce is deliberately wide: Chromium writes History continuously while browsing, so a
-// burst of writes should coalesce into one re-ingest.
+// defaultWatchDebounce is wide because Chromium writes History continuously while browsing, so a
+// burst of writes coalesces into one re-ingest.
 const defaultWatchDebounce = 5 * time.Second
 
 // Watch re-ingests each History database when its file changes until ctx is cancelled, then drains.
-// Events are debounced per database, and a database is never ingested concurrently with itself.
+// It debounces events per database and never ingests a database concurrently with itself.
 func (ing *Ingester) Watch(ctx context.Context, dbs []DetectedDB, opts Options, debounce time.Duration, logf func(string, ...any)) error {
 	if len(dbs) == 0 {
 		return nil
@@ -52,8 +52,8 @@ func (ing *Ingester) Watch(ctx context.Context, dbs []DetectedDB, opts Options, 
 	// the final debounced re-ingest.
 	queue.Start(context.Background())
 
-	// One root-only fswatch per profile dir: its subtree is huge (caches, blobs) and only the History
-	// file and its sidecars, sitting directly in it, matter.
+	// Watch each profile dir root-only. Its subtree is huge (caches, blobs), and only the History file and its
+	// sidecars, which sit directly in it, matter.
 	parents := uniqueParents(byPath)
 	var watchers []*fswatch.Watcher
 	for parent := range parents {

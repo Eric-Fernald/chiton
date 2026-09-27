@@ -154,7 +154,7 @@ func TestIncrementalNewNode(t *testing.T) {
 // TestFullMatchesSeparatePasses pins Full to Run plus metrics.Compute, the passes `chiton cluster` combines.
 func TestFullMatchesSeparatePasses(t *testing.T) {
 	nodes, edges := twoCliques()
-	nodes = append(nodes, makeNode("A", "A2")) // duplicate ID: the later entry wins
+	nodes = append(nodes, makeNode("A", "A2")) // a duplicate ID, so the later entry wins
 	edges = append(edges, makeEdge("A", "A"), makeEdge("B", "A"), makeEdge("A", "gone"))
 
 	res := Full(nodes, edges, 1.0, rand.New(rand.NewSource(3)))

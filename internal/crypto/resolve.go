@@ -16,7 +16,7 @@ func ResolveKeyfilePath(chitonDir string) string {
 }
 
 // ResolveKeyForGraph finds a keyfile in graphPath's directory, a .chiton beside that directory, or
-// ./.chiton, then derives the key via GetPassphrase. None found → (nil, nil, nil): open in plaintext.
+// ./.chiton, then derives the key via GetPassphrase. If none exists it returns (nil, nil, nil) for plaintext.
 func ResolveKeyForGraph(graphPath string) ([]byte, *KeyFile, error) {
 	candidates := []string{
 		ResolveKeyfilePath(filepath.Dir(graphPath)),

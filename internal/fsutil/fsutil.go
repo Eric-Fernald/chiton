@@ -11,8 +11,8 @@ import (
 	"time"
 )
 
-// WriteFileAtomic is os.WriteFile via a unique temp file, fsynced then renamed over path, so a crash or concurrent
-// writer never leaves path half-written; the file gets perm minus the umask. path's directory must exist.
+// WriteFileAtomic is os.WriteFile via a unique temp file, fsynced then renamed over path, so no crash or
+// concurrent writer leaves path half-written. The file gets perm minus the umask. path's directory must exist.
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	tmp, err := createTemp(filepath.Dir(path), perm)
 	if err != nil {

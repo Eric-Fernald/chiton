@@ -1,5 +1,5 @@
 // Package portable reads and merges the JSON snapshots GraphStore.Snapshot writes. Node IDs hash
-// (source_uri, label), so re-imports are idempotent and merging two repos' graphs dedups shared nodes.
+// (source_uri, label), so re-imports are idempotent and merging two repos' graphs deduplicates shared nodes.
 package portable
 
 import (

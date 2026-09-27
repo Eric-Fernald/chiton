@@ -27,7 +27,7 @@ func diffFindingsTool() mcplib.Tool {
 }
 
 // resolveBaselineRef resolves a git ref (HEAD, branch, short SHA) to the full SHA LoadBaseline keys
-// on; "" and "latest" pass through, and the literal ref is kept when git can't resolve it.
+// on. It returns "" and "latest" unchanged, and returns ref itself when git can't resolve it.
 func resolveBaselineRef(ref string) string {
 	if ref == "" || ref == "latest" {
 		return ref

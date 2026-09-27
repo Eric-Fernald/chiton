@@ -204,8 +204,8 @@ func TestWatchRejectsNonAccepted(t *testing.T) {
 	}
 }
 
-// TestDirRemoveWhenWatchAlreadyDropped reproduces the Linux ordering on every platform: fsnotify has already
-// forgotten a deleted dir when its Remove event arrives, and OnDirRemove must still fire.
+// TestDirRemoveWhenWatchAlreadyDropped reproduces, on every platform, the Linux ordering in which fsnotify
+// has forgotten a deleted dir when its Remove event arrives, and checks that OnDirRemove still fires.
 func TestDirRemoveWhenWatchAlreadyDropped(t *testing.T) {
 	root := t.TempDir()
 	sub := filepath.Join(root, "pkg")

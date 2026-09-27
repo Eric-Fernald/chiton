@@ -50,7 +50,7 @@ func (h *httpFetcher) fetch(ctx context.Context, rawURL string) (*fetchResult, e
 	switch strings.ToLower(u.Scheme) {
 	case "file":
 		path, ok := model.PathFromFileURI(rawURL)
-		if !ok { // no lower-case "file://" prefix (e.g. "FILE://x"): the raw string is the path
+		if !ok { // without a lower-case "file://" prefix (e.g. "FILE://x"), the raw string is the path
 			path = filepath.FromSlash(rawURL)
 		}
 		return h.fetchFile(path)
@@ -199,7 +199,7 @@ func firstFileWithExt(dir, ext string) (string, error) {
 }
 
 // hostAllowed rejects hosts that are or resolve to loopback, private, link-local, or unspecified addresses
-// (SSRF guard). DNS rebinding can still race this check and the dial; closing that needs a custom dialer.
+// (SSRF guard). DNS rebinding can still race this check and the dial. Closing that gap needs a custom dialer.
 func hostAllowed(host string) error {
 	if host == "" {
 		return nil // file:// and other scheme-less inputs don't reach here

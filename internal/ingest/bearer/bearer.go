@@ -11,7 +11,7 @@ import (
 const maxBodyBytes = 32 << 20
 
 // Get sends an "Authorization: Bearer <token>" GET to reqURL, returning the status code and up to 32 MiB of
-// the body (a read error just truncates it). Callers judge the status themselves.
+// the body (a read error truncates it). Callers check the status themselves.
 func Get(ctx context.Context, client *http.Client, reqURL, token string) (status int, body []byte, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {

@@ -26,7 +26,7 @@ type Embedding struct {
 }
 
 // EmbeddingStore is an optional GraphStore capability that persists node embeddings outside the node JSON,
-// keeping traversals lean; callers type-assert and degrade gracefully when it is absent.
+// keeping traversals lean. Callers type-assert it and degrade gracefully when it is absent.
 type EmbeddingStore interface {
 	// UpsertEmbeddings inserts or replaces embeddings by node ID.
 	UpsertEmbeddings(ctx context.Context, embs []Embedding) error
@@ -36,7 +36,7 @@ type EmbeddingStore interface {
 }
 
 // NodeDeleter is an optional capability for deleting nodes by ID with point lookups, O(K) instead of
-// DeleteBySourceURI's full scan; callers type-assert and fall back to DeleteBySourceURI without it.
+// DeleteBySourceURI's full scan. Callers type-assert it and fall back to DeleteBySourceURI without it.
 type NodeDeleter interface {
 	// DeleteByIDs deletes the given nodes plus their embeddings and adjacent
 	// edges. Missing IDs are skipped. Returns the number actually deleted.
@@ -49,26 +49,26 @@ type ReadOnlyAware interface {
 	ReadOnly() bool
 }
 
-// NodeScanner is an optional capability: a filtered AllNodes that skips decoding non-matching nodes.
+// NodeScanner is an optional capability that filters AllNodes and skips decoding non-matching nodes.
 // Callers use the NodesMatching helper, which falls back to AllNodes without it.
 type NodeScanner interface {
 	// NodesMatching returns the nodes f matches, in AllNodes order.
 	NodesMatching(ctx context.Context, f NodeFilter) ([]model.Node, error)
 }
 
-// NodeGetter is an optional capability loading many nodes by ID in one read; callers use the GetNodes helper.
+// NodeGetter is an optional capability loading many nodes by ID in one read. Callers use the GetNodes helper.
 type NodeGetter interface {
 	// GetNodes returns the nodes with the given IDs that exist, in ids order.
 	GetNodes(ctx context.Context, ids []string) ([]model.Node, error)
 }
 
 // EmbeddingIDLister is an optional EmbeddingStore capability listing embedded node IDs without decoding
-// vectors; callers use the EmbeddingIDs helper.
+// vectors. Callers use the EmbeddingIDs helper.
 type EmbeddingIDLister interface {
 	EmbeddingIDs(ctx context.Context) ([]string, error)
 }
 
-// GraphStore is the central abstraction over the graph database; packages depend on it, never on a
+// GraphStore is the central abstraction over the graph database. Packages depend on it, never on a
 // concrete backend, so the store can be swapped without touching callers.
 type GraphStore interface {
 	// UpsertNodes inserts or updates nodes by ID. Implementations must be

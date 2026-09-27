@@ -10,7 +10,7 @@ import (
 )
 
 // DeeplyNested flags lines indented deeper than MaxIndent levels (a tab or four spaces per level), once per
-// contiguous deep run; deep indentation correlates with high cognitive complexity.
+// contiguous deep run. Deep indentation correlates with high cognitive complexity.
 type DeeplyNested struct{}
 
 // MaxIndent is the threshold: 5 levels = `func / for / if / for / if / line`.

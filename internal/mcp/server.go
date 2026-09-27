@@ -22,8 +22,8 @@ import (
 	urlingest "github.com/Eric-Fernald/chiton/internal/ingest/url"
 )
 
-// Deps carries the optional services behind the semantic, analysis, and meeting tools. Every
-// field is nilable (e.g. no embeddings → no Retriever); the matching tools then degrade gracefully.
+// Deps carries the optional services behind the semantic, analysis, and meeting tools. Every field can be
+// nil (Retriever is nil without embeddings), and the matching tools then reply that they are unavailable.
 type Deps struct {
 	Retriever *retrieve.Engine
 	Extractor *subagent.Service
@@ -41,7 +41,7 @@ type Deps struct {
 }
 
 // New creates an MCPServer exposing chiton's tools over gs. overlay (nil before any cluster pass)
-// and each Deps service are optional: tools missing theirs reply with a helpful message.
+// and each Deps service are optional. A tool missing its service replies that it is unavailable.
 func New(gs store.GraphStore, overlay *cluster.Results, deps Deps) *mcpsdk.MCPServer {
 	s := mcpsdk.NewMCPServer("chiton", "0.1.0")
 	s.AddTool(getNodeTool(), getNodeHandler(gs))
@@ -170,7 +170,7 @@ func lookupNode(ctx context.Context, gs store.GraphStore, label, file string) (m
 	return node, nil
 }
 
-// parseEdgeKinds upper-cases the edge_kinds argument; nil (all kinds) when none are given.
+// parseEdgeKinds upper-cases the edge_kinds argument. It returns nil (all kinds) when none are given.
 func parseEdgeKinds(req mcplib.CallToolRequest) []model.EdgeKind {
 	return model.ParseEdgeKinds(req.GetStringSlice("edge_kinds", nil))
 }
@@ -336,7 +336,7 @@ func toLeanNode(n model.Node) leanNode {
 	}
 }
 
-// toLeanNodes projects nodes to their lean shape; always non-nil so JSON renders [] not null.
+// toLeanNodes projects nodes to their lean shape. The result is never nil, so JSON renders [], not null.
 func toLeanNodes(nodes []model.Node) []leanNode {
 	out := make([]leanNode, len(nodes))
 	for i, n := range nodes {
@@ -345,7 +345,7 @@ func toLeanNodes(nodes []model.Node) []leanNode {
 	return out
 }
 
-// toLeanEdges projects edges to their lean shape, naming endpoints by label; always non-nil.
+// toLeanEdges projects edges to their lean shape, naming endpoints by label. The result is never nil.
 func toLeanEdges(edges []model.Edge, labels map[string]string) []leanEdge {
 	out := make([]leanEdge, len(edges))
 	for i, e := range edges {
@@ -363,7 +363,7 @@ func nodeLabels(nodes []model.Node) map[string]string {
 }
 
 // filterByPrefix keeps neighbor nodes whose source_uri contains prefix and edges whose endpoints
-// both survive; the seed always survives so its edges are kept.
+// both survive. The seed always survives, so its edges are kept.
 func filterByPrefix(seedLabel string, nodes []leanNode, edges []leanEdge, prefix string) ([]leanNode, []leanEdge) {
 	if prefix == "" {
 		return nodes, edges
@@ -483,7 +483,7 @@ func graphSummaryHandler(gs store.GraphStore, overlay *cluster.Results) mcpsdk.T
 		}
 
 		scopeLower := strings.ToLower(scope)
-		var inScope map[string]bool // only built when scoped; unscoped, every node counts
+		var inScope map[string]bool // built only when scoped, since every node counts when unscoped
 		if scope != "" {
 			inScope = make(map[string]bool)
 		}
@@ -532,10 +532,10 @@ func graphSummaryHandler(gs store.GraphStore, overlay *cluster.Results) mcpsdk.T
 				}
 				candidates = append(candidates, nr)
 			}
-			// Sorted first so each community's top_nodes are its highest-betweenness members.
+			// Sort first so each community's top_nodes are its highest-betweenness members.
 			sortByBetweenness(candidates)
 
-			commIdx := make(map[int]int) // community ID → index into communities
+			commIdx := make(map[int]int) // maps a community ID to its index in communities
 			for _, nr := range candidates {
 				i, ok := commIdx[nr.CommunityID]
 				if !ok {
@@ -595,8 +595,8 @@ func graphSummaryHandler(gs store.GraphStore, overlay *cluster.Results) mcpsdk.T
 // sortByBetweenness orders cluster results with cluster.CompareByBetweenness, the shared god-node ranking.
 func sortByBetweenness(rs []cluster.NodeResult) { slices.SortFunc(rs, cluster.CompareByBetweenness) }
 
-// pendingResult renders a pending-task listing: "<tool, spaced> failed" on error, empty when there are
-// no specs, else the specs as JSON.
+// pendingResult renders a pending-task listing. It reports "<tool, spaced> failed" on error, the empty
+// message when there are no specs, and the specs as JSON otherwise.
 func pendingResult[T any](specs []T, err error, tool, empty string) (*mcplib.CallToolResult, error) {
 	if err != nil {
 		return mcplib.NewToolResultErrorFromErr(strings.ReplaceAll(tool, "_", " ")+" failed", err), nil

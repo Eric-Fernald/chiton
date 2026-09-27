@@ -8,8 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// AssignmentInCondition flags `if (x = y)` / `while (x = y)` in JS/TS/Java, where a lone `=` in the
-// condition is almost always a typo for `==` / `===`.
+// AssignmentInCondition flags `if (x = y)` and `while (x = y)` in JS/TS and Java, where a lone `=` in the
+// condition is almost always a typo for `==` or `===`.
 type AssignmentInCondition struct{}
 
 func (AssignmentInCondition) Meta() analyze.Meta {
@@ -25,8 +25,8 @@ func (AssignmentInCondition) Meta() analyze.Meta {
 	}
 }
 
-// The identifier/member-only lvalue keeps compound operators (`+=`, `<=`) from matching; `([^=]|$)`
-// rejects `==`.
+// Allowing only an identifier or member lvalue keeps compound operators (`+=`, `<=`) from matching, and
+// `([^=]|$)` rejects `==`.
 var assignInCondBareRe = regexp.MustCompile(
 	`\b(if|while)\s*\(\s*[A-Za-z_$][\w$.\[\]]*\s*=([^=]|$)`)
 

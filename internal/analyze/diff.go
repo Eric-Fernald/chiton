@@ -17,8 +17,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
 )
 
-// Baseline is the finding set at a commit (.chiton/baselines/<commit>.json); `--diff` compares
-// against the latest one so a commit is judged only on the findings it adds.
+// Baseline is the finding set at a commit, saved as .chiton/baselines/<commit>.json. `--diff` compares
+// against the latest one, so findings that already existed never count against a commit.
 type Baseline struct {
 	Commit      string        `json:"commit"`
 	GeneratedAt time.Time     `json:"generated_at"`
@@ -42,8 +42,8 @@ type DiffResult struct {
 	Changed  []FindingChange `json:"changed"`
 }
 
-// Diff compares a baseline finding set to the current one by stable finding ID; Changed means
-// the same ID with a different message or severity.
+// Diff compares a baseline finding set to the current one by stable finding ID. Changed holds the
+// findings whose ID matches but whose message or severity differs.
 func Diff(baseline, current []FindingView) DiffResult {
 	base := indexFindings(baseline)
 	cur := indexFindings(current)
@@ -138,7 +138,7 @@ func LatestBaseline(dir string) (*Baseline, error) {
 		if err != nil {
 			continue // skip unreadable/corrupt baselines
 		}
-		// Newest GeneratedAt wins; ties break by commit so the result never depends on dir order.
+		// The newest GeneratedAt wins. Ties break by commit, so the result never depends on directory order.
 		if latest == nil || b.GeneratedAt.After(latest.GeneratedAt) ||
 			(b.GeneratedAt.Equal(latest.GeneratedAt) && b.Commit > latest.Commit) {
 			latest = b

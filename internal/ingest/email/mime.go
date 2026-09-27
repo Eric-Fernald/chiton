@@ -70,8 +70,8 @@ func collectParts(contentType, cte string, raw []byte, depth int) (plain, htmlTe
 	return plain, htmlText
 }
 
-// decodeTransferEncoding decodes base64/quoted-printable bodies; other encodings pass through, and a decode
-// error falls back to the raw bytes rather than dropping content.
+// decodeTransferEncoding decodes base64 and quoted-printable bodies. Other encodings pass through, and a
+// decode error falls back to the raw bytes rather than dropping content.
 func decodeTransferEncoding(raw []byte, cte string) []byte {
 	switch strings.ToLower(strings.TrimSpace(cte)) {
 	case "base64":
@@ -105,8 +105,8 @@ func stripWhitespace(b []byte) []byte {
 	return out
 }
 
-// htmlToText extracts visible text from HTML, collapsing whitespace; <script>/<style> content never leaks
-// into the output.
+// htmlToText extracts visible text from HTML and collapses whitespace.
+// Text inside <script> and <style> elements never reaches the output.
 func htmlToText(s string) string {
 	z := html.NewTokenizer(strings.NewReader(s))
 	var b strings.Builder

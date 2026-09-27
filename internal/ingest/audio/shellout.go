@@ -15,8 +15,8 @@ import (
 // preference order.
 var knownBinaries = []string{"whisper", "whisper-cli", "whisper-cpp", "whisper.cpp"}
 
-// ShellTranscriber transcribes by invoking a whisper CLI and parsing its WebVTT output; run is injectable
-// so tests need no real whisper install.
+// ShellTranscriber transcribes by invoking a whisper CLI and parsing its WebVTT output.
+// Tests can swap in their own run func, so they need no real whisper install.
 type ShellTranscriber struct {
 	cfg Config
 	// run executes the command; defaults to exec.CommandContext. Tests override

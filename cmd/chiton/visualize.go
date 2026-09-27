@@ -14,7 +14,7 @@ import (
 )
 
 // visualizeCmd renders the graph as interactive HTML or Mermaid. Unlike `chiton report` it works on a
-// bare graph; a prior `chiton cluster` only adds community colours and betweenness sizing.
+// bare graph. A prior `chiton cluster` only adds community colours and betweenness sizing.
 func visualizeCmd() *cobra.Command {
 	var format, outFile, scope, title string
 	var maxNodes int

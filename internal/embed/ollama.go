@@ -18,7 +18,7 @@ const (
 )
 
 // Ollama is a thin net/http client over a local Ollama server's /api/embed endpoint. dim is atomic because
-// Embed self-corrects it while the live-sync worker pool shares one *Ollama and reads Dim() concurrently.
+// Embed updates it to the model's real dimension while live-sync workers share one *Ollama and read Dim().
 type Ollama struct {
 	endpoint string
 	model    string

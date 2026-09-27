@@ -29,15 +29,15 @@ func ChitonServerEntry(exe, graphPath string) ServerEntry {
 	return ServerEntry{Command: exe, Args: ChitonServeArgs(graphPath)}
 }
 
-// serverTable is a config format holding MCP servers in a map under one top-level key; its helpers
+// serverTable is a config format holding MCP servers in a map under one top-level key. Its helpers
 // touch only the "chiton" entry and preserve every other server and setting.
 type serverTable struct {
 	key       string // top-level key holding the server map
 	kind      string // what that key must hold, for the refusal error
 	unmarshal func([]byte, any) error
 	marshal   func(any) ([]byte, error)
-	seed      func(doc map[string]any)      // optional: defaults added on write
-	shell     func(doc map[string]any) bool // optional: a non-empty doc that still counts as empty
+	seed      func(doc map[string]any)      // if set, adds defaults on write
+	shell     func(doc map[string]any) bool // if set, reports whether a non-empty doc still counts as empty
 }
 
 // mcpServersTable is the JSON/JSONC "mcpServers" format shared by most assistants.
@@ -101,11 +101,11 @@ func (t serverTable) remove(path string) (changed bool, err error) {
 	return true, saveOrRemove(path, doc, len(doc) == 0 || (t.shell != nil && t.shell(doc)), t.marshal)
 }
 
-// has reports whether path registers a chiton server. A missing file is false, nil.
+// has reports whether path registers a chiton server. It returns false, nil for a missing file.
 func (t serverTable) has(path string) (bool, error) {
 	doc, _, err := readDoc(path, t.unmarshal)
 	if err != nil {
-		return false, errors.Unwrap(err) // bare cause: Doctor prefixes the path itself
+		return false, errors.Unwrap(err) // return the bare cause because Doctor prefixes the path itself
 	}
 	servers, _ := doc[t.key].(map[string]any)
 	_, ok := servers["chiton"]

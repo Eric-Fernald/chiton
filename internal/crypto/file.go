@@ -16,7 +16,7 @@ const (
 	headerLen   = 1 + gcmNonceLen
 )
 
-// EncryptBytes seals plaintext with AES-256-GCM under key (must be 32 bytes), returning
+// EncryptBytes seals plaintext with AES-256-GCM under key, which must be 32 bytes, and returns
 // version | nonce | ciphertext+tag, ready to write to a file.
 func EncryptBytes(key, plaintext []byte) ([]byte, error) {
 	if len(key) != 32 {

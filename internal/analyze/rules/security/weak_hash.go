@@ -8,8 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// WeakHash flags MD5/SHA-1, broken for any security purpose; medium severity because
-// non-security uses (e.g. cache keys) exist.
+// WeakHash flags MD5 and SHA-1, which are broken for any security purpose. Its severity is medium
+// because non-security uses such as cache keys exist.
 type WeakHash struct{}
 
 func (WeakHash) Meta() analyze.Meta {

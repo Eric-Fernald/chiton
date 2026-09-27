@@ -26,8 +26,8 @@ func (SelfAssignment) Meta() analyze.Meta {
 	}
 }
 
-// A whole statement `lhs = rhs` (or `:=`) of identifiers/dotted members. RE2 has no backreferences, so
-// MatchFile checks lhs == rhs itself.
+// selfAssignRe matches a whole statement `lhs = rhs` (or `:=`) of identifiers or dotted members. RE2 has
+// no backreferences, so MatchFile checks lhs == rhs itself.
 var selfAssignRe = regexp.MustCompile(
 	`^\s*([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*:?=\s*([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*;?\s*$`)
 
@@ -37,7 +37,7 @@ func (SelfAssignment) MatchFile(_ context.Context, t analyze.FileTarget) []analy
 		if strings.IndexByte(raw, '=') < 0 {
 			continue
 		}
-		// Strip every supported comment style; a trailing /* */ would defeat the end-of-line anchor.
+		// Strip every supported comment style, since a trailing /* */ would defeat the end-of-line anchor.
 		text := analyze.StripPyComment(stripInlineBlockComment(stripGoComment(raw)))
 		m := selfAssignRe.FindStringSubmatch(text)
 		if m != nil && m[1] == m[2] {

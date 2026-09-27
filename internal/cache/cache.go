@@ -43,7 +43,7 @@ func (c *Cache) Changed(uri, sha256 string) bool {
 	return c.entries[uri] != sha256
 }
 
-// Mark records sha256 as uri's current hash. Call it only after a successful extract + upsert, so a
+// Mark records sha256 as uri's current hash. Call it only after a successful extract and upsert, so a
 // failed upsert doesn't leave an entry that suppresses re-extraction.
 func (c *Cache) Mark(uri, sha256 string) {
 	c.mu.Lock()

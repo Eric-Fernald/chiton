@@ -16,7 +16,7 @@ func TestFlatSearchTopKMatchesFullSort(t *testing.T) {
 	for i := range 400 {
 		v := make([]float32, 6)
 		for j := range v {
-			v[j] = float32(rng.Intn(5) - 2) // small integer range forces many exact score ties
+			v[j] = float32(rng.Intn(5) - 2) // a small integer range forces many exact score ties
 		}
 		items = append(items, Item{ID: fmt.Sprintf("n%03d", i), Vec: v})
 	}

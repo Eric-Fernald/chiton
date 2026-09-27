@@ -9,7 +9,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// EmptyCatch flags an empty `catch (e) {}` / `catch {}` in JS/TS/Java, silently swallowing the exception.
+// EmptyCatch flags an empty `catch (e) {}` or `catch {}` in JS/TS and Java, which swallows the exception.
 // It scans the whole file, so the `{}` may sit on a line after the `catch (...)` clause.
 type EmptyCatch struct{}
 

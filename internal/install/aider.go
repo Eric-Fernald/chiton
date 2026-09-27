@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 )
 
-// Aider installs chiton's guidance for Aider, which has no MCP support: a CONVENTIONS.md rules block plus
-// a `read:` entry in .aider.conf.yml, without which Aider never loads CONVENTIONS.md.
+// Aider installs chiton's guidance for Aider, which has no MCP support. It writes a CONVENTIONS.md rules
+// block and a `read:` entry in .aider.conf.yml, without which Aider never loads CONVENTIONS.md.
 type Aider struct{}
 
 func (Aider) Name() string        { return "aider" }
@@ -64,7 +64,7 @@ func (a Aider) Doctor(opts Options) (DoctorReport, error) {
 		": reads CONVENTIONS.md",
 		": CONVENTIONS.md not in `read:` (run `chiton install --assistant aider`)")
 
-	// No MCP row: Aider cannot host chiton's MCP server, so "Registered" means the conventions wiring.
+	// Aider can't host MCP servers, so it has no MCP row and "Registered" means the conventions wiring.
 	rep.Registered = hasRules && hasRead
 	return rep, nil
 }

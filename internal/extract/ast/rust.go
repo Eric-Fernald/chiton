@@ -30,10 +30,10 @@ func (r *RustExtractor) ExtractFile(ctx context.Context, path string) ([]model.N
 func (r *RustExtractor) ExtractSource(_ context.Context, path string, src []byte) ([]model.Node, []model.Edge, error) {
 	g := newFileGraph(newFileNode(path, src, map[string]any{"language": "rust"}))
 	lines := splitLines(src)
-	var scopes braceScopes // kinds: "impl" (named for the implemented type), "fn", "mod"
+	var scopes braceScopes // scope kinds are "impl" (named for the implemented type), "fn", and "mod"
 	var funcs []funcRecord
 
-	// Pass 1: collect symbols, skipping // lines (scan still tracks their braces and /* */ state).
+	// Pass 1 collects symbols and skips // lines, though scan still tracks their braces and /* */ state.
 	isComment := func(s string) bool { return strings.HasPrefix(s, "//") }
 	scopes.scan(lines, isComment, func(i int, line string, pre, open int) {
 		fn := reRsFn.FindStringSubmatch(line)
@@ -49,12 +49,12 @@ func (r *RustExtractor) ExtractSource(_ context.Context, path string, src []byte
 			funcs = append(funcs, funcRecord{lineStart: i, id: g.declare(fn[1], "func", i+1)})
 			scopes.push("fn", "", pre)
 		} else if m := reRsImpl.FindStringSubmatch(line); m != nil {
-			traitName := m[1] // may be empty for bare impl
+			traitName := m[1] // empty for a bare impl
 			typeName := m[2]
 			scopes.push("impl", typeName, pre)
 
 			if traitName != "" {
-				// impl Trait for Type → IMPLEMENTS edge
+				// impl Trait for Type becomes an IMPLEMENTS edge
 				typeID := g.symbols[typeName]
 				if typeID == "" {
 					typeID = model.NewNodeID(g.uri, typeName)
@@ -77,7 +77,7 @@ func (r *RustExtractor) ExtractSource(_ context.Context, path string, src []byte
 			}
 		}
 
-		// use declarations → import nodes
+		// use declarations become import nodes
 		if m := reRsUse.FindStringSubmatch(line); m != nil {
 			if pkg := rustUsePath(m[1]); pkg != "" {
 				g.addImport(pkg)

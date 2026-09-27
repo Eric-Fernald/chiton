@@ -9,8 +9,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// DeadSymbol flags non-exported func-like symbols with no non-CONTAINS in-edges; CALLS from tests
-// count as uses, and exported names are skipped since their callers may lie outside the graph.
+// DeadSymbol flags non-exported func-like symbols with no in-edges other than CONTAINS. CALLS from tests
+// count as uses. It skips exported names, since their callers may lie outside the graph.
 type DeadSymbol struct{}
 
 func (DeadSymbol) Meta() analyze.Meta {
@@ -50,7 +50,7 @@ func (DeadSymbol) MatchGraph(_ context.Context, t analyze.GraphTarget) []analyze
 		if n.Label == "init" || n.Label == "main" {
 			continue
 		}
-		// Skip methods ("Type.method"): the Go extractor emits no CALLS edges for receiver calls,
+		// Skip methods ("Type.method") because the Go extractor emits no CALLS edges for receiver calls,
 		// so every private method would look dead.
 		if strings.Contains(n.Label, ".") {
 			continue

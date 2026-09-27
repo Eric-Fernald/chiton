@@ -422,8 +422,8 @@ func TestResolveUserNegativeCacheRetries(t *testing.T) {
 }
 
 func TestWebClientConcurrentResolveNoRace(t *testing.T) {
-	// The Events receiver shares one WebClient across handlers; without the cache mutex this trips the
-	// runtime's "concurrent map writes" fatal even without -race.
+	// The Events receiver shares one WebClient across handlers. Without the cache mutex this triggers the
+	// runtime's "concurrent map writes" fatal error even without -race.
 	mux := http.NewServeMux()
 	mux.HandleFunc("/users.info", func(w http.ResponseWriter, r *http.Request) {
 		uid := r.URL.Query().Get("user")

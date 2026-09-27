@@ -16,7 +16,7 @@ import (
 const defaultLimit = 1000
 
 // historyURIScheme namespaces history source_uris so they never collide with an add-url node for the
-// same page (which uses the bare URL); the real URL lives in attrs["url"].
+// same page (which uses the bare URL). The real URL is stored in attrs["url"].
 const historyURIScheme = "browser://"
 
 // DetectedDB is a browser History database found on the local machine.
@@ -52,7 +52,7 @@ type Report struct {
 }
 
 // IngestDB reads one History database and upserts a url node per visited web page, skipping non-web URLs.
-// Idempotent: IDs derive from the URL alone, so re-running refreshes visit counts and titles in place.
+// IDs derive from the URL alone, so a re-run refreshes visit counts and titles in place without duplicates.
 func (ing *Ingester) IngestDB(ctx context.Context, dbPath, browser string, opts Options) (Report, error) {
 	if store.IsReadOnly(ing.store) {
 		return Report{}, fmt.Errorf("browser: store is read-only — use the 'chiton browser ingest' CLI or restart 'chiton serve --writable'")

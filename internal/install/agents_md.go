@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 )
 
-// AGENTS.md is shared by several installers, so its chiton block is reference-counted: uninstalling one
-// removes it only when no other AGENTS.md user still has its MCP entry (Uninstall must not break siblings).
+// Several installers share AGENTS.md, so its chiton block is reference-counted. Uninstalling one installer
+// removes the block only when no other AGENTS.md user still has its MCP entry, so siblings keep working.
 
 // agentsMDUsers are the installer names whose rules live in the shared AGENTS.md.
 var agentsMDUsers = []string{"codex", "opencode", "antigravity", "copilot-cli"}

@@ -10,7 +10,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// AbruptExit flags `os.Exit(` (Go) or `process.exit(` (JS/TS) outside an entrypoint: exiting from library
+// AbruptExit flags `os.Exit(` (Go) or `process.exit(` (JS/TS) outside an entrypoint. Exiting from library
 // code skips deferred cleanup and denies callers the chance to handle the failure.
 type AbruptExit struct{}
 
@@ -37,13 +37,13 @@ func (AbruptExit) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.F
 	if isGoTestFile(t.Path) || isJSTestFile(t.Path) {
 		return nil
 	}
-	// Entrypoints may exit: any `package main` Go file (cmd/<tool>/ files are often not main.go), and
-	// JS/TS entrypoints per isJSEntrypoint.
+	// Entrypoints may exit. That covers any `package main` Go file (cmd/<tool>/ files are often not main.go)
+	// and the JS/TS entrypoints that isJSEntrypoint recognises.
 	var re *regexp.Regexp
 	var masked []byte
 	switch analyze.FileExt(t.Path) {
 	case "go":
-		// Exact prefilter: masking writes only 'x' and never masks a lone byte between two letters.
+		// The prefilter is exact since masking writes only 'x' and never masks a lone byte between letters.
 		if !bytes.Contains(t.Content, []byte("os.Exit")) {
 			return nil
 		}
@@ -115,8 +115,8 @@ func hasShebang(content []byte) bool {
 	return len(content) >= 2 && content[0] == '#' && content[1] == '!'
 }
 
-// jsBasenameStem returns the lowercased basename minus one trailing extension ("Server.js" -> "server");
-// stripping only one suffices for the entry-name check.
+// jsBasenameStem returns the lowercased basename without one trailing extension, so "Server.js" becomes
+// "server". Stripping only one extension is enough for the entry-name check.
 func jsBasenameStem(path string) string {
 	base := analyze.PathBase(path)
 	if i := strings.LastIndexByte(base, '.'); i >= 0 {

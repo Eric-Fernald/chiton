@@ -24,7 +24,7 @@ type changeNotification struct {
 	Value []ChangeItem `json:"value"`
 }
 
-// WebhookHandler receives Graph change notifications for Teams transcripts: it echoes ?validationToken=…
+// WebhookHandler receives Graph change notifications for Teams transcripts. It echoes ?validationToken=…
 // handshakes and dispatches changes whose clientState matches to onChange.
 type WebhookHandler struct {
 	clientState string
@@ -32,15 +32,15 @@ type WebhookHandler struct {
 	log         func(format string, args ...any)
 }
 
-// NewWebhookHandler builds a handler; clientState is the shared secret from the Graph subscription, and
-// notifications that don't match it are rejected as forged.
+// NewWebhookHandler builds a handler. clientState is the shared secret from the Graph subscription, and the
+// handler rejects notifications that don't match it as forged.
 func NewWebhookHandler(clientState string, onChange func(ctx context.Context, c ChangeItem) error, log func(string, ...any)) *WebhookHandler {
 	if log == nil {
 		log = func(string, ...any) {}
 	}
 	if clientState == "" {
-		// Fail closed: with no clientState every notification is rejected. Callers should refuse to start;
-		// this is the library backstop.
+		// With no clientState the handler fails closed and rejects every notification. Callers should refuse
+		// to start in that case, and this check is the library's fallback.
 		log("teams webhook: WARNING — clientState is empty; every notification will be rejected")
 	}
 	return &WebhookHandler{clientState: clientState, onChange: onChange, log: log}
@@ -75,8 +75,8 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mismatched clientStates are dropped, not errored, so a forged callback can't learn valid states. The 202
-	// is sent only after every onChange returns, so onChange must fit Graph's 3s ack deadline.
+	// Drop mismatched clientStates without an error response, so a forged callback can't learn valid states.
+	// The 202 is sent only after every onChange returns, so onChange must fit Graph's 3s ack deadline.
 	for _, c := range note.Value {
 		if !h.validState(c.ClientState) {
 			h.log("teams webhook: dropping notification with bad clientState (sub %s)", c.SubscriptionID)
@@ -91,7 +91,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
-// validState constant-time-compares clientState; with none configured it rejects, since accepting anything
+// validState compares clientState in constant time. With none configured it rejects, since accepting anything
 // would let any network host inject meeting content into the graph.
 func (h *WebhookHandler) validState(got string) bool {
 	if h.clientState == "" {
@@ -101,7 +101,7 @@ func (h *WebhookHandler) validState(got string) bool {
 }
 
 // ParseTranscriptResource extracts (meetingID, transcriptID) from a resource such as
-// "users('U')/onlineMeetings('MEET')/transcripts('TID')"; ok is false for non-transcript paths.
+// "users('U')/onlineMeetings('MEET')/transcripts('TID')". It sets ok to false for non-transcript paths.
 func ParseTranscriptResource(resource string) (meetingID, transcriptID string, ok bool) {
 	meetingID = between(resource, "onlineMeetings('", "')")
 	transcriptID = between(resource, "transcripts('", "')")

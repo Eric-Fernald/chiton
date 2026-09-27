@@ -86,8 +86,8 @@ func (c Cursor) Doctor(opts Options) (DoctorReport, error) {
 	return rep, nil
 }
 
-// cursorRuleContent wraps RulesPrompt in the MDC frontmatter Cursor requires: a rule without frontmatter
-// is silently ignored, and alwaysApply keeps it in context for every request.
+// cursorRuleContent wraps RulesPrompt in the MDC frontmatter Cursor requires. Cursor silently ignores a
+// rule without frontmatter, and alwaysApply keeps the rule in context for every request.
 func cursorRuleContent() string {
 	return "---\n" +
 		"description: chiton knowledge-graph context — call chiton MCP tools before grep/file reads for architecture and navigation questions\n" +

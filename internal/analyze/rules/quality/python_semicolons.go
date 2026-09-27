@@ -9,7 +9,7 @@ import (
 )
 
 // PythonSemicolons flags a Python line that separates statements with a semicolon (`a = 1; b = 2`).
-// Trailing semicolons and semicolons inside strings/comments are ignored.
+// It ignores trailing semicolons and semicolons inside strings or comments.
 type PythonSemicolons struct{}
 
 func (PythonSemicolons) Meta() analyze.Meta {

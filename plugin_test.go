@@ -151,8 +151,8 @@ func TestSkillsAreLoadable(t *testing.T) {
 		if !strings.Contains(front, "description:") {
 			t.Errorf("skills/%s/SKILL.md has no description; Claude cannot tell when to use it", dir)
 		}
-		// The directory name supplies the command in both the plugin and `chiton install` layouts;
-		// an explicit name: would desynchronise the two.
+		// The directory name supplies the command in both the plugin and `chiton install` layouts.
+		// An explicit `name:` would desynchronise the two.
 		if strings.Contains(front, "name:") {
 			t.Errorf("skills/%s/SKILL.md pins an explicit name:, which collides with the plugin namespace", dir)
 		}

@@ -26,7 +26,7 @@ func (EmptyBlock) Meta() analyze.Meta {
 	}
 }
 
-// The keyword requirement excludes function bodies and struct/object literals; the end-of-line `{}` skips
+// Requiring a keyword excludes function bodies and struct or object literals. The end-of-line `{}` skips
 // `if (x) {} else {...}` chains, and the brace-free header keeps a match from spanning a nested block.
 var emptyBlockRe = regexp.MustCompile(`\b(if|for|while|switch)\b[^{}]*\{\s*\}\s*$`)
 

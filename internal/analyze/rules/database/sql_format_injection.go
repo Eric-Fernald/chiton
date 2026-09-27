@@ -9,7 +9,7 @@ import (
 )
 
 // SQLFormatInjection flags SQL built by formatting instead of binding: Go fmt.Sprintf, Python
-// f-strings and %-format, JS/TS template literals; py/js need a real substitution to fire.
+// f-strings and %-format, and JS/TS template literals. Python and JS/TS need a real substitution to fire.
 type SQLFormatInjection struct{}
 
 func (SQLFormatInjection) Meta() analyze.Meta {
@@ -25,8 +25,8 @@ func (SQLFormatInjection) Meta() analyze.Meta {
 	}
 }
 
-// SQL skeleton (SELECT…FROM, UPDATE…SET, INSERT INTO, DELETE FROM) so a string merely containing
-// "select"/"update" doesn't fire; the SELECT/UPDATE gap cannot cross a quote or backtick.
+// sqlVerb requires a SQL skeleton (SELECT…FROM, UPDATE…SET, INSERT INTO, DELETE FROM), so a string that
+// merely contains "select" or "update" doesn't fire. sqlGap cannot cross a quote or backtick.
 const sqlGap = `[^"'` + "`" + `]*?`
 const sqlVerb = `(?:SELECT\b` + sqlGap + `\bFROM|INSERT\s+INTO|UPDATE\b` + sqlGap + `\bSET|DELETE\s+FROM)`
 

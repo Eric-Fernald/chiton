@@ -16,8 +16,8 @@ const EnvVarPassphrase = "CHITON_PASSPHRASE"
 // set nor an interactive terminal is available.
 var ErrNoPassphrase = errors.New("no passphrase available: set CHITON_PASSPHRASE or run interactively")
 
-// GetPassphrase returns CHITON_PASSPHRASE, else prompts with prompt on the terminal (no echo);
-// confirm asks twice and requires a match (use it when creating a keyfile).
+// GetPassphrase returns CHITON_PASSPHRASE, else prompts with prompt on the terminal without echo.
+// With confirm set, it asks twice and requires a match. Set confirm when creating a keyfile.
 func GetPassphrase(prompt string, confirm bool) (string, error) {
 	if env := os.Getenv(EnvVarPassphrase); env != "" {
 		return env, nil

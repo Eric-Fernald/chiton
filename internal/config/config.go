@@ -9,7 +9,7 @@ import (
 )
 
 // ProjectDirEnv anchors chiton to a workspace, since assistant-launched MCP servers may start elsewhere
-// and read the wrong store; when set, .chitonrc is read there and a relative graph_path resolves against it.
+// and read the wrong store. When set, .chitonrc is read there and a relative graph_path resolves against it.
 const ProjectDirEnv = "CHITON_PROJECT_DIR"
 
 // ProjectDir returns $CHITON_PROJECT_DIR, or "." when unset. A value still holding a "${...}" template
@@ -50,7 +50,7 @@ func Load() (*Config, error) {
 	return LoadFrom(ProjectDir())
 }
 
-// LoadFrom is Load anchored at dir. A relative graph_path is resolved against dir only when dir is not
+// LoadFrom is Load anchored at dir. It resolves a relative graph_path against dir only when dir is not
 // ".", so plain CLI invocations keep their relative default.
 func LoadFrom(dir string) (*Config, error) {
 	if dir == "" {
@@ -71,14 +71,14 @@ func LoadFrom(dir string) (*Config, error) {
 	v.SetDefault("embed.provider", "ollama")
 	v.SetDefault("embed.model", "nomic-embed-text")
 	v.SetDefault("embed.endpoint", "http://localhost:11434")
-	// No embed.dim default: 0 lets each provider use its native dimension (Ollama 768, hash 256). It must
-	// still be bound, as Unmarshal only walks AllKeys() and would silently drop CHITON_EMBED_DIM.
+	// embed.dim gets no default, so 0 lets each provider use its native dimension (Ollama 768, hash 256).
+	// It must still be bound, as Unmarshal only walks AllKeys() and would silently drop CHITON_EMBED_DIM.
 	if err := v.BindEnv("embed.dim"); err != nil {
 		return nil, err
 	}
 	v.SetDefault("semantic.confidence_threshold", 0.5)
 
-	// The replacer maps nested keys to flat env vars: embed.provider -> CHITON_EMBED_PROVIDER.
+	// The replacer maps nested keys to flat env vars, e.g. embed.provider to CHITON_EMBED_PROVIDER.
 	v.SetEnvPrefix("CHITON")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()

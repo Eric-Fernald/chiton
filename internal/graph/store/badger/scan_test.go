@@ -11,8 +11,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
 )
 
-// TestNodesMatchingEqualsFilteredAllNodes checks the raw-bytes probe never drops a match, including values whose
-// JSON escaping is non-trivial.
+// TestNodesMatchingEqualsFilteredAllNodes checks the raw-bytes probe never drops a match, including values
+// whose JSON escaping is non-trivial.
 func TestNodesMatchingEqualsFilteredAllNodes(t *testing.T) {
 	ctx := context.Background()
 	gs, err := Open(filepath.Join(t.TempDir(), "graph.badger"))
@@ -29,7 +29,7 @@ func TestNodesMatchingEqualsFilteredAllNodes(t *testing.T) {
 		for j, k := range kinds {
 			attrs := map[string]any{"target_uri": v, "n": i}
 			if j%2 == 0 {
-				attrs = map[string]any{"other": v} // target_uri absent
+				attrs = map[string]any{"other": v} // leaves target_uri absent
 			}
 			nodes = append(nodes, model.Node{ID: fmt.Sprint("n", i, "_", j), Kind: k, Label: v, SourceURI: v, Attrs: attrs})
 		}

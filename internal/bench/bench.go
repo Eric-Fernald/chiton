@@ -1,5 +1,5 @@
-// Package bench implements chiton's token-cost benchmark: each dependency question is costed (chars ÷ 4)
-// as naive (read every file), grep+read (files naming the symbol), and chiton's lean MCP neighborhood.
+// Package bench implements chiton's token-cost benchmark (4 chars per token). It costs each dependency
+// question as naive (every file), grep+read (files naming the symbol), and chiton's lean MCP neighborhood.
 package bench
 
 import (
@@ -40,8 +40,8 @@ type Report struct {
 	Queries      []QueryResult `json:"queries"`
 }
 
-// leanNode/leanEdge mirror internal/mcp's lean shapes field-for-field (Provenance and Confidence are
-// never omitted) so the chiton column isn't flattered by a smaller payload.
+// leanNode and leanEdge mirror internal/mcp's lean shapes field-for-field, never omitting Provenance or
+// Confidence, so a smaller payload can't understate the chiton column.
 type leanNode struct {
 	Kind       model.NodeKind    `json:"kind"`
 	Label      string            `json:"label"`
@@ -73,7 +73,7 @@ func toLeanNode(n model.Node) leanNode {
 }
 
 // Run builds an in-memory graph over the supported files under path and costs the depth-2
-// neighborhoods of its maxQueries highest-degree symbols; name labels the report.
+// neighborhoods of its maxQueries highest-degree symbols. name labels the report.
 func Run(ctx context.Context, name, path string, maxQueries int) (*Report, error) {
 	if maxQueries <= 0 {
 		maxQueries = 5
@@ -217,7 +217,7 @@ func (g *graph) topSymbols(n int) []string {
 		if g.degree[id] == 0 {
 			continue
 		}
-		// Skip external import targets (fmt, http.Get): their huge degree models no real question
+		// Skip external import targets (fmt, http.Get). Their huge degree doesn't match any real question
 		// and would inflate every column.
 		if ext, _ := node.Attrs["external"].(bool); ext {
 			continue
@@ -286,7 +286,7 @@ func (g *graph) neighborhoodTokens(seed string, depth int) (int, error) {
 		Seed:  toLeanNode(sn),
 		Nodes: neighborNodes,
 		Edges: leanEdges,
-		// Same summary as the MCP neighborhood handler. MCP indents its JSON but this compact
+		// This matches the MCP neighborhood handler's summary. MCP indents its JSON but this compact
 		// marshal doesn't, so the chiton column slightly understates the real payload.
 		Summary: fmt.Sprintf("%d nodes, %d edges within depth %d of %q", len(neighborNodes), len(leanEdges), depth, sn.Label),
 	}

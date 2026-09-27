@@ -9,7 +9,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// RegexCompileInLoop flags a regex compiled inside a loop body (Go regexp.Compile/MustCompile,
+// RegexCompileInLoop flags a regex compiled inside a loop body (Go regexp.Compile or MustCompile,
 // Python re.compile, JS/TS new RegExp, Java Pattern.compile), where the result is loop-invariant.
 type RegexCompileInLoop struct{}
 
@@ -49,7 +49,7 @@ func (RegexCompileInLoop) MatchFile(_ context.Context, t analyze.FileTarget) []a
 }
 
 // scanLoopBody emits mk(line) for each line inside a loop body whose comment-stripped text matches
-// hit; loop bodies are found by indentation for Python and by brace depth otherwise.
+// hit. It finds loop bodies by indentation for Python and by brace depth otherwise.
 func scanLoopBody(content []byte, python bool, hit *regexp.Regexp, mk func(line int) analyze.Finding) []analyze.Finding {
 	var out []analyze.Finding
 
@@ -91,8 +91,8 @@ func scanLoopBody(content []byte, python bool, hit *regexp.Regexp, mk func(line 
 
 var (
 	pyLoopHeaderRe = regexp.MustCompile(`^\s*(?:for\b|while\b).*:\s*$`)
-	// for/while not preceded by a word char or dot: matches mid-line headers (`if (c) { for (...) {`)
-	// but not members like `foo.for`; braceLoopScanner finds the body extent.
+	// braceLoopHeaderRe matches for or while when not preceded by a word char or dot. That catches mid-line
+	// headers (`if (c) { for (...) {`) but not members like `foo.for`. braceLoopScanner finds the body.
 	braceLoopHeaderRe = regexp.MustCompile(`(?:^|[^.\w])(?:for|while)\b`)
 )
 

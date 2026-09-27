@@ -8,7 +8,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// IndexOfNotIncludes flags the JS/TS `.indexOf(x) !== -1` membership idiom; only "is present"
+// IndexOfNotIncludes flags the JS/TS `.indexOf(x) !== -1` membership idiom. Only "is present"
 // comparisons match, so `.indexOf(x) > 5` and uses of the returned index are left alone.
 type IndexOfNotIncludes struct{}
 
@@ -25,8 +25,8 @@ func (IndexOfNotIncludes) Meta() analyze.Meta {
 	}
 }
 
-// `.indexOf(...)` followed by `!== -1`, `!= -1`, `>= 0`, or `> -1`; the argument may contain one
-// level of nested parens (`indexOf(fn(x))`).
+// indexOfMembershipRe matches `.indexOf(...)` followed by `!== -1`, `!= -1`, `>= 0`, or `> -1`. The
+// argument may contain one level of nested parens (`indexOf(fn(x))`).
 var indexOfMembershipRe = regexp.MustCompile(
 	`\.indexOf\s*\([^()]*(?:\([^()]*\)[^()]*)*\)\s*(?:!==?\s*-\s*1|>=\s*0|>\s*-\s*1)`,
 )

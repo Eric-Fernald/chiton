@@ -15,7 +15,7 @@ func IsReadOnly(gs GraphStore) bool {
 }
 
 // FindNode resolves a label substring, plus an optional source-file hint, to one node via PickByFile.
-// found is false when nothing matches; err is the raw search error.
+// found is false when nothing matches, and err is the raw search error.
 func FindNode(ctx context.Context, gs GraphStore, label, file string) (node model.Node, found bool, err error) {
 	limit := 1
 	if file != "" {
@@ -29,7 +29,7 @@ func FindNode(ctx context.Context, gs GraphStore, label, file string) (node mode
 }
 
 // PickByFile picks a node whose source_uri contains the file hint, preferring symbols over file
-// nodes (a file hint almost always targets a symbol in that file); falls back to nodes[0].
+// nodes (a file hint almost always targets a symbol in that file), and falls back to nodes[0].
 func PickByFile(nodes []model.Node, file string) model.Node {
 	if file == "" {
 		return nodes[0]
@@ -53,7 +53,7 @@ func PickByFile(nodes []model.Node, file string) model.Node {
 	return nodes[0]
 }
 
-// NodeFilter selects nodes for NodesMatching; zero-valued fields don't constrain.
+// NodeFilter selects nodes for NodesMatching. Zero-valued fields don't constrain.
 type NodeFilter struct {
 	Kinds     []model.NodeKind  // node kind is one of these
 	SourceURI string            // node source_uri equals this

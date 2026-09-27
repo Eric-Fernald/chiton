@@ -18,11 +18,11 @@ func (g *GoExtractor) ExtractFile(ctx context.Context, path string) ([]model.Nod
 	return extractFile(ctx, g, path)
 }
 
-// ExtractSource parses a single .go file into file, top-level func/type, and imported-package nodes.
-// CALLS covers intra-file direct calls and pkg.Func selector calls; receiver method calls need go/types.
+// ExtractSource parses a single .go file into file, top-level func and type, and imported-package nodes.
+// CALLS covers direct intra-file calls and pkg.Func selector calls. Receiver method calls need go/types.
 func (g *GoExtractor) ExtractSource(_ context.Context, path string, src []byte) ([]model.Node, []model.Edge, error) {
 	fset := token.NewFileSet()
-	// Object resolution is skipped: only identifier names are read, never ast.Object links.
+	// Skip object resolution, since the extractor reads only identifier names, never ast.Object links.
 	f, err := parser.ParseFile(fset, path, src, parser.ParseComments|parser.SkipObjectResolution)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse %s: %w", path, err)
@@ -34,8 +34,8 @@ func (g *GoExtractor) ExtractSource(_ context.Context, path string, src []byte) 
 	nodes := []model.Node{fileNode}
 	var edges []model.Edge
 
-	// symbols maps plain func and type names → node ID for intra-file CALLS resolution. Methods are left out:
-	// a bare call can't name one, and same-named methods on different types would overwrite each other.
+	// symbols maps plain func and type names to node IDs for intra-file CALLS resolution. It omits methods
+	// because a bare call can't name one and same-named methods on different types would overwrite each other.
 	symbols := map[string]string{}
 	type funcBody struct {
 		id   string
@@ -43,7 +43,7 @@ func (g *GoExtractor) ExtractSource(_ context.Context, path string, src []byte) 
 	}
 	var bodies []funcBody
 
-	// Imports → package nodes + IMPORTS edges, and alias → package path for selector calls.
+	// Imports become package nodes and IMPORTS edges. Aliases map to package paths for selector calls.
 	importAliases := make(map[string]string, len(f.Imports))
 	for _, imp := range f.Imports {
 		pkgPath := strings.Trim(imp.Path.Value, `"`)
@@ -122,7 +122,7 @@ func (g *GoExtractor) ExtractSource(_ context.Context, path string, src []byte) 
 		}
 	}
 
-	// CALLS edges: direct calls to this file's symbols, and pkg.Func calls where pkg is an import alias.
+	// Add CALLS edges for direct calls to this file's symbols and pkg.Func calls where pkg is an import alias.
 	for _, fb := range bodies {
 		callerID := fb.id
 		goast.Inspect(fb.body, func(n goast.Node) bool {

@@ -29,7 +29,7 @@ func (MissingHTTPTimeout) Meta() analyze.Meta {
 // Go: package-level http helper functions that use the default (no-timeout) client.
 var goHTTPDefaultRe = regexp.MustCompile(`\bhttp\.(Get|Post|PostForm|Head)\s*\(`)
 
-// Python: requests module verb calls; the call's argument list is then checked for timeout=.
+// Python: requests module verb calls. MatchFile then checks each call's argument list for timeout=.
 var pyRequestsCallRe = regexp.MustCompile(`\brequests\.(get|post|put|delete|patch|head|options)\s*\(`)
 
 // timeout= keyword anywhere in a python call's argument span.
@@ -105,8 +105,8 @@ func pyHTTPTimeout(t analyze.FileTarget) []analyze.Finding {
 	return out
 }
 
-// matchParen returns the index of the ')' closing the '(' at openIdx, or -1 if unbalanced; parens inside
-// Python string literals (including triple-quoted) are ignored.
+// matchParen returns the index of the ')' closing the '(' at openIdx, or -1 if unbalanced. It ignores
+// parens inside Python string literals, including triple-quoted ones.
 func matchParen(src []byte, openIdx int) int {
 	depth := 0
 	for i := openIdx; i < len(src); i++ {

@@ -1,4 +1,4 @@
-// Package ingest is chiton's live-sync engine: it re-extracts changed files and replaces their nodes in place
+// Package ingest is chiton's live-sync engine. It re-extracts changed files and replaces their nodes in place
 // (DeleteBySourceURI is safe because no cross-file structural edges point into a file's symbols).
 package ingest
 
@@ -70,7 +70,7 @@ func (c Config) withDefaults() Config {
 	return c
 }
 
-// Engine performs incremental graph updates. It is safe for concurrent use: store writes are individually
+// Engine performs incremental graph updates. It is safe for concurrent use because each store write is
 // transactional, the cache is mutex-guarded, and clusterMu serialises the cluster pass.
 type Engine struct {
 	store    store.GraphStore
@@ -126,8 +126,8 @@ type BatchSummary struct {
 	Reclustered bool
 }
 
-// SyncFile (re-)extracts a single file into the graph; a vanished file is delegated to DeleteFile.
-// Read/parse failures are skips, not errors, so a watcher never dies on one bad file.
+// SyncFile (re-)extracts a single file into the graph and hands a vanished file to DeleteFile.
+// Read and parse failures are skips, not errors, so a watcher never stops on one bad file.
 func (e *Engine) SyncFile(ctx context.Context, path string) (Outcome, error) {
 	ex := extast.ForFile(path)
 	if ex == nil {
@@ -147,7 +147,7 @@ func (e *Engine) SyncFile(ctx context.Context, path string) (Outcome, error) {
 		return Outcome{Path: path, Op: OpUpsert, Skipped: true, Reason: "unchanged"}, nil
 	}
 
-	// Extract the bytes just hashed, so the cached hash always matches the extracted content.
+	// Extract the same bytes that were hashed, so the cached hash always matches the extracted content.
 	nodes, edges, err := ex.ExtractSource(ctx, path, content)
 	if err != nil {
 		return Outcome{Path: path, Op: OpUpsert, Skipped: true, Reason: "extract: " + err.Error()}, nil
@@ -228,8 +228,8 @@ func (e *Engine) SyncChanges(ctx context.Context, changes []Change) (*BatchSumma
 	return sum, nil
 }
 
-// SyncDir reconciles a directory tree in one shot: every supported file is (re-)synced and, when prune is
-// true, indexed files under the tree that are gone from disk are deleted.
+// SyncDir reconciles a directory tree in one pass. It (re-)syncs every supported file and, when prune is
+// true, deletes indexed files under the tree that are gone from disk.
 func (e *Engine) SyncDir(ctx context.Context, root string, prune bool) (*BatchSummary, error) {
 	defer e.saveCache()
 	sum := &BatchSummary{}
@@ -269,8 +269,8 @@ func (e *Engine) SyncDir(ctx context.Context, root string, prune bool) (*BatchSu
 			if seen[uri] {
 				continue
 			}
-			// Prune only files genuinely gone from disk: one merely excluded from this walk
-			// (ignored dir, unsupported type, narrower root) must survive.
+			// Prune only files that are gone from disk. A file this walk excluded (ignored dir, unsupported
+			// type, or narrower root) must survive.
 			if p, ok := model.PathFromFileURI(uri); ok {
 				if _, err := os.Stat(p); err == nil {
 					continue
@@ -353,8 +353,8 @@ func (e *Engine) Watch(ctx context.Context, root string) error {
 	return nil
 }
 
-// pruneDir removes every file indexed under dir (a renamed/deleted directory yields no per-child
-// events) and returns how many were pruned.
+// pruneDir removes every file indexed under dir (a renamed or deleted directory yields no per-child
+// events) and returns how many it pruned.
 func (e *Engine) pruneDir(ctx context.Context, dir string) int {
 	prefix := model.FileURI(dir)
 	pruned := 0
@@ -384,8 +384,8 @@ func (e *Engine) syncKey(ctx context.Context, path string) error {
 	return err
 }
 
-// recluster runs one incremental cluster pass over the touched set, serialised by clusterMu; it skips when nothing
-// changed or no sidecar exists yet (`chiton cluster` seeds it). haveSidecar reports whether one exists afterwards.
+// recluster runs one incremental cluster pass over the touched set under clusterMu, unless nothing changed or
+// no sidecar exists yet (`chiton cluster` seeds it). haveSidecar reports whether a sidecar exists afterwards.
 func (e *Engine) recluster(ctx context.Context) (haveSidecar bool, err error) {
 	e.clusterMu.Lock()
 	defer e.clusterMu.Unlock()
@@ -402,7 +402,7 @@ func (e *Engine) recluster(ctx context.Context) (haveSidecar bool, err error) {
 		return false, fmt.Errorf("load cluster sidecar: %w", err)
 	}
 	if prev == nil {
-		// No prior full clustering: don't surprise the user with a full pass during sync.
+		// With no prior full clustering, don't surprise the user with a full pass during sync.
 		e.log("sync: skipping re-cluster (no cluster.json yet — run 'chiton cluster' once)")
 		return false, nil
 	}
@@ -442,7 +442,7 @@ func (e *Engine) reembed(ctx context.Context, nodes []model.Node) (int, error) {
 	return len(embs), nil
 }
 
-// deleteURI removes a source_uri's nodes/edges, cache entry, and findings, first marking its surviving
+// deleteURI removes a source_uri's nodes, edges, cache entry, and findings, first marking its surviving
 // neighbors touched (before the edges vanish) so the re-cluster refreshes their communities.
 func (e *Engine) deleteURI(ctx context.Context, uri string) (Outcome, error) {
 	e.markSurvivorsTouched(ctx, uri)
@@ -459,7 +459,7 @@ func (e *Engine) deleteURI(ctx context.Context, uri string) (Outcome, error) {
 	return Outcome{Path: uri, Op: OpDelete, NodesDeleted: deleted}, nil
 }
 
-// markSurvivorsTouched marks a file's nodes and their ≤2-hop neighbors touched and always sets dirty.
+// markSurvivorsTouched marks a file's nodes and their neighbors within 2 hops touched, and always sets dirty.
 // Cross-file edges only point out to shared package nodes, which are the survivors whose community may shift.
 func (e *Engine) markSurvivorsTouched(ctx context.Context, uri string) {
 	fileID := model.NewNodeID(uri, uri)
@@ -536,7 +536,7 @@ func (e *Engine) takeTouched() (map[string]bool, bool) {
 }
 
 // DefaultIgnoreDir reports whether the watcher and reconciler skip a directory base name. It includes the
-// chiton output dirs so store/cache writes never feed back into the watcher.
+// chiton output dirs so store and cache writes never feed back into the watcher.
 func DefaultIgnoreDir(name string) bool {
 	switch name {
 	case ".git", ".chiton", "chiton-out", "node_modules", "vendor", ".hg", ".svn":

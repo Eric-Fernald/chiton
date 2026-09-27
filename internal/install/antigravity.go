@@ -5,7 +5,7 @@ import (
 )
 
 // Antigravity installs chiton for Google Antigravity. Its MCP config is user-global only
-// (~/.gemini/config/mcp_config.json); rules go to AGENTS.md to avoid colliding with Gemini CLI's GEMINI.md.
+// (~/.gemini/config/mcp_config.json). Rules go to AGENTS.md to avoid colliding with Gemini CLI's GEMINI.md.
 type Antigravity struct{}
 
 func (Antigravity) Name() string        { return "antigravity" }

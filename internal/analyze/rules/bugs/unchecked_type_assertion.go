@@ -10,7 +10,7 @@ import (
 )
 
 // UncheckedTypeAssertion flags single-value Go type assertions (`v := x.(T)`), which panic on a type
-// mismatch; the comma-ok form and `.(type)` switches are not flagged.
+// mismatch. It does not flag the comma-ok form or `.(type)` switches.
 type UncheckedTypeAssertion struct{}
 
 func (UncheckedTypeAssertion) Meta() analyze.Meta {
@@ -26,7 +26,8 @@ func (UncheckedTypeAssertion) Meta() analyze.Meta {
 	}
 }
 
-// A whole statement `v := expr.(T)` / `v = expr.(T)`; the single-identifier LHS excludes the comma-ok form.
+// uncheckedAssertRe matches a whole statement `v := expr.(T)` or `v = expr.(T)`. The single-identifier
+// LHS excludes the comma-ok form.
 var uncheckedAssertRe = regexp.MustCompile(
 	`^\s*[A-Za-z_]\w*\s*:?=\s*[\w.()*\[\]]*\.\(\s*[*\[\]\w./]+\s*\)\s*$`)
 

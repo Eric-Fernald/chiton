@@ -7,8 +7,8 @@ import (
 
 const fileScheme = "file://"
 
-// FileURI returns the canonical file:// source URI for path: absolute, forward slashes. If the path can't
-// be made absolute it is used as given.
+// FileURI returns the canonical file:// source URI for path, made absolute with forward slashes.
+// If path can't be made absolute, FileURI uses it as given.
 func FileURI(path string) string {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -17,7 +17,7 @@ func FileURI(path string) string {
 	return fileScheme + filepath.ToSlash(abs)
 }
 
-// PathFromFileURI inverts FileURI into an OS path; ok is false (and path "") when uri isn't a file:// URI.
+// PathFromFileURI inverts FileURI into an OS path. ok is false (and path "") when uri isn't a file:// URI.
 func PathFromFileURI(uri string) (path string, ok bool) {
 	rest, ok := strings.CutPrefix(uri, fileScheme)
 	if !ok {
@@ -27,7 +27,7 @@ func PathFromFileURI(uri string) (path string, ok bool) {
 }
 
 // Slug lowercases s and collapses each run of characters other than ASCII letters and digits to one hyphen,
-// trimming hyphens at the ends; it returns fallback when nothing is left. Node IDs depend on its output.
+// trimming hyphens at the ends, and returns fallback when nothing is left. Node IDs depend on its output.
 func Slug(s, fallback string) string {
 	var b strings.Builder
 	lastHyphen := false

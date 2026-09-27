@@ -8,9 +8,9 @@ import (
 )
 
 // Aider loads CONVENTIONS.md only when .aider.conf.yml names it under `read:`, which Aider accepts as
-// either a scalar string or a sequence; these helpers merge a filename into that list.
+// either a scalar string or a sequence. These helpers merge a filename into that list.
 
-// AddAiderRead ensures file is in the `read:` list of the Aider config at path, preserving other settings.
+// AddAiderRead adds file to the `read:` list of the Aider config at path, keeping other settings.
 // It reports whether the file was created and whether file was already listed.
 func AddAiderRead(path, file string) (created, preexisted bool, err error) {
 	doc, created, err := openDoc(path, yaml.Unmarshal)
@@ -51,11 +51,11 @@ func RemoveAiderRead(path, file string) (changed bool, err error) {
 }
 
 // AiderConfHasRead reports whether the Aider config at path lists file in its `read:` setting.
-// A missing file is false, nil.
+// It returns false, nil for a missing file.
 func AiderConfHasRead(path, file string) (bool, error) {
 	doc, _, err := readDoc(path, yaml.Unmarshal)
 	if err != nil {
-		return false, errors.Unwrap(err) // bare cause: Doctor prefixes the path itself
+		return false, errors.Unwrap(err) // return the bare cause because Doctor prefixes the path itself
 	}
 	return slices.Contains(normalizeStringList(doc["read"]), file), nil
 }

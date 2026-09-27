@@ -347,7 +347,7 @@ func openGraphStore(graphPath string, readOnly bool) (*badgerstore.Store, error)
 	return gs, nil
 }
 
-// loadStore loads the config and opens its graph store; the caller must Close the store.
+// loadStore loads the config and opens its graph store. The caller must Close the store.
 func loadStore(readOnly bool) (*config.Config, *badgerstore.Store, error) {
 	cfg, err := config.Load()
 	if err != nil {
@@ -468,7 +468,7 @@ func buildCmd() *cobra.Command {
 				}
 				if err != nil {
 					// A traversal error (e.g. permission denied) shouldn't abort the build and
-					// discard cache progress; log it and keep indexing.
+					// discard cache progress. Log it and keep indexing.
 					fmt.Fprintf(os.Stderr, "chiton: skip %s: %v\n", path, err)
 					return nil
 				}
@@ -569,7 +569,7 @@ func queryCmd() *cobra.Command {
 					noSelf = append(noSelf, n)
 				}
 			}
-			// The seed stays kept so its edges survive the source-prefix filter.
+			// Keep the seed so its edges survive the source-prefix filter.
 			filteredNodes, filteredEdges := scopeGraph(noSelf, sub.Edges, sourcePrefix, seed.ID)
 
 			out := cmd.OutOrStdout()
@@ -886,8 +886,8 @@ records in the MCP config so the server uses the same store as 'chiton build'.`,
 			if err != nil {
 				return err
 			}
-			// --graph wins so `chiton install --graph <path>` configs reach the intended store
-			// regardless of the server's working directory.
+			// --graph overrides the config so `chiton install --graph <path>` configs reach the intended
+			// store regardless of the server's working directory.
 			if graphPath != "" {
 				cfg.GraphPath = graphPath
 			}
@@ -906,14 +906,14 @@ records in the MCP config so the server uses the same store as 'chiton build'.`,
 			deps := buildSemanticDeps(cmd, cfg, gs, clusterResults)
 			s := mcpsrv.New(gs, clusterResults, deps)
 
-			// All three transports expose the identical tool surface.
+			// All three transports expose the same tool set.
 			switch {
 			case stdio:
 				return mcpsdk.ServeStdio(s)
 			case unixPath != "":
 				return serveUnix(cmd, mcpsdk.NewSSEServer(s), unixPath)
 			default:
-				// The MCP server has no authentication, so warn loudly (but don't block) on a wide bind.
+				// The MCP server has no authentication, so warn without blocking on a wildcard bind.
 				warnIfNonLoopback(cmd.ErrOrStderr(),
 					addr, "the MCP server, which has NO authentication — the entire graph (code, meetings, emails, PII) would be readable by anyone on the network")
 				sse := mcpsdk.NewSSEServer(s)
@@ -931,12 +931,12 @@ records in the MCP config so the server uses the same store as 'chiton build'.`,
 	return cmd
 }
 
-// buildSemanticDeps assembles the semantic MCP services. Embedder failures are logged, not fatal, so the
-// structural tools still serve; the retriever is wired only when embeddings exist.
+// buildSemanticDeps assembles the semantic MCP services. It logs embedder failures instead of failing, so
+// the structural tools still work, and wires the retriever only when embeddings exist.
 func buildSemanticDeps(cmd *cobra.Command, cfg *config.Config, gs store.GraphStore, clusterResults *cluster.Results) mcpsrv.Deps {
 	errOut := cmd.ErrOrStderr()
 
-	// Wire the store-only services first: a misconfigured embedder must not take them offline.
+	// Wire the store-only services first so a misconfigured embedder can't disable them.
 	var deps mcpsrv.Deps
 	deps.LLM = analyze.NewLLMService(gs, nil, cfg.Semantic.ConfidenceThreshold, chitonDir)
 	deps.BaselineDir = analyze.BaselineDir(chitonDir)

@@ -1,4 +1,4 @@
-// Package database contains deterministic rules in the database category; they fire only on
+// Package database contains deterministic rules in the database category. They fire only on
 // unambiguous patterns to keep false positives low.
 package database
 

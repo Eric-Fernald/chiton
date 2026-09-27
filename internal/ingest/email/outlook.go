@@ -17,7 +17,7 @@ import (
 	"github.com/microsoftgraph/msgraph-sdk-go/users"
 )
 
-// outlookScopes is the app-only .default scope; it needs the admin-consented Mail.Read application permission.
+// outlookScopes is the app-only .default scope. It needs the admin-consented Mail.Read application permission.
 var outlookScopes = []string{"https://graph.microsoft.com/.default"}
 
 // OutlookSource is the Microsoft Graph implementation of Source.
@@ -59,7 +59,7 @@ func NewOutlookSourceFromEnv() (*OutlookSource, error) {
 // Name implements Source.
 func (s *OutlookSource) Name() string { return "outlook" }
 
-// Messages implements Source: it lists the mailbox's newest messages, optionally filtered by received date.
+// Messages implements Source by listing the mailbox's newest messages, optionally filtered by received date.
 func (s *OutlookSource) Messages(ctx context.Context, opts Query) ([]Message, error) {
 	top := int32(50)
 	if opts.Max > 0 {

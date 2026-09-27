@@ -8,11 +8,11 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// MaxConsecutiveBlankLines is the longest allowed run of blank lines: two are idiomatic (e.g.
-// between Go top-level decls); three or more are almost always accidental.
+// MaxConsecutiveBlankLines is the longest allowed run of blank lines. Two are idiomatic, for example
+// between Go top-level decls, and three or more are almost always accidental.
 const MaxConsecutiveBlankLines = 2
 
-// MultipleBlankLines flags runs of 3+ blank (empty or whitespace-only) lines, once per run at
+// MultipleBlankLines flags runs of three or more blank (empty or whitespace-only) lines, once per run at
 // the first excess line, to stay low-noise.
 type MultipleBlankLines struct{}
 

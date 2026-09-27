@@ -362,8 +362,8 @@ func TestIncrementalReclusterUpdatesSidecar(t *testing.T) {
 	}
 }
 
-// TestSyncReportsReclustered pins BatchSummary.Reclustered: set exactly when a sidecar exists after the batch,
-// including a batch that changed nothing.
+// TestSyncReportsReclustered checks that BatchSummary.Reclustered is set exactly when a sidecar exists after
+// the batch, including a batch that changed nothing.
 func TestSyncReportsReclustered(t *testing.T) {
 	h := newHarness(t, false, false)
 	ctx := context.Background()
@@ -388,15 +388,15 @@ func TestSyncReportsReclustered(t *testing.T) {
 	}
 	sync(true) // unchanged, sidecar exists
 	h.write(t, "a.go", "package src\nfunc A() {}\nfunc B() {}\n")
-	sync(true) // changed: re-clustered
+	sync(true) // changed, re-clustered
 	if err := os.Remove(p); err != nil {
 		t.Fatal(err)
 	}
-	sync(true) // pruned: re-clustered
+	sync(true) // pruned, re-clustered
 }
 
-// TestWatchGracefulShutdown drives start → index a new file → cancel, then checks the store reopens cleanly
-// with the change persisted (Ctrl-C → cancel → drain → Close is the supported shutdown path).
+// TestWatchGracefulShutdown starts Watch, indexes a new file, and cancels, then checks the store reopens
+// cleanly with the change persisted. The supported shutdown path is Ctrl-C, cancel, drain, then Close.
 func TestWatchGracefulShutdown(t *testing.T) {
 	root := t.TempDir()
 	src := filepath.Join(root, "src")

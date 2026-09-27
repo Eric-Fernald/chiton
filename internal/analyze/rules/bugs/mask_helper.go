@@ -6,7 +6,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/analyze"
 )
 
-// The maskers below replace literal and comment bodies with 'x', keeping newlines so line numbers hold.
+// The maskers below replace literal and comment bodies with 'x' and keep newlines to preserve line numbers.
 // They track block comments and multi-line strings across lines, so mask the whole file once.
 
 // maskJSLiteralsAndComments masks JS/TS string, template, and regex literal bodies plus comments. A `/`
@@ -107,7 +107,7 @@ func maskJSLiteralsAndComments(src []byte) []byte {
 }
 
 // regexCanStart reports whether a `/` after the significant byte prev opens a regex literal rather than
-// division: prev is absent (start of input) or cannot end an expression operand.
+// division. That holds when prev is absent (start of input) or cannot end an expression operand.
 func regexCanStart(prev byte) bool {
 	switch prev {
 	case 0,

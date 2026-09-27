@@ -1,5 +1,5 @@
-// Package teams ingests Microsoft Teams meeting transcripts: fetched as WebVTT, they go through the same
-// meeting parser as a local .vtt, so meeting→code linkage applies unchanged.
+// Package teams ingests Microsoft Teams meeting transcripts. It fetches them as WebVTT and parses them
+// with the same meeting parser as a local .vtt, so meeting-to-code linkage applies unchanged.
 package teams
 
 import (
@@ -27,13 +27,13 @@ type TranscriptSource interface {
 	FetchContent(ctx context.Context, meetingID, transcriptID string) ([]byte, error)
 }
 
-// GraphConfig configures the Microsoft Graph transcript source (app-only auth); shared by both msgraph builds.
+// GraphConfig configures the Microsoft Graph transcript source (app-only auth). Both msgraph builds share it.
 type GraphConfig struct {
 	TenantID     string
 	ClientID     string
 	ClientSecret string
-	// UserID is the meeting organizer's id or UPN: transcripts are read under
-	// /users/{UserID}/onlineMeetings/... (app-only has no /me).
+	// UserID is the meeting organizer's id or UPN. Transcripts are read under
+	// /users/{UserID}/onlineMeetings/... because app-only auth has no /me.
 	UserID string
 }
 

@@ -12,7 +12,7 @@ import (
 const eps = 1e-10
 
 // Run maps each node ID to a community ID. Higher resolution γ yields smaller communities (1.0 is standard
-// modularity); a nil rng uses a fixed seed.
+// modularity). A nil rng uses a fixed seed.
 func Run(nodes []model.Node, edges []model.Edge, resolution float64, rng *rand.Rand) map[string]int {
 	if len(nodes) == 0 {
 		return nil
@@ -41,7 +41,7 @@ func Run(nodes []model.Node, edges []model.Edge, resolution float64, rng *rand.R
 // ── internal graph ────────────────────────────────────────────────────────────
 
 // graph is an undirected weighted graph with 0-based integer node indices.
-// Input edges weigh 1.0; aggregation sums them.
+// Input edges weigh 1.0, and aggregation sums them.
 type graph struct {
 	n      int
 	adj    [][]nbr
@@ -133,8 +133,8 @@ func (cw *commWeights) clear() {
 
 // ── local moving ──────────────────────────────────────────────────────────────
 
-// moveNodes moves nodes to the neighbouring community with the best modularity gain for up to 20 sweeps,
-// reporting whether any moved; a non-nil coarse restricts moves to communities within the node's coarse community.
+// moveNodes moves nodes to the neighbouring community with the best modularity gain for up to 20 sweeps and
+// reports whether any moved. A non-nil coarse keeps each move inside the node's coarse community.
 func moveNodes(g *graph, st *pstate, γ float64, rng *rand.Rand, coarse []int) bool {
 	if g.totalW == 0 {
 		return false
@@ -188,8 +188,8 @@ func moveNodes(g *graph, st *pstate, γ float64, rng *rand.Rand, coarse []int) b
 
 // ── Leiden refinement ─────────────────────────────────────────────────────────
 
-// refine re-runs local moving from singletons, merging only within each coarse community: Leiden's
-// guarantee, unlike Louvain, that every community is well-connected before aggregation.
+// refine re-runs local moving from singletons, merging only within each coarse community. This gives Leiden's
+// guarantee, which Louvain lacks, that every community is well-connected before aggregation.
 func refine(g *graph, coarseComm []int, γ float64, rng *rand.Rand) []int {
 	st := singletonState(g)
 	// Fine community c starts as the singleton {c}, so coarseComm[c] is its coarse community.

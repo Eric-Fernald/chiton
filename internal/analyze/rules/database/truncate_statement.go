@@ -8,8 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// TruncateStatement flags TRUNCATE TABLE in source: it empties a table and, on most engines,
-// cannot be rolled back like a DELETE.
+// TruncateStatement flags TRUNCATE TABLE in source. It empties a table, and most engines cannot roll it
+// back the way they can a DELETE.
 type TruncateStatement struct{}
 
 func (TruncateStatement) Meta() analyze.Meta {

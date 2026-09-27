@@ -6,7 +6,7 @@ import (
 	"net"
 )
 
-// warnIfNonLoopback warns (never blocks) when addr is a literal wildcard bind; named hosts aren't resolved.
+// warnIfNonLoopback warns without blocking when addr is a literal wildcard bind. Named hosts aren't resolved.
 // what is a noun phrase completing "…listens on ALL network interfaces, exposing <what>".
 func warnIfNonLoopback(w io.Writer, addr, what string) {
 	if !isWildcardAddr(addr) {

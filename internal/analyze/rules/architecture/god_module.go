@@ -8,8 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// GodModuleSymbolThreshold is the CONTAINS-out count above which a file is flagged as a god
-// module, calibrated for typical 200-500-line files.
+// GodModuleSymbolThreshold is the outgoing CONTAINS edge count above which GodModule flags a file. It is
+// calibrated for typical 200-500-line files.
 const GodModuleSymbolThreshold = 25
 
 // GodModule flags files containing more than GodModuleSymbolThreshold

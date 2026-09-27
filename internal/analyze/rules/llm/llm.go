@@ -1,5 +1,5 @@
-// Package llm holds chiton's LLM rules: metadata plus a prompt, evaluated by the host assistant via
-// subagent dispatch for semantic cases deterministic rules can't cover.
+// Package llm holds chiton's LLM rules. Each is metadata and a prompt that the host assistant evaluates
+// through subagent dispatch, for semantic cases deterministic rules can't cover.
 package llm
 
 import "github.com/Eric-Fernald/chiton/internal/analyze"

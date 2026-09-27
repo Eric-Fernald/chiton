@@ -9,7 +9,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// ContextTODO flags `context.TODO()` / `context.Background()` in non-test, non-main Go code: deadline-less
+// ContextTODO flags `context.TODO()` or `context.Background()` in non-test, non-main code as deadline-less
 // contexts that suppress cancellation and timeout propagation.
 type ContextTODO struct{}
 
@@ -57,7 +57,7 @@ func isGoTestFile(path string) bool {
 	return len(path) > 8 && path[len(path)-8:] == "_test.go"
 }
 
-// isGoMainFile approximates the package clause by basename alone; "main.go" is a near-perfect signal.
+// isGoMainFile approximates the package clause by basename alone, since "main.go" is a near-perfect signal.
 func isGoMainFile(path string) bool {
 	return analyze.PathBase(path) == "main.go"
 }

@@ -1,5 +1,5 @@
-// Package crypto handles chiton's at-rest encryption: an Argon2id key from a passphrase that is never
-// stored (the keyfile holds only salt+params, so the same inputs reopen BadgerDB) and AES-256-GCM files.
+// Package crypto handles chiton's at-rest encryption. It derives an Argon2id key from a passphrase and
+// seals files with AES-256-GCM. The keyfile stores only salt and params, so the same inputs reopen BadgerDB.
 package crypto
 
 import (
@@ -20,8 +20,8 @@ import (
 // that breaks readers.
 const KeyFileVersion = 1
 
-// Floors (not defaults) for a loaded keyfile's Argon2id params: a corrupt or tampered keyfile must
-// fail clearly rather than panic inside argon2 (iterations/parallelism < 1) or derive a weak key.
+// These are floors, not defaults, for a loaded keyfile's Argon2id params. A corrupt or tampered keyfile must
+// fail clearly rather than panic inside argon2 (iterations or parallelism below 1) or derive a weak key.
 const (
 	minMemoryKiB   = 8 * 1024 // 8 MiB floor — well below the 64 MiB default
 	minIterations  = 1
@@ -30,8 +30,8 @@ const (
 	keyLengthBytes = 32 // AES-256; every chiton consumer requires exactly this
 )
 
-// KeyFile is the on-disk metadata for deriving a chiton encryption key from a passphrase (never
-// persisted). Defaults follow OWASP 2024 Argon2id guidance: 64 MiB, 3 iterations, parallelism 4.
+// KeyFile is the on-disk metadata for deriving a chiton encryption key from a passphrase, which is never
+// persisted. Defaults follow OWASP 2024 Argon2id guidance: 64 MiB, 3 iterations, parallelism 4.
 type KeyFile struct {
 	Version     int    `json:"version"`
 	KDF         string `json:"kdf"`         // "argon2id"
@@ -71,7 +71,7 @@ func (kf *KeyFile) Salt() ([]byte, error) {
 	return b, nil
 }
 
-// validate rejects malformed or sub-floor params: argon2.IDKey panics when Iterations or Parallelism
+// validate rejects malformed or sub-floor params because argon2.IDKey panics when Iterations or Parallelism
 // is below 1, and low cost params or a short salt would silently weaken the key.
 func (kf *KeyFile) validate() error {
 	if kf.KDF != "argon2id" {
@@ -119,8 +119,8 @@ func (kf *KeyFile) DeriveKey(passphrase string) ([]byte, error) {
 	), nil
 }
 
-// Save atomically writes the keyfile to path with mode 0600. An existing file is kept unless force is set:
-// regenerating the salt would lock the user out of existing encrypted data.
+// Save atomically writes the keyfile to path with mode 0600. It keeps an existing file unless force is set,
+// since regenerating the salt would lock the user out of existing encrypted data.
 func (kf *KeyFile) Save(path string, force bool) error {
 	if !force {
 		if _, err := os.Stat(path); err == nil {

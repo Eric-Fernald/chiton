@@ -21,7 +21,7 @@ type Extractor interface {
 	ExtractSource(ctx context.Context, path string, src []byte) ([]model.Node, []model.Edge, error)
 }
 
-// extractFile is every extractor's ExtractFile: read path, then hand the bytes to ExtractSource.
+// extractFile implements ExtractFile for every extractor. It reads path and hands the bytes to ExtractSource.
 func extractFile(ctx context.Context, ex Extractor, path string) ([]model.Node, []model.Edge, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
@@ -68,8 +68,8 @@ func newFileNode(path string, src []byte, attrs map[string]any) model.Node {
 	}
 }
 
-// findWith runs re on line only if line contains lit, a literal every match of re includes; the cheap
-// substring check spares unanchored patterns a full-line scan on the many lines that cannot match.
+// findWith runs re on line only if line contains lit, a literal that every match of re includes. The cheap
+// substring check avoids a full-line scan by an unanchored pattern on the many lines that cannot match.
 func findWith(re *regexp.Regexp, line, lit string) []string {
 	if !strings.Contains(line, lit) {
 		return nil
@@ -186,7 +186,7 @@ func (g *fileGraph) addLineCalls(line, callerID string, reCall *regexp.Regexp, i
 	}
 }
 
-// funcRecord is a function whose body pass 2 scans for calls; indent is used only by Python.
+// funcRecord is a function whose body pass 2 scans for calls. Only the Python extractor uses indent.
 type funcRecord struct {
 	lineStart, indent int
 	id                string
@@ -203,7 +203,7 @@ func (g *fileGraph) addBraceCalls(lines []string, funcs []funcRecord, dedentEnds
 	}
 }
 
-// scopeFrame is an open brace scope; pushDepth is the brace depth before its opening {.
+// scopeFrame is an open brace scope. pushDepth is the brace depth before its opening {.
 type scopeFrame struct {
 	kind, name string
 	pushDepth  int
@@ -234,8 +234,8 @@ func (s braceScopes) enclosing(kinds ...string) string {
 	return ""
 }
 
-// scan calls visit(i, line, depth before line, its { count) for each line not opening inside /* */ nor
-// matched by skip (given the line left-trimmed), then pops the scopes the line closed.
+// scan calls visit(i, line, pre, open) for each line that neither starts inside /* */ nor matches skip when
+// left-trimmed (pre is the prior brace depth and open the line's { count), then pops the scopes it closed.
 func (s *braceScopes) scan(lines []string, skip func(trimmed string) bool, visit func(i int, line string, pre, open int)) {
 	depth, inBlock := 0, false
 	for i, line := range lines {
@@ -350,7 +350,7 @@ func importEdge(fileID, pkgNodeID string) model.Edge {
 	}
 }
 
-// countLineBraces counts { and } outside strings and comments; inBlock threads /* */ state across lines so a
+// countLineBraces counts { and } outside strings and comments. inBlock carries /* */ state across lines so a
 // brace inside a comment (JSDoc, commented-out code) never pops the enclosing scope.
 func countLineBraces(line string, inBlock bool) (open, close int, stillInBlock bool) {
 	var inStr byte // 0, '"', '\'', or '`'

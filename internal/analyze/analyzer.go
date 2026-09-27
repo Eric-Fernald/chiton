@@ -23,7 +23,7 @@ type Analyzer struct {
 	now      func() time.Time
 
 	fileRulesOnce sync.Once
-	fileRules     fileRuleSet // AnalyzeFile's rule list, built lazily by fileRuleSet
+	fileRules     fileRuleSet // AnalyzeFile's rule list, which the fileRuleSet method builds lazily
 }
 
 // New returns an Analyzer wired to the given store and rule registry.
@@ -95,7 +95,8 @@ type walkResult struct {
 	nodes    []model.Node
 	edges    []model.Edge
 	findings []Finding
-	// scannedURIs scopes pruneResolved to files re-analysed now, so `analyze <subdir>` spares the rest.
+	// scannedURIs limits pruneResolved to the files analysed in this pass, so `analyze <subdir>` leaves
+	// findings for other files alone.
 	scannedURIs  map[string]bool
 	filesScanned int
 }
@@ -155,13 +156,13 @@ func (a *Analyzer) matchGraphRules(ctx context.Context, graphRules []GraphRule, 
 	return findings
 }
 
-// persist upserts rule nodes (so VIOLATES edges resolve), finding nodes, and VIOLATES/AFFECTS edges,
-// returning the set of finding IDs so each is hashed once.
+// persist upserts rule nodes (so VIOLATES edges resolve), finding nodes, and VIOLATES and AFFECTS edges.
+// It returns the set of finding IDs so callers need not hash each finding again.
 func (a *Analyzer) persist(ctx context.Context, rules []Rule, findings []Finding) (map[string]bool, error) {
 	now := a.now()
 
 	nodes := make([]model.Node, 0, len(rules)+len(findings))
-	ruleNodes := make(map[string]string, len(rules)) // rule ID -> RuleNodeID
+	ruleNodes := make(map[string]string, len(rules)) // maps rule ID to RuleNodeID
 	for _, r := range rules {
 		n := RuleAsNode(r.Meta(), now)
 		ruleNodes[n.Label] = n.ID
@@ -188,8 +189,8 @@ func (a *Analyzer) persist(ctx context.Context, rules []Rule, findings []Finding
 	return ids, nil
 }
 
-// pruneResolved deletes deterministic findings not in newIDs for a scanned file (LLM findings keep
-// their own lifecycle); a non-nil ruleScope limits it to the rule IDs that actually ran.
+// pruneResolved deletes a scanned file's deterministic findings that are missing from newIDs. LLM findings
+// are pruned separately. A non-nil ruleScope limits the delete to the rule IDs that ran.
 func (a *Analyzer) pruneResolved(ctx context.Context, scanned map[string]bool, newIDs map[string]bool, ruleScope map[string]bool) error {
 	if len(scanned) == 0 {
 		return nil
@@ -204,7 +205,7 @@ func (a *Analyzer) pruneResolved(ctx context.Context, scanned map[string]bool, n
 	var stale []model.Node
 	for _, n := range findings {
 		if ruleScope != nil && !ruleScope[model.AttrString(n.Attrs, "rule_id")] {
-			continue // a rule not run in this pass — leave its findings intact
+			continue // this pass did not run the rule, so leave its findings intact
 		}
 		if !scanned[model.AttrString(n.Attrs, "target_uri")] || newIDs[n.ID] {
 			continue
@@ -214,8 +215,8 @@ func (a *Analyzer) pruneResolved(ctx context.Context, scanned map[string]bool, n
 	return deleteFindingNodes(ctx, a.store, stale)
 }
 
-// deleteFindingNodes removes the nodes (and edges) via NodeDeleter when available, else per-node
-// DeleteBySourceURI; finding source URIs are unique, so both delete exactly these nodes.
+// deleteFindingNodes removes the nodes and their edges with NodeDeleter when available, else calls
+// DeleteBySourceURI per node. Finding source URIs are unique, so both paths delete exactly these nodes.
 func deleteFindingNodes(ctx context.Context, gs store.GraphStore, nodes []model.Node) error {
 	if len(nodes) == 0 {
 		return nil
@@ -238,8 +239,8 @@ func deleteFindingNodes(ctx context.Context, gs store.GraphStore, nodes []model.
 	return nil
 }
 
-// loadFileTarget reads and extracts path; ok is false for unsupported, unreadable, or unparsable
-// files. nodes is the full extraction, including the file node that ft.Nodes omits.
+// loadFileTarget reads and extracts path. ok is false for an unsupported, unreadable, or unparsable
+// file. nodes is the full extraction, including the file node that ft.Nodes omits.
 func loadFileTarget(ctx context.Context, path string) (ft FileTarget, nodes []model.Node, ok bool) {
 	ex := extast.ForFile(path)
 	if ex == nil {

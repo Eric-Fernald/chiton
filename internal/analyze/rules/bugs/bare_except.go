@@ -8,8 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// BareExcept flags Python `except:` (no exception class) and JS/TS `catch () {`: both swallow every
-// exception, including KeyboardInterrupt / TypeError, and hide real bugs.
+// BareExcept flags Python `except:` (no exception class) and JS/TS `catch () {`. Both swallow every
+// exception, including KeyboardInterrupt and TypeError, and hide real bugs.
 type BareExcept struct{}
 
 func (BareExcept) Meta() analyze.Meta {

@@ -8,8 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// LikeLeadingWildcard flags a literal `LIKE '%...'` pattern, which defeats B-tree indexes;
-// prefix patterns (`LIKE 'foo%'`) and parameterized `LIKE ?` are left alone.
+// LikeLeadingWildcard flags a literal `LIKE '%...'` pattern, which defeats B-tree indexes. It leaves
+// prefix patterns (`LIKE 'foo%'`) and parameterized `LIKE ?` alone.
 type LikeLeadingWildcard struct{}
 
 func (LikeLeadingWildcard) Meta() analyze.Meta {

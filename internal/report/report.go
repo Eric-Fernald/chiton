@@ -39,7 +39,7 @@ func Generate(w io.Writer, results *cluster.Results, edges []model.Edge, opts Op
 		all = append(all, entry{id, r})
 	}
 	slices.SortFunc(all, func(a, b entry) int {
-		// Same ranking as the CLI and MCP god-node lists; ID last so output is fully reproducible.
+		// Rank like the CLI and MCP god-node lists, breaking ties by ID so the output is reproducible.
 		return cmp.Or(cluster.CompareByBetweenness(a.r, b.r), cmp.Compare(a.id, b.id))
 	})
 

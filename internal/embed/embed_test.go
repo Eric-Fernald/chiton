@@ -174,7 +174,7 @@ func TestNodeEmbeddingsPairsEmbeddableNodes(t *testing.T) {
 	ctx := context.Background()
 	nodes := []model.Node{
 		{ID: "s", Kind: model.KindSymbol, Label: "Retry"},
-		{ID: "f", Kind: model.KindFile, Label: "main.go"}, // not embeddable: skipped
+		{ID: "f", Kind: model.KindFile, Label: "main.go"}, // not embeddable, so NodeEmbeddings skips it
 		{ID: "c", Kind: model.KindConcept, Label: "Idempotency"},
 	}
 	h := NewHashEmbedder(16)
@@ -186,7 +186,7 @@ func TestNodeEmbeddingsPairsEmbeddableNodes(t *testing.T) {
 		t.Fatal("vector not paired with its node's text")
 	}
 
-	// A short response is truncated and flagged; no embeddable node means no Embed call at all.
+	// NodeEmbeddings truncates and flags a short response. With no embeddable node, it never calls Embed.
 	if embs, exact, err := NodeEmbeddings(ctx, shortEmbedder{h}, nodes); err != nil || exact || len(embs) != 1 || embs[0].NodeID != "s" {
 		t.Fatalf("short: got %+v exact=%v err=%v", embs, exact, err)
 	}

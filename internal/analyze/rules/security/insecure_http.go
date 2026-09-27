@@ -61,8 +61,8 @@ func (InsecureHTTP) MatchFile(_ context.Context, t analyze.FileTarget) []analyze
 	return out
 }
 
-// isTestFile detects Go, JS/TS, and Python test files by path; unlike analyze.IsTestSource it also
-// matches test/ dirs and test_*.py / *_test.py.
+// isTestFile detects Go, JS/TS, and Python test files by path. Unlike analyze.IsTestSource it also
+// matches test/ directories, test_*.py, and *_test.py.
 func isTestFile(path string) bool {
 	lp := strings.ToLower(path)
 	switch {
@@ -79,7 +79,7 @@ func isTestFile(path string) bool {
 }
 
 // containsAny is a cheap exact pre-check for a regex set in which every pattern requires one of
-// lits case-sensitively; it skips the regex work on the vast majority of lines.
+// lits case-sensitively. It skips the regex work on most lines.
 func containsAny(s string, lits ...string) bool {
 	for _, l := range lits {
 		if strings.Contains(s, l) {

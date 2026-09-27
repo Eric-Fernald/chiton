@@ -9,8 +9,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// DeleteUpdateNoWhere flags a DELETE/UPDATE whose whole statement is terminated on one line with no
-// WHERE anywhere on it; statements that continue onto the next line are skipped.
+// DeleteUpdateNoWhere flags a DELETE or UPDATE statement that starts and ends on one line with no WHERE.
+// It skips statements that continue onto the next line.
 type DeleteUpdateNoWhere struct{}
 
 func (DeleteUpdateNoWhere) Meta() analyze.Meta {
@@ -43,7 +43,7 @@ func (DeleteUpdateNoWhere) MatchFile(_ context.Context, t analyze.FileTarget) []
 		if whereClauseRe.MatchString(text) {
 			continue
 		}
-		// A trailing concatenation/continuation token means the WHERE may be on a later line.
+		// A trailing concatenation or continuation token means the WHERE may be on a later line.
 		if continuesToNextLine(text) {
 			continue
 		}

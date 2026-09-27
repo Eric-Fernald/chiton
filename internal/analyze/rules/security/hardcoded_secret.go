@@ -11,7 +11,7 @@ import (
 )
 
 // HardcodedSecret flags lines that look like inline credentials, using only vendor-specific
-// token/key patterns so the rule stays low false-positive.
+// token and key patterns so the rule produces few false positives.
 type HardcodedSecret struct{}
 
 func (HardcodedSecret) Meta() analyze.Meta {

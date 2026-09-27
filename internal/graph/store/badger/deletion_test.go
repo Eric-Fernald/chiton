@@ -115,7 +115,8 @@ func TestReadOnlyReflectsOpenMode(t *testing.T) {
 	}
 }
 
-// An imported edge kind may contain ':'; adjacency keys must still resolve to the right endpoints.
+// TestColonEdgeKindAdjacency checks that adjacency keys resolve to the right endpoints when an imported edge
+// kind contains ':'.
 func TestColonEdgeKindAdjacency(t *testing.T) {
 	ctx := context.Background()
 	gs, err := Open(filepath.Join(t.TempDir(), "graph.badger"))

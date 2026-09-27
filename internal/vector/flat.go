@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// Flat is an exact cosine index; vectors are L2-normalized on insert so a search is a dot product.
+// Flat is an exact cosine index. It L2-normalizes vectors on insert, so a search is a dot product.
 // Not safe for concurrent mutation; build once, then read.
 type Flat struct {
 	ids  []string
@@ -18,7 +18,7 @@ type Flat struct {
 // NewFlat returns an empty Flat index.
 func NewFlat() *Flat { return NewFlatSized(0) }
 
-// NewFlatSized returns an empty Flat index with room for n vectors, so a caller that knows its count never regrows.
+// NewFlatSized returns an empty Flat index presized for n vectors, so adding n of them never regrows it.
 func NewFlatSized(n int) *Flat {
 	return &Flat{ids: make([]string, 0, n), vecs: make([][]float32, 0, n), pos: make(map[string]int, n)}
 }
@@ -51,7 +51,7 @@ func (f *Flat) Search(query []float32, k int) []Result {
 		return nil
 	}
 
-	// top is a min-heap of the best k hits seen so far (root = worst kept), so a scan is O(n log k).
+	// top is a min-heap of the best k hits seen so far, rooted at the worst one kept, so a scan is O(n log k).
 	top := make([]Result, 0, min(k, len(f.ids)))
 	for i, v := range f.vecs {
 		if len(v) != len(q) {
@@ -75,7 +75,7 @@ func (f *Flat) Search(query []float32, k int) []Result {
 	return top
 }
 
-// rankOrder is Search's result order: descending score, ties broken by ascending ID.
+// rankOrder compares results in Search order, by descending score and then ascending ID.
 func rankOrder(a, b Result) int {
 	if c := cmp.Compare(b.Score, a.Score); c != 0 {
 		return c

@@ -162,8 +162,8 @@ func quoteTOML(s string) string {
 }
 
 func TestEmbedDimEnvOverrideApplies(t *testing.T) {
-	// Regression: embed.dim has no SetDefault, so viper's Unmarshal skipped it and
-	// CHITON_EMBED_DIM was silently ignored.
+	// embed.dim has no SetDefault, so viper's Unmarshal used to skip it and
+	// silently ignore CHITON_EMBED_DIM.
 	isolate(t)
 	t.Setenv("CHITON_EMBED_DIM", "1536")
 

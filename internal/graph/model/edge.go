@@ -69,7 +69,7 @@ func NewEdgeID(src, dst string, kind EdgeKind) string {
 	return hex.EncodeToString(h[:16])
 }
 
-// ParseEdgeKinds upper-cases user-supplied edge kind names; nil (every kind) when none are given.
+// ParseEdgeKinds upper-cases user-supplied edge kind names, returning nil (every kind) when none are given.
 func ParseEdgeKinds(names []string) []EdgeKind {
 	if len(names) == 0 {
 		return nil

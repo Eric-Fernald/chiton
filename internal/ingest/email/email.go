@@ -1,5 +1,5 @@
-// Package email ingests .eml/.mbox files, Outlook and Gmail as email nodes with doc_section body children.
-// Participants become PII person:// nodes keyed on address; they do not merge with meeting speaker nodes.
+// Package email ingests .eml and .mbox files, Outlook, and Gmail as email nodes with doc_section body
+// children. Participants become PII person:// nodes keyed on address and do not merge with meeting speakers.
 package email
 
 import (
@@ -62,13 +62,13 @@ type Source interface {
 	Name() string
 }
 
-// OutlookConfig configures the Microsoft Graph mail source (app-only auth); shared by both msgraph builds.
+// OutlookConfig configures the Microsoft Graph mail source (app-only auth). Both msgraph builds share it.
 type OutlookConfig struct {
 	TenantID     string
 	ClientID     string
 	ClientSecret string
-	// UserID is the mailbox owner's id or UPN: messages are read under
-	// /users/{UserID}/messages (app-only has no /me).
+	// UserID is the mailbox owner's id or UPN. Messages are read under
+	// /users/{UserID}/messages because app-only auth has no /me.
 	UserID string
 }
 
@@ -92,8 +92,8 @@ type Report struct {
 	References    int    `json:"references"`
 }
 
-// MessageURI returns a stable source_uri: the Message-ID when present (so the same mail from a file and from
-// Gmail dedupes), else a content hash.
+// MessageURI returns a stable source_uri from the Message-ID when present, so the same mail from a file
+// and from Gmail dedupes, or else from a content hash.
 func MessageURI(m Message) string {
 	if id := sanitizeMessageID(m.MessageID); id != "" {
 		return "email://message/" + id
@@ -107,7 +107,7 @@ func MessageURI(m Message) string {
 }
 
 // Ingest upserts each message from src as an email subgraph keyed on its email:// URI, so re-ingest replaces
-// rather than duplicates; replies get a REFERENCES edge only when the parent is in the same batch.
+// rather than duplicates. Replies get a REFERENCES edge only when the parent is in the same batch.
 func (i *Ingester) Ingest(ctx context.Context, src Source, opts Query) (Report, error) {
 	if store.IsReadOnly(i.store) {
 		return Report{}, fmt.Errorf("email: store is read-only — use the 'chiton email' CLI or restart 'chiton serve --writable'")
@@ -395,7 +395,7 @@ func runeBoundary(s string, limit int) int {
 		i--
 	}
 	if i == 0 {
-		return limit // pathological (no boundary found); force progress
+		return limit // no boundary found (pathological), so force progress
 	}
 	return i
 }

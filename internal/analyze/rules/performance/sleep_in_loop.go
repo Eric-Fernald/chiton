@@ -8,7 +8,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// SleepInLoop flags time.Sleep / time.sleep / Thread.sleep inside a loop body, at low severity
+// SleepInLoop flags time.Sleep, time.sleep, or Thread.sleep inside a loop body, at low severity
 // since polling and backoff loops sometimes sleep on purpose.
 type SleepInLoop struct{}
 

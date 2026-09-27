@@ -1,4 +1,4 @@
-// Package kuzu is a placeholder for a Kuzu (CGo) graph store; every method returns ErrUnavailable,
+// Package kuzu is a placeholder for a Kuzu (CGo) graph store. Every method returns ErrUnavailable,
 // so use the badger store.
 package kuzu
 

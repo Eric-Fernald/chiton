@@ -220,7 +220,7 @@ func TestDrainProcessesRequeuedWork(t *testing.T) {
 }
 
 // TestStressEnqueueDuringFire hammers Enqueue against timer fires on a tiny debounce, the interleaving
-// that once double-fired a callback and panicked on a negative WaitGroup; not panicking is the guard.
+// that once double-fired a callback and panicked on a negative WaitGroup. The test passes if nothing panics.
 func TestStressEnqueueDuringFire(t *testing.T) {
 	var runs int32
 	q := New(func(_ context.Context, _ string) error {
@@ -258,8 +258,8 @@ func TestStressEnqueueDuringFire(t *testing.T) {
 	}
 }
 
-// TestNoConcurrentSelfRun guards that a key never runs concurrently with itself; each run is held open
-// to widen the race that lands a key in ready twice. Run with -race for full coverage.
+// TestNoConcurrentSelfRun checks that a key never runs concurrently with itself. The handler holds each run
+// open to widen the race that lands a key in ready twice. Run with -race for full coverage.
 func TestNoConcurrentSelfRun(t *testing.T) {
 	var mu sync.Mutex
 	inFlight := map[string]int{}

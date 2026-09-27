@@ -9,8 +9,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// PanicInSource flags an explicit `panic(` in non-test Go source: unrecovered, it crashes the process, so
-// library code should return an error and let callers decide.
+// PanicInSource flags an explicit `panic(` in non-test Go source. An unrecovered panic crashes the
+// process, so library code should return an error and let callers decide.
 type PanicInSource struct{}
 
 func (PanicInSource) Meta() analyze.Meta {

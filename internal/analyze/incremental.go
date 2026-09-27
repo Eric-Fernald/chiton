@@ -9,11 +9,11 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
 )
 
-// AnalyzeFile is the single-file counterpart of Analyze for live sync: it runs only FileRules
-// (GraphScope rules need the whole corpus), and an unsupported or unreadable path is a no-op.
+// AnalyzeFile is the single-file version of Analyze for live sync. It runs only FileRules, because
+// GraphScope rules need the whole corpus. An unsupported or unreadable path is a no-op.
 func (a *Analyzer) AnalyzeFile(ctx context.Context, path string) (*Result, error) {
 	start := a.now()
-	// A read or parse failure (e.g. removed mid-flight) leaves existing findings untouched.
+	// A read or parse failure, such as a file deleted during the read, leaves existing findings untouched.
 	ft, _, ok := loadFileTarget(ctx, path)
 	if !ok {
 		return &Result{}, nil
@@ -52,7 +52,7 @@ func (a *Analyzer) analyzeTarget(ctx context.Context, ft FileTarget, start time.
 	if ft.URI != "" {
 		scanned[ft.URI] = true
 	}
-	// Scope the prune to the rules just run: this file's GraphScope findings must survive the edit.
+	// Limit the prune to the rules that ran, because this file's GraphScope findings must survive the edit.
 	if err := a.pruneResolved(ctx, scanned, ids, ruleScope); err != nil {
 		return nil, err
 	}

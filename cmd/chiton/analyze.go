@@ -17,8 +17,8 @@ import (
 
 const chitonDir = ".chiton"
 
-// analyzeCmd runs deterministic rules itself (chiton analyze <path>); the LLM-rule subagent
-// cycle lives in its pending/submit subcommands, mirroring `chiton extract pending|submit`.
+// analyzeCmd runs deterministic rules itself (chiton analyze <path>). Its pending and submit subcommands
+// run the LLM-rule subagent cycle, mirroring `chiton extract pending|submit`.
 func analyzeCmd() *cobra.Command {
 	var category, minSeverity, since string
 	var diff, noLLM bool
@@ -154,8 +154,8 @@ func runDiff(ctx context.Context, out io.Writer, gs store.GraphStore, diff bool,
 		if label == "" {
 			label = "working"
 		}
-		// Write-once per commit: overwriting from a dirty tree would later self-compare
-		// and silently mask the findings the change introduced.
+		// Record each commit's baseline once. Overwriting it from a dirty tree would make a later diff
+		// compare the change against itself and hide the findings it introduced.
 		if existing, _ := analyze.LoadBaseline(baselineDir, label); existing != nil {
 			fmt.Fprintf(out, "diff: baseline for %s already recorded; not overwriting\n", short(label))
 			return nil

@@ -8,8 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/fsutil"
 )
 
-// ChitonBlockStart and ChitonBlockEnd delimit the region of a rules file chiton owns; everything outside
-// them is preserved verbatim across install and uninstall.
+// ChitonBlockStart and ChitonBlockEnd delimit the region of a rules file chiton owns. Install and
+// uninstall preserve everything outside them verbatim.
 const (
 	ChitonBlockStart = "<!-- chiton:start -->"
 	ChitonBlockEnd   = "<!-- chiton:end -->"
@@ -87,7 +87,7 @@ func RulesFileHasChiton(path string) (bool, error) {
 	return strings.Contains(string(existing), ChitonBlockStart), nil
 }
 
-// blockSpan returns the byte span of the first chiton block; ok is false if a marker is missing or the
+// blockSpan returns the byte span of the first chiton block. ok is false if a marker is missing or the
 // first end marker precedes the first start marker.
 func blockSpan(text string) (start, end int, ok bool) {
 	start = strings.Index(text, ChitonBlockStart)
@@ -115,7 +115,7 @@ func stripAllBlocks(text string) string {
 	for {
 		next := stripBlock(text)
 		if next == text {
-			return text // no block left, or malformed ordering
+			return text // no block is left, or the markers are out of order
 		}
 		text = next
 	}

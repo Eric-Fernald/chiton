@@ -39,20 +39,20 @@ func (j *JavaExtractor) ExtractSource(_ context.Context, path string, src []byte
 	var scopes braceScopes
 	var funcs []funcRecord
 
-	// Pass 1: collect symbols, skipping comment lines (scan still tracks their braces and /* */ state).
+	// Pass 1 collects symbols and skips comment lines, though scan still tracks their braces and /* */ state.
 	isComment := func(s string) bool { return strings.HasPrefix(s, "//") || strings.HasPrefix(s, "*") }
 	scopes.scan(lines, isComment, func(i int, line string, pre, open int) {
 		t := scopes.top()
 		inTypeBody := t != nil && slices.Contains(javaTypeKinds, t.kind) && pre > t.pushDepth
 
-		// Import (always at top level, depth == 0); the full dotted path is kept as the package label.
+		// Imports occur only at top level (depth 0). The full dotted path becomes the package label.
 		if pre == 0 {
 			if m := reJavaImport.FindStringSubmatch(line); m != nil {
 				g.addImport(strings.TrimSpace(m[1]))
 			}
 		}
 
-		// Type declarations (class/interface/enum) can nest; otherwise look for a method in a type body.
+		// Type declarations (class, interface, enum) can nest. Failing that, look for a method in a type body.
 		if m := findWith(reJavaClass, line, "class"); m != nil {
 			g.addHeritage(g.declare(m[1], "class", i+1), line, reJavaExtends, reJavaImplements)
 			scopes.push("class", m[1], pre)
@@ -66,7 +66,7 @@ func (j *JavaExtractor) ExtractSource(_ context.Context, path string, src []byte
 			if m := findWith(reJavaMethod, line, "("); m != nil && !isJavaKeyword(m[1]) {
 				label := scopes.enclosing(javaTypeKinds...) + "." + m[1]
 				id := g.declare(label, "method", i+1, m[1])
-				// Only record as a function if it has a body (not abstract/interface).
+				// Record a function only if it has a body, which abstract and interface methods lack.
 				if open > 0 || !strings.HasSuffix(strings.TrimRight(line, " \t"), ";") {
 					funcs = append(funcs, funcRecord{lineStart: i, id: id})
 					scopes.push("method", label, pre)

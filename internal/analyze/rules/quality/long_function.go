@@ -51,8 +51,8 @@ func (LongFunction) MatchFile(_ context.Context, t analyze.FileTarget) []analyze
 	return out
 }
 
-// isFuncNode reports whether n is a spanned symbol the extractor tagged as function-like; class/struct/etc.
-// nodes also live in symbol space.
+// isFuncNode reports whether n is a spanned symbol the extractor tagged as function-like. Class, struct,
+// and other type nodes are symbols too.
 func isFuncNode(n model.Node) bool {
 	return n.Kind == model.KindSymbol && n.Span != nil && analyze.IsFuncKind(model.AttrString(n.Attrs, "lang_kind"))
 }

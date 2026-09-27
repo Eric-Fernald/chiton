@@ -9,8 +9,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// InitSideEffect flags a Go package-level `func init()` only when its body does real work (env,
-// file I/O, network/DB setup, global mutation); registration-only inits are idiomatic and skipped.
+// InitSideEffect flags a Go package-level `func init()` only when its body does real work: env access,
+// file I/O, network or DB setup, or global mutation. It skips idiomatic registration-only inits.
 type InitSideEffect struct{}
 
 func (InitSideEffect) Meta() analyze.Meta {
@@ -30,8 +30,8 @@ func (InitSideEffect) Meta() analyze.Meta {
 // the paren, so requiring its absence keeps the match tight.
 var goInitFuncRe = regexp.MustCompile(`(?m)^func init\(\s*\)`)
 
-// sideEffectRe matches the "real work" signatures in an init body: env reads/writes, file I/O,
-// and network/DB setup.
+// sideEffectRe matches the "real work" signatures in an init body: env reads and writes, file I/O,
+// and network or DB setup.
 var sideEffectRe = regexp.MustCompile(
 	`\bos\.(Getenv|Setenv|LookupEnv|Open|OpenFile|Create|ReadFile|WriteFile|Mkdir|MkdirAll|Remove|RemoveAll)\b` +
 		`|\bioutil\.(ReadFile|WriteFile|ReadDir)\b` +
@@ -39,12 +39,12 @@ var sideEffectRe = regexp.MustCompile(
 		`|\bhttp\.\w+\b` +
 		`|\.Dial\b`)
 
-// globalMutationRe approximates a package-global mutation: a line-leading (dotted, optionally
-// indexed) identifier assigned with plain `=`, so `:=`, `var`, `==`, and `+=` never match.
+// globalMutationRe approximates a package-global mutation as a line-leading identifier (dotted, optionally
+// indexed) assigned with plain `=`, so `:=`, `var`, `==`, and `+=` never match.
 var globalMutationRe = regexp.MustCompile(`(?m)^\s*[A-Za-z_][\w.]*(?:\[[^\]]*\])?\s*=[^=]`)
 
 func (InitSideEffect) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
-	// Exact prefilter: masking writes only 'x', so a masked `func init(` is a raw one too.
+	// The prefilter is exact because masking writes only 'x', so a masked `func init(` is a raw one too.
 	if !bytes.Contains(t.Content, []byte("func init(")) {
 		return nil
 	}
@@ -85,12 +85,12 @@ func (InitSideEffect) MatchFile(_ context.Context, t analyze.FileTarget) []analy
 }
 
 // bodyHasSideEffect reports whether a masked init body calls a side-effect API or assigns a
-// package global; registration calls like analyze.Register(...) have no top-level `=`.
+// package global. Registration calls like analyze.Register(...) have no top-level `=`.
 func bodyHasSideEffect(masked []byte) bool {
 	return sideEffectRe.Match(masked) || globalMutationRe.Match(masked)
 }
 
-// matchingBrace returns the index of the '}' closing the '{' at open, or -1; s must be masked.
+// matchingBrace returns the index of the '}' that closes the '{' at open, or -1. s must be masked.
 func matchingBrace(s []byte, open int) int {
 	depth := 0
 	for i := open; i < len(s); i++ {

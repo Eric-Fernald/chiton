@@ -9,8 +9,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// RustUnwrap flags `.unwrap()` / `.expect(...)` in Rust source: both panic on Err/None, turning a
-// recoverable error into a process abort where idiomatic Rust would propagate with `?`.
+// RustUnwrap flags `.unwrap()` and `.expect(...)` in Rust source. Both panic on Err or None, turning a
+// recoverable error into a process abort where idiomatic Rust would propagate it with `?`.
 type RustUnwrap struct{}
 
 func (RustUnwrap) Meta() analyze.Meta {
@@ -26,7 +26,8 @@ func (RustUnwrap) Meta() analyze.Meta {
 	}
 }
 
-// Method calls only (leading dot); the `\(` right after `unwrap` excludes `.unwrap_or*(...)`.
+// rustUnwrapRe matches method calls only (leading dot), and the `\(` right after `unwrap` excludes
+// `.unwrap_or*(...)`.
 var rustUnwrapRe = regexp.MustCompile(`\.(unwrap\s*\(|expect\s*\()`)
 
 func (RustUnwrap) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
@@ -37,7 +38,7 @@ func (RustUnwrap) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.F
 		return nil
 	}
 
-	// Whole-file masking so `.unwrap()` inside a string, macro argument, or block comment never matches.
+	// Mask the whole file so `.unwrap()` inside a string, macro argument, or block comment never matches.
 	masked := maskRustLiteralsAndComments(t.Content)
 
 	var out []analyze.Finding
@@ -111,7 +112,7 @@ func maskRustLiteralsAndComments(src []byte) []byte {
 		case (c == 'r' || c == 'b') && rustRawStringStart(out, i):
 			i = maskRustRawString(out, i, filler)
 		case c == '\'':
-			// Only a closed char/byte literal is masked; a lifetime (`'a`) has no closing quote nearby.
+			// Mask only a closed char or byte literal, since a lifetime (`'a`) has no closing quote nearby.
 			if end, ok := rustCharLiteralEnd(out, i); ok {
 				for j := i; j <= end; j++ {
 					if out[j] != '\n' {
@@ -169,8 +170,8 @@ func rustRawStringStart(out []byte, i int) bool {
 	return j < len(out) && out[j] == '"'
 }
 
-// maskRustRawString masks the raw string at openIdx and returns the index past its terminator: a `"`
-// followed by as many `#` as the opener had.
+// maskRustRawString masks the raw string at openIdx and returns the index past its terminator, which is
+// a `"` followed by as many `#` as the opener had.
 func maskRustRawString(out []byte, openIdx int, filler byte) int {
 	j := openIdx
 	if out[j] == 'b' {
@@ -213,7 +214,7 @@ func maskRustRawString(out []byte, openIdx int, filler byte) int {
 	return len(out)
 }
 
-// rustCharLiteralEnd returns the index of the closing quote of the char/byte literal opening at i, if any.
+// rustCharLiteralEnd returns the index of the closing quote of the char or byte literal opening at i, if any.
 // The search window is bounded so a lifetime (`'a`) cannot consume the rest of the file.
 func rustCharLiteralEnd(out []byte, i int) (int, bool) {
 	// Empty or runaway: bail. A char literal is at most a few bytes

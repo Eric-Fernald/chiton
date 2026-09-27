@@ -10,8 +10,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// CircularImport detects cycles in the IMPORTS graph; edges into external package nodes
-// (external=true) are ignored since they cannot close a cycle.
+// CircularImport detects cycles in the IMPORTS graph. It ignores edges into external package nodes
+// (external=true), since they cannot close a cycle.
 type CircularImport struct{}
 
 func (CircularImport) Meta() analyze.Meta {
@@ -50,7 +50,7 @@ func (CircularImport) MatchGraph(_ context.Context, t analyze.GraphTarget) []ana
 		var firstURI string
 		var firstNode string
 		for _, id := range cyc {
-			n := nodes[id] // never nil: adj only holds edges whose endpoints are indexed
+			n := nodes[id] // never nil, because adj only holds edges whose endpoints are indexed
 			labels = append(labels, n.Label)
 			if firstURI == "" {
 				firstURI = n.SourceURI
@@ -85,8 +85,8 @@ func indexNodesByID(ns []model.Node) map[string]*model.Node {
 	return m
 }
 
-// findCycles returns the members of each strongly-connected component of size > 1 in adj (Tarjan),
-// sorted by ID so the reported cycle is stable across runs.
+// findCycles uses Tarjan's algorithm to return the members of each strongly-connected component in adj
+// with more than one node, sorted by ID so the reported cycle is stable across runs.
 func findCycles(adj map[string][]string) [][]string {
 	index := 0
 	indices := map[string]int{}

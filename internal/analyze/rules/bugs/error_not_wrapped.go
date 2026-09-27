@@ -9,8 +9,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// ErrorNotWrapped flags `fmt.Errorf` calls that format an `err`-named argument with `%v`/`%s` instead of
-// `%w`, flattening the error to a string so errors.Is / errors.As can no longer unwrap it.
+// ErrorNotWrapped flags `fmt.Errorf` calls that format an `err`-named argument with `%v` or `%s`, not
+// `%w`. That flattens the error to a string, so errors.Is and errors.As can no longer unwrap it.
 type ErrorNotWrapped struct{}
 
 func (ErrorNotWrapped) Meta() analyze.Meta {
@@ -40,7 +40,7 @@ func (ErrorNotWrapped) MatchFile(_ context.Context, t analyze.FileTarget) []anal
 	}
 	var out []analyze.Finding
 	for line, raw := range analyze.FileLines(t) {
-		// String contents are kept: the format verbs live inside the format string.
+		// StripLineComment keeps string contents, because the format verbs live inside the format string.
 		text := analyze.StripLineComment(raw, false)
 		if !errorfCallRe.MatchString(text) {
 			continue

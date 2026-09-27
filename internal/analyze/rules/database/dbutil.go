@@ -8,7 +8,7 @@ import (
 )
 
 // stripDBComment cuts s at a line comment outside quotes (`//`, `--`, and `#` when py) and blanks
-// single-line /* */ spans; string contents are never touched, since the SQL rules match inside them.
+// single-line /* */ spans. It never touches string contents, since the SQL rules match inside them.
 func stripDBComment(s string, py bool) string {
 	var b []byte // copy of s, made only once a /* */ span needs blanking
 	cut := func(i int) string {
@@ -87,7 +87,7 @@ func maskedDBText(t analyze.FileTarget, py bool) string {
 }
 
 // maskDBBlocks overwrites /* */ comments and, when py, triple-quoted strings with 'x' (newlines kept),
-// leaving other strings intact for the SQL rules; it may return src itself, so never modify the result.
+// leaving other strings intact for the SQL rules. It may return src itself, so never modify the result.
 func maskDBBlocks(src []byte, py bool) []byte {
 	if !bytes.Contains(src, []byte("/*")) &&
 		(!py || !bytes.Contains(src, []byte(`"""`)) && !bytes.Contains(src, []byte("'''"))) {

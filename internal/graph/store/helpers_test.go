@@ -35,10 +35,10 @@ func TestPickByFile(t *testing.T) {
 		{ID: "3", Kind: model.KindSymbol, SourceURI: "file:///c/other.go"},
 	}
 	for _, tc := range []struct{ file, want string }{
-		{"", "0"},            // no hint: first node
+		{"", "0"},            // no hint picks the first node
 		{"fetchall.go", "2"}, // case-insensitive, symbol preferred over the file node
 		{"fetch.go", "0"},    // only a file node matches
-		{"nomatch", "0"},     // no match: first node
+		{"nomatch", "0"},     // no match falls back to the first node
 		{"other", "3"},
 	} {
 		if got := store.PickByFile(nodes, tc.file).ID; got != tc.want {

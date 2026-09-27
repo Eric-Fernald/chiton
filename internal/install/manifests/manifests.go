@@ -4,8 +4,8 @@ package manifests
 
 import "github.com/Eric-Fernald/chiton"
 
-// SkillMarkdown is the canonical chiton graph-query skill. Only the Claude Code installer writes skills;
-// other assistants just get RulesPrompt, having no equivalent skills directory.
+// SkillMarkdown is the canonical chiton graph-query skill. Only the Claude Code installer writes skills.
+// Other assistants have no equivalent skills directory, so they get only RulesPrompt.
 var SkillMarkdown = chiton.GraphSkillMarkdown
 
 // SubagentTasksSkillMarkdown documents the extraction / LLM-rule /
@@ -13,7 +13,7 @@ var SkillMarkdown = chiton.GraphSkillMarkdown
 var SubagentTasksSkillMarkdown = chiton.SubagentTasksSkillMarkdown
 
 // RulesPrompt is the always-on instruction appended to rules files (CLAUDE.md, AGENTS.md, ...), telling the
-// assistant when to call chiton instead of grepping; kept short because it costs tokens every turn.
+// assistant when to call chiton instead of grepping. It is short because it costs tokens every turn.
 const RulesPrompt = `# chiton — knowledge graph context
 
 This workspace has a chiton MCP server registered. Before using grep or file

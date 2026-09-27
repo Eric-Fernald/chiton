@@ -33,7 +33,7 @@ type Result struct {
 func (r Result) Blocks() bool { return r.BlockingCount > 0 }
 
 // Run analyzes opts.Root and collects findings at or above the stage's MinBlockingSeverity. It does not
-// apply Config.TimeoutSeconds itself: pass a ctx with that deadline to honor it.
+// apply Config.TimeoutSeconds itself, so pass a ctx with that deadline to honor it.
 func Run(ctx context.Context, gs store.GraphStore, opts RunOptions) (*Result, error) {
 	az := analyze.New(gs, nil)
 	start := time.Now()

@@ -9,8 +9,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// LogFatalInCode flags log.Fatal* / log.Panic* in non-main Go code: Fatal calls os.Exit(1), skipping
-// deferred cleanup, and Panic panics the goroutine; both take control away from callers.
+// LogFatalInCode flags log.Fatal* and log.Panic* in non-main Go code. Fatal calls os.Exit(1), skipping
+// deferred cleanup, and Panic panics the goroutine. Both take control away from callers.
 type LogFatalInCode struct{}
 
 func (LogFatalInCode) Meta() analyze.Meta {

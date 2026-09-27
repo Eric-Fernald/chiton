@@ -11,7 +11,7 @@ import (
 )
 
 // DashboardFinding is the dashboard's projection of analyze.FindingView, declared here so report
-// stays free of an analyze dependency; the CLI converts findings and supplies each one's community.
+// stays free of an analyze dependency. The CLI converts findings and supplies each one's community.
 type DashboardFinding struct {
 	ID         string
 	RuleID     string
@@ -45,7 +45,7 @@ type DashboardData struct {
 	MaxNodes int
 }
 
-// GenerateDashboard writes a self-contained, read-only page to w: a vis-network graph view plus a
+// GenerateDashboard writes a self-contained, read-only page to w with a vis-network graph view and a
 // filterable findings explorer whose rows focus their affected node if it survived the MaxNodes cap.
 func GenerateDashboard(w io.Writer, data DashboardData) error {
 	hn, he := toHTMLData(buildView(data.Nodes, data.Edges, data.Overlay, data.MaxNodes))
@@ -106,8 +106,8 @@ type dashFinding struct {
 	Node string `json:"node,omitempty"`
 }
 
-// dashboardTemplate is the self-contained page GenerateDashboard fills in; data placeholders get
-// HTML-safe JSON (marshalForScript) so untrusted node/finding text can't escape the <script> block.
+// dashboardTemplate is the self-contained page GenerateDashboard fills in. Data placeholders get HTML-safe
+// JSON (marshalForScript) so untrusted node or finding text can't escape the <script> block.
 const dashboardTemplate = `<!DOCTYPE html>
 <html lang="en">
 <head>

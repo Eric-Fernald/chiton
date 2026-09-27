@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// False-positive regression tests: each FP input must yield zero findings while a genuine true
-// positive still fires.
+// False-positive regression tests. Each FP input must yield zero findings while a true positive
+// still fires.
 
 func TestInsecureTLSVerify_FP_PythonVerifyFalse(t *testing.T) {
 	r := InsecureTLSVerify{}

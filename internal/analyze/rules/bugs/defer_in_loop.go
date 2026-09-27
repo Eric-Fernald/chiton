@@ -11,8 +11,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// DeferInLoop flags Go `defer` statements inside a for/range loop: defers stack until function exit,
-// which leaks resources (file handles, locks) in long-running loops.
+// DeferInLoop flags Go `defer` statements inside a for or range loop. Defers stack until the function
+// exits, which leaks resources such as file handles and locks in long-running loops.
 type DeferInLoop struct{}
 
 func (DeferInLoop) Meta() analyze.Meta {
@@ -38,7 +38,7 @@ func (DeferInLoop) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.
 		return nil
 	}
 	var out []analyze.Finding
-	var loopDepths []int // brace depth at each open for-line's opening brace
+	var loopDepths []int // brace depth at the opening brace of each open for loop
 	depth := 0
 
 	for line, text := range analyze.FileLines(t) {

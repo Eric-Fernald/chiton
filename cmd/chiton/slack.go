@@ -103,8 +103,8 @@ a tunnel/reverse proxy; Slack requires a public HTTPS Request URL.`,
 			ing := slack.NewIngester(gs, src)
 			out := cmd.OutOrStdout()
 			handler := slack.NewEventsHandler(signingSecret, func(ctx context.Context, ev slack.MessageEvent) error {
-				// A threaded reply re-ingests just its thread, a top-level message the whole channel;
-				// re-ingest replaces by slack:// URI, so this is idempotent.
+				// A threaded reply re-ingests only its thread, and a top-level message the whole channel.
+				// Re-ingest replaces the conversation by its slack:// URI, so this is idempotent.
 				threadTS := ""
 				if ev.ThreadTS != "" && ev.ThreadTS != ev.TS {
 					threadTS = ev.ThreadTS

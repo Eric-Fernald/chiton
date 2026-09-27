@@ -8,7 +8,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// ---- quality/high-complexity: docstrings and Rust lifetimes must not inflate the branch count ----
+// ---- Docstrings and Rust lifetimes must not inflate the quality/high-complexity branch count ----
 
 func TestHighComplexity_PythonDocstringFP(t *testing.T) {
 	// A simple function whose docstring is full of branch keywords in prose.
@@ -26,7 +26,7 @@ func TestHighComplexity_PythonDocstringFP(t *testing.T) {
 }
 
 func TestHighComplexity_RustLifetimeFP(t *testing.T) {
-	// A lifetime (`&'a`) must not open a fake string that swallows the body; this simple func must not fire.
+	// A lifetime (`&'a`) must not open a fake string that swallows the body. This simple func must not fire.
 	body := "fn render<'a>(buf: &'a mut Vec<u8>, label: &'a str) {\n" +
 		"    let x: &'a str = label;\n" +
 		"    let y: &'a str = label;\n" +
@@ -54,7 +54,7 @@ func TestHighComplexity_StillFiresTP(t *testing.T) {
 	}
 }
 
-// ---- quality/too-many-returns: returns inside a Python docstring must not count ----
+// ---- Returns inside a Python docstring must not count toward quality/too-many-returns ----
 
 func TestTooManyReturns_DocstringFP(t *testing.T) {
 	body := "def f(x):\n" +
@@ -68,7 +68,7 @@ func TestTooManyReturns_DocstringFP(t *testing.T) {
 	}
 }
 
-// ---- quality/nested-ternary: sibling ternaries on one line must not fire; a nested one must ----
+// ---- quality/nested-ternary fires on a nested ternary but not on sibling ternaries on one line ----
 
 func TestNestedTernary_SiblingsFP(t *testing.T) {
 	fp := `const a = x ? 1 : 2; const b = y ? 3 : 4;
@@ -88,7 +88,7 @@ func TestNestedTernary_GenuineTP(t *testing.T) {
 	}
 }
 
-// ---- quality/too-many-params: Go receivers and <...> generics fire; Python self/cls is not counted ----
+// ---- quality/too-many-params matches Go receivers and <...> generics and ignores Python self and cls ----
 
 func TestTooManyParams_GoReceiverTP(t *testing.T) {
 	src := `package x

@@ -1,5 +1,5 @@
-// Package vector provides a nearest-neighbour index over node embeddings behind a swappable Index interface;
-// Flat, the exact pure-Go backend, is O(n·d) per query, fine into the low hundreds of thousands of vectors.
+// Package vector provides a nearest-neighbour index over node embeddings behind a swappable Index interface.
+// Flat, the exact pure-Go backend, is O(n·d) per query and fast enough for a few hundred thousand vectors.
 package vector
 
 // Item is one indexed vector keyed by its node ID.
@@ -16,7 +16,7 @@ type Result struct {
 }
 
 // Index is a nearest-neighbour index over node embeddings. Implementations need not be safe for
-// concurrent mutation: chiton builds the index once at load and only reads it while serving.
+// concurrent mutation, because chiton builds the index once at load and only reads it while serving.
 type Index interface {
 	// Add inserts or replaces vectors by ID.
 	Add(items []Item)

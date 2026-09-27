@@ -1,5 +1,5 @@
-// Package install registers chiton with AI assistants: each Installer writes one assistant's MCP config
-// and rules/skill files, keeping platform quirks out of the dispatcher.
+// Package install registers chiton with AI assistants. Each Installer writes one assistant's MCP config
+// and its rules and skill files, keeping platform quirks out of the dispatcher.
 package install
 
 import (
@@ -15,14 +15,14 @@ import (
 
 // Options is the bundle of inputs every installer receives.
 type Options struct {
-	// Dir is the workspace directory; per-repo files (.mcp.json, CLAUDE.md, ...) resolve against it.
+	// Dir is the workspace directory. Per-repo files (.mcp.json, CLAUDE.md, ...) resolve against it.
 	Dir string
 
 	// Exe is the absolute path to the chiton binary that the assistant should
 	// launch as its MCP server.
 	Exe string
 
-	// UserScope targets the user-global config (e.g. ~/.cursor/ instead of .cursor/); installers
+	// UserScope targets the user-global config (e.g. ~/.cursor/ instead of .cursor/). Installers
 	// without a user-global location return ErrUserScopeUnsupported.
 	UserScope bool
 
@@ -30,8 +30,8 @@ type Options struct {
 	// hook integration. Off by default because hooks are platform-fragile.
 	WithHooks bool
 
-	// GraphPath is recorded in the MCP config so `chiton serve` uses the same store as `chiton build`;
-	// empty falls back to chiton's default.
+	// GraphPath is recorded in the MCP config so `chiton serve` uses the same store as `chiton build`.
+	// An empty GraphPath falls back to chiton's default.
 	GraphPath string
 }
 
@@ -68,7 +68,7 @@ type Installer interface {
 	// (or has been) used in this workspace. Used by auto-detect.
 	Detect(dir string) bool
 
-	// Install writes the assistant's config and rules files. It must be idempotent: a second run yields
+	// Install writes the assistant's config and rules files. It must be idempotent, so a second run yields
 	// the same files without duplicating content.
 	Install(opts Options) (Report, error)
 
@@ -110,8 +110,8 @@ func Lookup(name string) Installer {
 	return nil
 }
 
-// Resolve turns the --assistant value into installers: a name, a comma-separated list, "all", or
-// "auto"/"" for every installer whose Detect matches (an error when none do).
+// Resolve turns the --assistant value into installers. It accepts a name, a comma-separated list, "all",
+// or "auto" (same as "") to pick every installer whose Detect matches, and errors if none match.
 func Resolve(name, dir string) ([]Installer, error) {
 	switch name {
 	case "", "auto":
@@ -146,8 +146,8 @@ func Resolve(name, dir string) ([]Installer, error) {
 	return out, nil
 }
 
-// ResolveExe returns the chiton executable path to record: provided if set, else the current
-// executable with symlinks resolved.
+// ResolveExe returns the chiton executable path to record, which is provided if set and otherwise the
+// current executable with symlinks resolved.
 func ResolveExe(provided string) (string, error) {
 	if provided != "" {
 		return provided, nil

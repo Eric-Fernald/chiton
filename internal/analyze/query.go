@@ -31,8 +31,8 @@ type ListOptions struct {
 	MinSeverity Severity // empty = all
 	Scope       string   // substring match against target_uri; empty = all
 	Limit       int      // 0 = no cap
-	// IncludeAmbiguous returns below-threshold AMBIGUOUS LLM findings, hidden by default so they
-	// never masquerade as confirmed findings.
+	// IncludeAmbiguous also returns below-threshold AMBIGUOUS LLM findings. They are hidden by default so
+	// no one mistakes them for confirmed findings.
 	IncludeAmbiguous bool
 }
 

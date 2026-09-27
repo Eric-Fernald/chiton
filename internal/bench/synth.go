@@ -7,8 +7,8 @@ import (
 	"strings"
 )
 
-// GenerateSynthetic writes a reproducible Go corpus of `files` files into dir: one package whose
-// functions call each other in a ring (CALLS edges) and import stdlib packages (IMPORTS edges).
+// GenerateSynthetic writes a reproducible Go corpus of `files` files into dir. The corpus is one package
+// whose functions call each other in a ring (CALLS edges) and import stdlib packages (IMPORTS edges).
 func GenerateSynthetic(dir string, files int) error {
 	files = max(files, 2)
 	if err := os.MkdirAll(dir, 0o755); err != nil {

@@ -28,8 +28,8 @@ func TestJSONCToJSON(t *testing.T) {
 	}
 }
 
-// TestWriteMCPConfigAcceptsJSONC verifies a JSONC config (as OpenCode/VS Code document) is merged rather
-// than rejected, preserving unrelated servers.
+// TestWriteMCPConfigAcceptsJSONC verifies a JSONC config, as OpenCode and VS Code document it, is merged
+// rather than rejected, preserving unrelated servers.
 func TestWriteMCPConfigAcceptsJSONC(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mcp.json")
 	jsonc := "{\n" +

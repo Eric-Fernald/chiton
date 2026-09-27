@@ -9,7 +9,7 @@ import (
 )
 
 // JSONDeepClone flags the JS/TS `JSON.parse(JSON.stringify(x))` deep clone, which is slow, drops
-// functions/undefined/Dates/Maps, and throws on cyclic data.
+// functions, undefined, Dates, and Maps, and throws on cyclic data.
 type JSONDeepClone struct{}
 
 func (JSONDeepClone) Meta() analyze.Meta {

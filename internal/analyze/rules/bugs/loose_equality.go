@@ -8,8 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// LooseEquality flags JS/TS `==` / `!=` instead of the strict `===` / `!==`: loose equality coerces types
-// (0 == "", null == undefined), a frequent source of subtle bugs.
+// LooseEquality flags JS/TS `==` and `!=` in place of the strict `===` and `!==`. Loose equality coerces
+// types (0 == "", null == undefined), a frequent source of subtle bugs.
 type LooseEquality struct{}
 
 func (LooseEquality) Meta() analyze.Meta {
@@ -25,12 +25,13 @@ func (LooseEquality) Meta() analyze.Meta {
 	}
 }
 
-// `==` / `!=` not part of a longer `=` run (`===`, `!==`) and not preceded by `<`, `>`, or `!`.
+// looseEqualityRe matches `==` or `!=` that is not part of a longer `=` run (`===`, `!==`) and not
+// preceded by `<`, `>`, or `!`.
 var looseEqualityRe = regexp.MustCompile(`[^=!<>]([!=]=)([^=]|$)`)
 
 func (LooseEquality) MatchFile(_ context.Context, t analyze.FileTarget) []analyze.Finding {
 	var out []analyze.Finding
-	// Whole-file masking keeps `==`/`!=` inside strings, templates, regex literals, and comments
+	// Whole-file masking keeps `==` and `!=` inside strings, templates, regex literals, and comments
 	// (SQL fragments, base64 padding) away from the operator regex.
 	masked := maskJSLiteralsAndComments(t.Content)
 	for line, text := range analyze.Lines(masked) {

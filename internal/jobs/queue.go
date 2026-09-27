@@ -1,5 +1,5 @@
 // Package jobs is an in-process (no Redis) debouncing, coalescing worker queue keyed by string. A key
-// never runs concurrently with itself; re-enqueued mid-run, it runs once more so the final state is seen.
+// never runs concurrently with itself. If re-enqueued mid-run, it runs once more so the final state is seen.
 package jobs
 
 import (
@@ -9,7 +9,7 @@ import (
 )
 
 // Handler processes one coalesced key. Distinct keys may run concurrently, so it must be safe across
-// keys; the queue guarantees a single key never runs concurrently with itself.
+// keys. The queue guarantees a single key never runs concurrently with itself.
 type Handler func(ctx context.Context, key string) error
 
 // Options configures a Queue. Zero values fall back to sane defaults.
@@ -40,7 +40,7 @@ type Queue struct {
 	onError  func(string, error)
 	onDone   func(string, error)
 
-	// ctx is created in New so Enqueue is safe before Start; only Stop/Drain (or Start's parent) cancel it.
+	// ctx is created in New so Enqueue is safe before Start. Only Stop, Drain, or Start's ctx cancels it.
 	ctx    context.Context
 	cancel context.CancelFunc
 
@@ -80,12 +80,12 @@ func New(handler Handler, opts Options) *Queue {
 	return q
 }
 
-// Start launches the dispatch loop. Cancelling ctx hard-stops the queue like Stop; handlers receive the
+// Start launches the dispatch loop. Cancelling ctx hard-stops the queue like Stop. Handlers receive the
 // queue's own context, which stays live through a graceful Drain.
 func (q *Queue) Start(ctx context.Context) {
 	q.wg.Add(1)
 	go q.dispatch()
-	// Bridge an external cancel to a hard stop; for an uncancellable ctx this exits when Stop/Drain
+	// Bridge an external cancel to a hard stop. For an uncancellable ctx this exits when Stop or Drain
 	// cancels q.ctx.
 	go func() {
 		select {
@@ -116,16 +116,16 @@ func (q *Queue) Enqueue(key string) {
 			q.wg.Done()
 			delete(q.timers, key)
 		} else {
-			// Already fired: its callback dispatches the key, and re-arming would double-dispatch
-			// (and double-Done the WaitGroup). running/requeue coalesces any later change.
+			// The timer already fired, so its callback dispatches the key. Re-arming would double-dispatch
+			// (and double-Done the WaitGroup). The running and requeue maps coalesce any later change.
 			return
 		}
 	}
 	q.armLocked(key)
 }
 
-// armLocked starts a debounce timer for key; the caller holds q.mu. Each arm is balanced by exactly
-// one wg.Done: the callback's defer, or a timer Stop() that returns true.
+// armLocked starts a debounce timer for key. The caller holds q.mu. Each arm's wg.Add is balanced by
+// exactly one wg.Done, from either the callback's defer or a timer Stop() that returns true.
 func (q *Queue) armLocked(key string) {
 	q.wg.Add(1)
 	q.timers[key] = time.AfterFunc(q.debounce, func() {
@@ -200,7 +200,7 @@ func (q *Queue) drainLoop() {
 }
 
 // launch acquires a worker slot and runs key in a fresh goroutine, unless the key is already in flight,
-// in which case it is requeued rather than run twice concurrently.
+// in which case it requeues the key rather than running it twice concurrently.
 func (q *Queue) launch(key string) {
 	select {
 	case q.workers <- struct{}{}:
@@ -245,8 +245,8 @@ func (q *Queue) run(key string) {
 		// Normal path: consume the marker and re-arm via Enqueue below.
 		delete(q.requeue, key)
 	}
-	// Once stopped, keep the marker: drainLoop re-feeds it so the final state is processed, while
-	// after Stop the context is cancelled and leftover markers are simply never flushed.
+	// Once stopped, keep the marker so drainLoop re-feeds the key and its final state is processed.
+	// Stop also sets stopped but cancels the context, so its leftover markers are never flushed.
 	q.mu.Unlock()
 
 	if again && !stopped {

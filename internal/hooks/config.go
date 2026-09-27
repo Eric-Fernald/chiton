@@ -93,8 +93,8 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
-// fillDefaults replaces unset BlockOn, TimeoutSeconds, and DiffBaseline with d's values. LLM is not
-// defaulted: an omitted bool is indistinguishable from false.
+// fillDefaults replaces unset BlockOn, TimeoutSeconds, and DiffBaseline with d's values. It leaves LLM
+// unchanged because an omitted bool is indistinguishable from false.
 func (s *StageConfig) fillDefaults(d StageConfig) {
 	if len(s.BlockOn) == 0 {
 		s.BlockOn = d.BlockOn

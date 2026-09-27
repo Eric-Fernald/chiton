@@ -8,8 +8,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// qMaskLiteralsAndComments masks string/char/backtick/triple-quoted literals and //, #, /* */ comments with
-// 'x', keeping newlines. It tracks state across lines, so mask the whole file once, never line by line.
+// qMaskLiteralsAndComments masks string, char, backtick, and triple-quoted literals and //, #, /* */
+// comments with 'x', keeping newlines. It tracks state across lines, so mask the whole file once.
 func qMaskLiteralsAndComments(src []byte) []byte {
 	out := make([]byte, len(src))
 	copy(out, src)
@@ -91,7 +91,8 @@ func qMaskLiteralsAndComments(src []byte) []byte {
 				inStr = c
 				out[i] = analyze.MaskFiller
 			case c == '\'':
-				// Mask only a closed char literal; a Rust lifetime (`'a`) must not swallow the code after it.
+				// Mask only a closed char literal, since a Rust lifetime (`'a`) must not swallow the
+				// code after it.
 				if end := qCharLitEnd(out, i); end > i {
 					for j := i; j <= end; j++ {
 						out[j] = analyze.MaskFiller
@@ -123,11 +124,11 @@ func qCharLitEnd(out []byte, i int) int {
 // LongFunction) rather than by re-parsing signatures.
 type qFuncBody struct {
 	node  model.Node
-	lines [][]byte // body lines, 1:1 with the span, with literals and comments masked
+	lines [][]byte // body lines, one per span line, with literals and comments masked
 }
 
 // qFuncBodiesMasked returns the masked body of every function-like symbol whose span fits the file, so
-// keywords/operators inside literals, comments, and docstrings are not counted.
+// keywords and operators inside literals, comments, and docstrings are not counted.
 func qFuncBodiesMasked(t analyze.FileTarget) []qFuncBody {
 	// Skip the masking when no function has a usable span (extractors that set no EndLine).
 	if !slices.ContainsFunc(t.Nodes, qHasBodySpan) {

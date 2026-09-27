@@ -23,7 +23,7 @@ const (
 	goldenBadRules    = "<!-- chiton:end -->\nuser text\n<!-- chiton:start -->\nstale\n"
 )
 
-// goldenSeeded is user content every installer must merge around; keys are relative to the test root.
+// goldenSeeded is user content every installer must merge around. Keys are relative to the test root.
 var goldenSeeded = map[string]string{
 	"repo/.mcp.json":                       goldenJSONServers,
 	"repo/.vscode/mcp.json":                goldenJSONServers,

@@ -10,8 +10,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/portable"
 )
 
-// exportCmd writes the whole graph (nodes with inlined embeddings + edges) to a portable JSON snapshot:
-// the supported way to back up or migrate a graph, and the counterpart to `chiton merge`.
+// exportCmd writes every node, with its embedding inlined, and every edge to a portable JSON snapshot.
+// Snapshots are the supported way to back up or migrate a graph, and `chiton merge` loads them.
 func exportCmd() *cobra.Command {
 	var outFile string
 

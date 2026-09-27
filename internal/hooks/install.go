@@ -19,8 +19,8 @@ type InstallReport struct {
 	Notes   []string `json:"notes,omitempty"`
 }
 
-// Install writes chiton-owned git hooks for each stage into hooksDir, refreshing its own hooks in place;
-// a pre-existing third-party hook is never overwritten, only reported in Notes.
+// Install writes chiton-owned git hooks for each stage into hooksDir, refreshing its own hooks in place.
+// It never overwrites a pre-existing third-party hook and only reports it in Notes.
 func Install(hooksDir, exe string, stages []Stage) (InstallReport, error) {
 	rep := InstallReport{}
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
@@ -110,7 +110,7 @@ func Status(hooksDir string, stages []Stage) ([]StatusEntry, error) {
 	return out, nil
 }
 
-// scriptFor returns the hook script for stage: gating stages run `hooks run`, sync stages `sync git`.
+// scriptFor returns the hook script for stage. Gating stages run `hooks run` and sync stages run `sync git`.
 // It is plain POSIX sh so Git for Windows can run it through its bundled bash.
 func scriptFor(stage Stage, exe string) string {
 	var invocation string
@@ -150,7 +150,7 @@ func exists(path string) (bool, error) {
 	return err == nil, err
 }
 
-// shellQuote single-quotes s as one POSIX sh argument; each embedded quote closes the string, adds an
+// shellQuote single-quotes s as one POSIX sh argument. Each embedded quote closes the string, adds an
 // escaped quote, and reopens it.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"

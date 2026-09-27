@@ -29,7 +29,7 @@ type MessageEvent struct {
 	ThreadTS  string
 }
 
-// EventsHandler receives Slack Events API callbacks: it verifies each request's X-Slack-Signature (HMAC over
+// EventsHandler receives Slack Events API callbacks. It verifies each request's X-Slack-Signature (HMAC over
 // the raw body, within a replay window), answers url_verification, and dispatches message events to onMessage.
 type EventsHandler struct {
 	signingSecret string
@@ -38,14 +38,14 @@ type EventsHandler struct {
 	now           func() time.Time
 }
 
-// NewEventsHandler builds a handler that authenticates every request with the Slack signing secret; an empty
+// NewEventsHandler builds a handler that authenticates every request with the Slack signing secret. An empty
 // secret fails closed. onMessage handles one verified message event.
 func NewEventsHandler(signingSecret string, onMessage func(ctx context.Context, ev MessageEvent) error, log func(string, ...any)) *EventsHandler {
 	if log == nil {
 		log = func(string, ...any) {}
 	}
 	if signingSecret == "" {
-		// Every Slack app has a signing secret, so empty is a misconfiguration: fail closed rather than
+		// Every Slack app has a signing secret, so an empty one is a misconfiguration. Fail closed rather than
 		// authenticate forged requests.
 		log("slack events: WARNING — no signing secret configured; ALL requests will be rejected (set CHITON_SLACK_SIGNING_SECRET)")
 	}
@@ -147,8 +147,8 @@ func (h *EventsHandler) verify(header http.Header, body []byte) bool {
 	return hmac.Equal([]byte(expected), []byte(sig))
 }
 
-// shouldDispatch reports whether an event should trigger a re-ingest: human text messages only. Bot messages
-// are skipped here but still captured when the next human message re-fetches the whole conversation.
+// shouldDispatch reports whether an event should trigger a re-ingest, which only human text messages do.
+// Bot messages are skipped here but still captured when the next human message re-fetches the conversation.
 func (h *EventsHandler) shouldDispatch(ev slackInnerEvent) bool {
 	if ev.Type != "message" {
 		return false

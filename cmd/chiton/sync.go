@@ -192,8 +192,8 @@ func resolveGitChanges(root, since, stage string, args []string) (changes []gitp
 		if len(args) >= 3 && args[2] == "0" {
 			return nil, true, nil // file checkout, not a branch switch
 		}
-		// After a clone / `git worktree add`, prev-HEAD is the null SHA, which `git diff`
-		// rejects ("bad object"); index the new HEAD instead.
+		// After a clone or `git worktree add`, prev-HEAD is the null SHA, which `git diff`
+		// rejects ("bad object"). Index the new HEAD instead.
 		if len(args) >= 2 && !isNullSHA(args[0]) {
 			changes, err = gitpkg.RangeChanges(root, args[0], args[1])
 		} else {

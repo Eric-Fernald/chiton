@@ -80,8 +80,8 @@ for CI and demos). Restart 'chiton serve' afterwards to load the new vectors.`,
 				}
 			}
 
-			// Work is the embeddable nodes (non-empty TextFor) still lacking a vector; texts are rebuilt per batch
-			// so only one batch of (possibly large doc-section) text is live at a time.
+			// work holds the embeddable nodes (non-empty TextFor) still lacking a vector. Building texts per
+			// batch keeps only one batch of doc-section text, which can be large, live at a time.
 			var work []model.Node
 			for _, n := range nodes {
 				if (all || !existing[n.ID]) && embed.TextFor(n) != "" {
@@ -142,7 +142,7 @@ func linkSimilarNodes(ctx context.Context, gs store.GraphStore, es store.Embeddi
 	if err != nil {
 		return 0, err
 	}
-	idx := consumeIntoFlatIndex(slices.Clone(embs)) // a header copy: embs keeps its raw vectors, the queries below
+	idx := consumeIntoFlatIndex(slices.Clone(embs)) // clone so embs keeps raw vectors for the loop below
 
 	seen := map[[2]string]bool{}
 	var edges []model.Edge
@@ -180,8 +180,8 @@ func linkSimilarNodes(ctx context.Context, gs store.GraphStore, es store.Embeddi
 	return len(edges), nil
 }
 
-// consumeIntoFlatIndex indexes embs and consumes them: each embs[i].Vec is nil afterwards (the index keeps a
-// normalized copy), so raw and normalized vectors are never both fully live. Pass a clone to keep them.
+// consumeIntoFlatIndex indexes embs and clears each embs[i].Vec, since the index keeps a normalized copy.
+// That way raw and normalized vectors are never both fully live. Pass a clone to keep the raw vectors.
 func consumeIntoFlatIndex(embs []store.Embedding) *vector.Flat {
 	idx := vector.NewFlatSized(len(embs))
 	item := make([]vector.Item, 1)
