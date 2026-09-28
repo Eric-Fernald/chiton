@@ -10,7 +10,7 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/ggerganov/whisper.cpp/bindings/go v0.0.0-20260604142758-99613cb720b6
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
-	github.com/mark3labs/mcp-go v0.58.0
+	github.com/mark3labs/mcp-go v1.1.1
 	github.com/microsoft/kiota-abstractions-go v1.10.0
 	github.com/microsoftgraph/msgraph-sdk-go v1.101.0
 	github.com/pelletier/go-toml/v2 v2.4.3
