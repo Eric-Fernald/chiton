@@ -36,6 +36,7 @@ const (
 type Store struct {
 	db       *badgerdb.DB
 	readOnly bool
+	key      []byte
 }
 
 // Compile-time checks that Store satisfies the store interfaces.
@@ -52,6 +53,10 @@ var (
 // ReadOnly reports whether the store was opened read-only, so callers can fail writes early
 // with a clear message instead of a raw Badger error.
 func (s *Store) ReadOnly() bool { return s.readOnly }
+
+// EncryptionKey returns the key the store was opened with, or nil for a plaintext store, so files kept
+// beside the store can be sealed to match it.
+func (s *Store) EncryptionKey() []byte { return s.key }
 
 // Options configures store opens. The zero value is a plaintext store with
 // default Badger settings — historic callers can keep using Open/OpenReadOnly.
@@ -76,7 +81,7 @@ func OpenWith(path string, opts Options) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open badger at %s: %w", path, err)
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, key: opts.EncryptionKey}, nil
 }
 
 // OpenReadOnlyWith is the read-only variant of OpenWith.
@@ -87,7 +92,7 @@ func OpenReadOnlyWith(path string, opts Options) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open badger at %s: %w", path, err)
 	}
-	return &Store{db: db, readOnly: true}, nil
+	return &Store{db: db, readOnly: true, key: opts.EncryptionKey}, nil
 }
 
 // applyEncryption enables Badger encryption when key is non-empty, plus the non-zero IndexCacheSize that

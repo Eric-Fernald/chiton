@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
@@ -49,15 +50,16 @@ func BenchmarkSearch(b *testing.B) {
 }
 
 // TestVectorBenchReport prints the T5 table for docs/BENCHMARK.md: build time, heap held by the index,
-// query latency percentiles, and recall@8 against Flat. Set CHITON_VECTOR_BENCH to a comma-separated
-// list of sizes, e.g. 10000,100000,1000000.
+// query latency percentiles, recall@8 against Flat, and for HNSW the saved index's size and load time.
+// Set CHITON_VECTOR_BENCH to a comma-separated list of sizes, e.g. 10000,100000,1000000.
 func TestVectorBenchReport(t *testing.T) {
 	spec := os.Getenv("CHITON_VECTOR_BENCH")
 	if spec == "" {
 		t.Skip("set CHITON_VECTOR_BENCH=10000,100000 to run")
 	}
-	fmt.Println("| Vectors | Backend | Build | Heap | Heap / raw | p50 query | p95 query | recall@8 |")
-	fmt.Println("|---|---|---|---|---|---|---|---|")
+	fmt.Printf("%d CPUs\n", runtime.GOMAXPROCS(0))
+	fmt.Println("| Vectors | Backend | Build | Heap | Heap / raw | p50 query | p95 query | recall@8 | Saved index | Load |")
+	fmt.Println("|---|---|---|---|---|---|---|---|---|---|")
 	for field := range strings.SplitSeq(spec, ",") {
 		n, err := strconv.Atoi(strings.TrimSpace(field))
 		if err != nil {
@@ -96,17 +98,40 @@ func TestVectorBenchReport(t *testing.T) {
 				lat[i] = time.Since(s) / time.Duration(reps)
 			}
 			slices.Sort(lat)
-			recall := 1.0
+			recall, saved, load := 1.0, "—", "—"
 			if backend == "flat" {
 				flat = idx
 			} else {
 				recall = recallAt(flat, idx, queries, 8)
+				size, took := saveAndLoad(t, idx.(*HNSW), items)
+				saved, load = fmt.Sprintf("%.1f MB", float64(size)/1e6), took.Round(10*time.Millisecond).String()
 			}
-			fmt.Printf("| %d | %s | %s | %.0f MB | %.2f | %.3f ms | %.3f ms | %.3f |\n", n, backend,
-				build.Round(10*time.Millisecond), heap/1e6, heap/raw, ms(lat[len(lat)/2]), ms(lat[len(lat)*95/100]), recall)
+			fmt.Printf("| %d | %s | %s | %.0f MB | %.2f | %.3f ms | %.3f ms | %.3f | %s | %s |\n", n, backend,
+				build.Round(10*time.Millisecond), heap/1e6, heap/raw, ms(lat[len(lat)/2]), ms(lat[len(lat)*95/100]), recall,
+				saved, load)
 			runtime.KeepAlive(idx)
 		}
 	}
+}
+
+// saveAndLoad saves h and times loading it back, as serve does: fingerprint the vectors, read the file, and
+// normalize each vector into the graph. It returns the file's size and the load time.
+func saveAndLoad(t *testing.T, h *HNSW, items []Item) (int64, time.Duration) {
+	cfg := HNSWConfig{Dim: benchDim, Seed: 1}
+	path := filepath.Join(t.TempDir(), "hnsw.idx")
+	if err := SaveHNSW(path, h, Fingerprint(cfg, itemSeq(items)), nil); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	loaded, err := LoadHNSW(path, cfg, Fingerprint(cfg, itemSeq(items)), nil, lookupIn(items))
+	if err != nil || loaded.Len() != h.Len() {
+		t.Fatalf("load: %v", err)
+	}
+	return info.Size(), time.Since(start)
 }
 
 func liveHeap() uint64 {

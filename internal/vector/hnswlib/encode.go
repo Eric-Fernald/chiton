@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"math/rand"
+	"slices"
 )
 
 // The stream is a magic string and version, the parameters, then every node (tombstones included, since
@@ -15,6 +16,7 @@ import (
 // floats little-endian IEEE 754 bits. Keys must be strings or signed integers; the header records which.
 const (
 	magic         = "chiton-hnsw"
+	topoMagic     = "chiton-links" // the same stream with every vector left out; not prefixed by magic
 	formatVersion = 1
 
 	// Bounds a stream must respect. They keep a corrupt or hostile stream from forcing huge allocations,
@@ -28,14 +30,30 @@ const (
 )
 
 // WriteTo writes the graph to w. It implements io.WriterTo.
-func (g *Graph[K]) WriteTo(w io.Writer) (int64, error) {
+func (g *Graph[K]) WriteTo(w io.Writer) (int64, error) { return g.write(w, true) }
+
+// WriteTopology writes the graph as WriteTo does but without its vectors, for a caller that stores them
+// elsewhere and hands them back to ReadTopology. It refuses a graph with tombstones, whose keys may since
+// have been given new vectors.
+func (g *Graph[K]) WriteTopology(w io.Writer) (int64, error) {
+	if slices.Contains(g.dead, true) {
+		return 0, errors.New("hnswlib: cannot write the topology of a graph with removed nodes")
+	}
+	return g.write(w, false)
+}
+
+func (g *Graph[K]) write(w io.Writer, withVecs bool) (int64, error) {
 	cw := &countingWriter{w: w}
 	e := encoder{w: bufio.NewWriter(cw)}
 	kind, err := keyKind[K]()
 	if err != nil {
 		return 0, err
 	}
-	e.raw([]byte(magic))
+	if withVecs {
+		e.raw([]byte(magic))
+	} else {
+		e.raw([]byte(topoMagic))
+	}
 	e.uint(formatVersion)
 	e.uint(kind)
 	e.uint(uint64(g.Metric))
@@ -49,7 +67,9 @@ func (g *Graph[K]) WriteTo(w io.Writer) (int64, error) {
 	for id := range g.keys {
 		e.key(g.keys[id])
 		e.bool(g.dead[id])
-		e.floats(g.vecs[id])
+		if withVecs {
+			e.floats(g.vecs[id])
+		}
 		e.uint(uint64(len(g.links[id])))
 		for _, list := range g.links[id] {
 			e.uint(uint64(len(list)))
@@ -67,20 +87,38 @@ func (g *Graph[K]) WriteTo(w io.Writer) (int64, error) {
 // ReadFrom replaces the graph, parameters included, with one written by WriteTo. On error the graph is
 // unchanged. It implements io.ReaderFrom.
 func (g *Graph[K]) ReadFrom(r io.Reader) (int64, error) {
+	return g.read(r, magic, func(d *decoder, _ K) []float32 { return d.floats() })
+}
+
+// ReadTopology replaces the graph, parameters included, with one written by WriteTopology, taking each
+// node's vector from vec, which reports false for a key it has none for. The graph keeps those vectors
+// without copying them. On error the graph is unchanged.
+func (g *Graph[K]) ReadTopology(r io.Reader, vec func(K) ([]float32, bool)) (int64, error) {
+	return g.read(r, topoMagic, func(d *decoder, key K) []float32 {
+		v, ok := vec(key)
+		if !ok && d.err == nil {
+			d.err = fmt.Errorf("hnswlib: no vector for key %v", key)
+		}
+		return v
+	})
+}
+
+// read decodes a stream that starts with want, getting each node's vector from nodeVec.
+func (g *Graph[K]) read(r io.Reader, want string, nodeVec func(d *decoder, key K) []float32) (int64, error) {
 	cr := &countingReader{r: r}
 	d := decoder{r: bufio.NewReader(cr)}
-	if got := string(d.raw(len(magic))); d.err == nil && got != magic {
+	if got := string(d.raw(len(want))); d.err == nil && got != want {
 		return cr.n, errors.New("hnswlib: not a graph stream")
 	}
 	if v := d.uint(); d.err == nil && v != formatVersion {
 		return cr.n, fmt.Errorf("hnswlib: unsupported format version %d", v)
 	}
-	want, err := keyKind[K]()
+	wantKind, err := keyKind[K]()
 	if err != nil {
 		return cr.n, err
 	}
-	if kind := d.uint(); d.err == nil && kind != want {
-		return cr.n, fmt.Errorf("hnswlib: stream holds key kind %d, graph uses %d", kind, want)
+	if kind := d.uint(); d.err == nil && kind != wantKind {
+		return cr.n, fmt.Errorf("hnswlib: stream holds key kind %d, graph uses %d", kind, wantKind)
 	}
 	metric := Metric(d.uint())
 	m, mult := d.uint(), d.float64()
@@ -102,7 +140,13 @@ func (g *Graph[K]) ReadFrom(r io.Reader) (int64, error) {
 	for id := uint64(0); id < n && d.err == nil; id++ {
 		key := decodeKey[K](&d)
 		isDead := d.bool()
-		vec := d.floats()
+		if isDead && want == topoMagic && d.err == nil {
+			d.err = fmt.Errorf("hnswlib: topology node %d is removed", id)
+		}
+		var vec []float32
+		if d.err == nil {
+			vec = nodeVec(&d, key)
+		}
 		levels := d.uint()
 		switch {
 		case d.err != nil:

@@ -3,9 +3,20 @@ package crypto
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hkdf"
 	"crypto/rand"
+	"crypto/sha256"
 	"fmt"
 )
+
+// FileKey derives the key for files chiton seals beside the graph store from the store's own key, so the
+// store and those files never share a key.
+func FileKey(storeKey []byte) ([]byte, error) {
+	if len(storeKey) == 0 {
+		return nil, fmt.Errorf("crypto: empty store key")
+	}
+	return hkdf.Key(sha256.New, storeKey, nil, "chiton file key v1", 32)
+}
 
 // envelopeVersion leads EncryptBytes' on-disk layout: version (1 byte) | GCM nonce (12) |
 // ciphertext+tag. It lets the format evolve without breaking existing files.

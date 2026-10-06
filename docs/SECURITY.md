@@ -128,6 +128,7 @@ in-process whisper.cpp backend exists but requires a `-tags whisper_cgo` build.
 | Path | Contents | Encrypted? |
 |---|---|---|
 | `chiton-out/graph.kuzu/` (default `graph_path`) | The BadgerDB graph: all node text, transcripts, email bodies, embeddings | **Yes**, when a keyfile is present (§2) |
+| `chiton-out/hnsw.idx` | Saved HNSW index: node IDs and graph links, no vectors or text | **Yes**, when the store is encrypted: AES-256-GCM under a key derived from the store's (§2) |
 | `chiton-out/cluster.json`, `chiton-out/cache.json` | Cluster sidecar and content-hash cache | **No — plaintext** |
 | `.chiton/keyfile.json` | Argon2id salt + KDF parameters only (no key, no passphrase) | n/a — no secret in it |
 | `.chiton/hooks.yaml`, `sources.yaml`, `schema_version`, `.gitignore` | Policy files | **No — plaintext**, and `hooks.yaml`/`sources.yaml` are meant to be committed |
@@ -211,13 +212,17 @@ required non-zero `IndexCacheSize` of 64 MiB) — see
 `internal/graph/store/badger/store.go` (`applyEncryption`). This covers the LSM
 tree, value log, and all node/edge/embedding data Badger persists — which, once
 you have ingested email, Slack, or transcripts, is where the sensitive text
-lives.
+lives. Badger encrypts with AES-256 in CTR mode (`y.XORBlock` in
+`badger/v4`), which keeps the contents confidential but does not authenticate
+them: it does not detect tampering with the files on disk.
 
-> **Scope caveat (shipped reality):** only the Badger store is encrypted today.
-> The package doc in `internal/crypto/keyfile.go` describes AES-256-GCM wrapping
-> for ad-hoc artifacts (`cache.json`, `cluster.json`, `audit.jsonl`) via
-> `EncryptBytes`/`DecryptBytes` in `internal/crypto/file.go`, but those helpers
-> are **not yet wired into the application** (they are exercised only by tests).
+> **Scope caveat (shipped reality):** only the Badger store and the saved HNSW
+> index (`hnsw.idx`) are encrypted today. The index is sealed with
+> `EncryptBytes` under `FileKey`, an HKDF-SHA256 derivation of the store key, so
+> it never shares a key with the store; without the key it is not loaded and
+> `serve` rebuilds the index instead. The package doc in
+> `internal/crypto/keyfile.go` describes the same wrapping for other artifacts
+> (`cache.json`, `cluster.json`, `audit.jsonl`), but that is **not yet wired in**.
 > Everything in the "No — plaintext" rows of §1.3 stays plaintext: the cluster
 > sidecar, the content cache, `.chiton/baselines/`, `.chiton/llm-analyzed.json`,
 > and `chiton export` snapshots. The design's "export archive is encrypted with
@@ -239,7 +244,7 @@ passphrase it reveals nothing.
 | Parallelism | 4 | Floor 1 |
 | Salt | 16 random bytes (hex) | Floor 16 bytes |
 | Key length | 32 bytes | Must be exactly 32 (AES-256) |
-| Cipher | `AES-256-GCM` | |
+| Cipher | `AES-256-GCM` | A label in the keyfile. It is the cipher for sealed files (`hnsw.idx`); Badger encrypts the store itself in CTR mode |
 
 The derivation is deterministic: the same passphrase + same keyfile always
 produce the same 32-byte key, so the encrypted store re-opens reliably. A loaded
@@ -486,7 +491,7 @@ status is labelled **shipped** or **planned**.
 
 | Threat | Mitigation | Status |
 |---|---|---|
-| Laptop theft / lost device reading the store off disk | AES-256-GCM store encryption keyed from an Argon2id passphrase | **Shipped** |
+| Laptop theft / lost device reading the store off disk | AES-256 (Badger, CTR mode) store encryption keyed from an Argon2id passphrase | **Shipped** |
 | Backup leakage (`chiton-out/` in cloud/disk backups) | Same store encryption | **Shipped** |
 | Stolen `chiton-out/graph.kuzu/` yields readable data | Same store encryption | **Shipped** |
 | Plaintext sidecars / exports leaking the same data | — | **Not mitigated:** `cluster.json`, `cache.json`, `.chiton/baselines/`, `.chiton/llm-analyzed.json`, and `chiton export` output are plaintext |

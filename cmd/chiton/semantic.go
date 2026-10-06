@@ -16,6 +16,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 	"github.com/Eric-Fernald/chiton/internal/graph/retrieve"
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
+	"github.com/Eric-Fernald/chiton/internal/vector"
 )
 
 const embedBatchSize = 64
@@ -88,10 +89,10 @@ for CI and demos). Restart 'chiton serve' afterwards to load the new vectors.`,
 				}
 			}
 			if len(work) == 0 {
-				fmt.Fprintln(out, "embed: nothing to do (all embeddable nodes already have vectors; use --all to re-embed)")
-				return nil
+				fmt.Fprintln(out, "embed: nothing to embed (all embeddable nodes already have vectors; use --all to re-embed)")
+			} else {
+				fmt.Fprintf(out, "embed: %d node(s) to embed\n", len(work))
 			}
-			fmt.Fprintf(out, "embed: %d node(s) to embed\n", len(work))
 
 			written := 0
 			for start := 0; start < len(work); start += embedBatchSize {
@@ -110,11 +111,20 @@ for CI and demos). Restart 'chiton serve' afterwards to load the new vectors.`,
 				written += len(embs)
 				fmt.Fprintf(out, "embed: %d/%d\n", written, len(work))
 			}
+			if written > 0 {
+				fmt.Fprintf(out, "embed: done — %d embeddings written (dim %d)\n", written, emb.Dim())
+			}
 
-			fmt.Fprintf(out, "embed: done — %d embeddings written (dim %d)\n", written, emb.Dim())
+			// Save the HNSW index serve loads, so it never builds one at startup. The vectors are already
+			// stored, so a failure here only costs serve that build.
+			logf := func(format string, args ...any) { fmt.Fprintf(out, format+"\n", args...) }
+			idx, err := saveIndex(ctx, cfg.Vector, es, savedIndexFor(cfg.GraphPath, gs), logf)
+			if err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "embed: warning: hnsw index not saved: %v\n", err)
+			}
 
 			if linkSimilar {
-				n, err := linkSimilarNodes(ctx, gs, es, float32(similarThreshold), cfg.Vector, exact)
+				n, err := linkSimilarNodes(ctx, gs, es, float32(similarThreshold), cfg.Vector, exact, idx)
 				if err != nil {
 					return fmt.Errorf("link-similar: %w", err)
 				}
@@ -138,16 +148,19 @@ for CI and demos). Restart 'chiton serve' afterwards to load the new vectors.`,
 
 // linkSimilarNodes indexes all embeddings and adds a SIMILAR_TO edge (INFERRED, confidence=score) for each
 // pair above threshold. Large stores get an approximate index, which can miss a few pairs; exact forces Flat.
+// A non-nil built index over the same embeddings is used instead of building one, unless exact is set.
 func linkSimilarNodes(ctx context.Context, gs store.GraphStore, es store.EmbeddingStore, threshold float32,
-	vcfg config.VectorConfig, exact bool) (int, error) {
+	vcfg config.VectorConfig, exact bool, built vector.Index) (int, error) {
 	embs, err := es.AllEmbeddings(ctx)
 	if err != nil {
 		return 0, err
 	}
-	// Clone so embs keeps raw vectors for the loop below.
-	idx, _, err := buildIndex(vcfg, slices.Clone(embs), exact)
-	if err != nil {
-		return 0, err
+	idx := built
+	if idx == nil || exact {
+		// Clone so embs keeps raw vectors for the loop below.
+		if idx, _, err = buildIndex(vcfg, slices.Clone(embs), exact); err != nil {
+			return 0, err
+		}
 	}
 
 	seen := map[[2]string]bool{}

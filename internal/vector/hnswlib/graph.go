@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"runtime"
 	"slices"
 	"sync"
+	"sync/atomic"
 )
 
 // Hit is one search result.
@@ -36,6 +38,9 @@ type Graph[K cmp.Ordered] struct {
 	EfSearch int
 	// EfConstruction is the candidate list size while inserting.
 	EfConstruction int
+	// Workers caps the goroutines InsertBatch links nodes with; 0 means GOMAXPROCS. With more than one the
+	// graph depends on scheduling, so only Workers 1 builds the same graph every time.
+	Workers int
 
 	keys    []K
 	vecs    [][]float32
@@ -45,6 +50,11 @@ type Graph[K cmp.Ordered] struct {
 	entry   int32
 	top     int // level of the entry point
 	visited sync.Pool
+
+	// locks guards each node's link lists while InsertBatch links in parallel, and is nil otherwise so
+	// searches on a finished graph take no locks. entryMu guards entry and top during that time.
+	locks   []sync.Mutex
+	entryMu sync.Mutex
 }
 
 // New returns an empty graph: cosine distance, M 16, EfSearch 64, EfConstruction 128, seed 1.
@@ -98,9 +108,93 @@ func (g *Graph[K]) Vector(key K) ([]float32, bool) {
 // Insert adds vec under key, replacing any vector already there. The graph keeps vec without copying it.
 // It panics if vec's length differs from the graph's.
 func (g *Graph[K]) Insert(key K, vec []float32) {
-	if d := g.Dim(); d != 0 && d != len(vec) {
-		panic(fmt.Sprintf("hnswlib: inserting a %d-dimensional vector into a %d-dimensional graph", len(vec), d))
+	g.InsertBatch([]K{key}, [][]float32{vec})
+}
+
+// InsertBatch inserts each keys[i] with vecs[i] as Insert would, a later duplicate key replacing an
+// earlier one, and links the new nodes on up to Workers goroutines. The graph keeps the vectors without
+// copying them. It panics, changing nothing, if the slices differ in length or a vector's length differs
+// from the graph's.
+func (g *Graph[K]) InsertBatch(keys []K, vecs [][]float32) {
+	if len(keys) != len(vecs) {
+		panic(fmt.Sprintf("hnswlib: %d keys for %d vectors", len(keys), len(vecs)))
 	}
+	dim := g.Dim()
+	for _, v := range vecs {
+		if dim == 0 {
+			dim = len(v)
+		}
+		if len(v) != dim {
+			panic(fmt.Sprintf("hnswlib: inserting a %d-dimensional vector into a %d-dimensional graph", len(v), dim))
+		}
+	}
+	if len(keys) == 0 {
+		return
+	}
+	g.init()
+
+	keep := make([]bool, len(keys))
+	if len(keys) == 1 {
+		keep[0] = true
+	} else {
+		last := make(map[K]int, len(keys))
+		for i, k := range keys {
+			last[k] = i
+		}
+		for i, k := range keys {
+			keep[i] = last[k] == i
+		}
+	}
+	// Remove every replaced key before allocating any new node, so an entry-point election never picks a
+	// node that is not linked yet.
+	for i, k := range keys {
+		if keep[i] {
+			g.Remove(k)
+		}
+	}
+	type pending struct {
+		id    int32
+		level int
+	}
+	todo := make([]pending, 0, len(keys))
+	for i, k := range keys {
+		if !keep[i] {
+			continue
+		}
+		if id, level, first := g.alloc(k, vecs[i]); !first {
+			todo = append(todo, pending{id, level})
+		}
+	}
+
+	workers := g.Workers
+	if workers <= 0 {
+		workers = runtime.GOMAXPROCS(0)
+	}
+	if workers == 1 || len(todo) < 2*workers {
+		for _, p := range todo {
+			g.connect(p.id, p.level)
+		}
+		return
+	}
+	g.locks = make([]sync.Mutex, len(g.keys))
+	defer func() {
+		g.locks = nil
+		// Each worker pooled a visited set as large as the graph; searches afterwards need far fewer.
+		g.visited = sync.Pool{}
+	}()
+	var next atomic.Int64
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Go(func() {
+			for i := next.Add(1) - 1; i < int64(len(todo)); i = next.Add(1) - 1 {
+				g.connect(todo[i].id, todo[i].level)
+			}
+		})
+	}
+	wg.Wait()
+}
+
+func (g *Graph[K]) init() {
 	if g.M <= 0 {
 		g.M = 16
 	}
@@ -113,10 +207,13 @@ func (g *Graph[K]) Insert(key K, vec []float32) {
 	if g.index == nil {
 		g.index = map[K]int32{}
 	}
-	g.Remove(key)
+}
 
-	level := g.drawLevel()
-	id := int32(len(g.keys))
+// alloc appends an unlinked node for key at a freshly drawn level. The first node of an empty graph
+// becomes the entry point and needs no links, which alloc reports as first.
+func (g *Graph[K]) alloc(key K, vec []float32) (id int32, level int, first bool) {
+	level = g.drawLevel()
+	id = int32(len(g.keys))
 	g.keys = append(g.keys, key)
 	g.vecs = append(g.vecs, vec)
 	g.dead = append(g.dead, false)
@@ -125,39 +222,60 @@ func (g *Graph[K]) Insert(key K, vec []float32) {
 		lists[l] = make([]int32, 0, g.maxLinks(l)+1)
 	}
 	g.links = append(g.links, lists)
-	empty := len(g.index) == 0
+	first = len(g.index) == 0
 	g.index[key] = id
-	if empty {
+	if first {
 		g.entry, g.top = id, level
-		return
 	}
+	return id, level, first
+}
 
-	ep := g.entry
-	for l := g.top; l > level; l-- {
+// connect links the allocated node id into every level up to its own, following the paper's Algorithm 1.
+func (g *Graph[K]) connect(id int32, level int) {
+	vec := g.vecs[id]
+	g.entryMu.Lock()
+	ep, top := g.entry, g.top
+	g.entryMu.Unlock()
+	for l := top; l > level; l-- {
 		ep = g.descend(vec, ep, l)
 	}
 	eps := []candidate{{ep, g.dist(vec, g.vecs[ep])}}
 	ef := max(g.EfConstruction, g.M)
-	for l := min(level, g.top); l >= 0; l-- {
-		found := g.searchLayer(vec, eps, ef, l)
+	for l := min(level, top); l >= 0; l-- {
+		// In a parallel build another worker may already have linked to id, so the search can reach it.
+		found := slices.DeleteFunc(g.searchLayer(vec, eps, ef, l), func(c candidate) bool { return c.id == id })
 		if len(found) == 0 {
 			continue // only tombstones nearby; keep the previous entry points
 		}
 		chosen := g.pickLinks(found, g.M)
-		g.links[id][l] = append(g.links[id][l], chosen...)
+		g.link(id, l, chosen...)
 		for _, nb := range chosen {
-			g.link(nb, id, l)
+			g.link(nb, l, id)
 		}
 		eps = found
 	}
-	if level > g.top {
-		g.entry, g.top = id, level
+	if level > top {
+		g.entryMu.Lock()
+		if level > g.top {
+			g.entry, g.top = id, level
+		}
+		g.entryMu.Unlock()
 	}
 }
 
-// link adds an edge from node to nb at level. When node's list overflows it is re-chosen with pickLinks.
-func (g *Graph[K]) link(node, nb int32, level int) {
-	list := append(g.links[node][level], nb)
+// link adds edges from node to each of nbs at level, skipping ones it already has. When node's list
+// overflows it is re-chosen with pickLinks.
+func (g *Graph[K]) link(node int32, level int, nbs ...int32) {
+	if g.locks != nil {
+		g.locks[node].Lock()
+		defer g.locks[node].Unlock()
+	}
+	list := g.links[node][level]
+	for _, nb := range nbs {
+		if !slices.Contains(list, nb) {
+			list = append(list, nb)
+		}
+	}
 	if len(list) <= g.maxLinks(level) {
 		g.links[node][level] = list
 		return
@@ -168,6 +286,18 @@ func (g *Graph[K]) link(node, nb int32, level int) {
 	}
 	slices.SortFunc(cands, candidate.compare)
 	g.links[node][level] = append(list[:0], g.pickLinks(cands, g.maxLinks(level))...)
+}
+
+// neighbors returns node's links at level. During a parallel build it copies them into buf under the
+// node's lock, since another worker may be rewriting the list.
+func (g *Graph[K]) neighbors(node int32, level int, buf []int32) []int32 {
+	if g.locks == nil {
+		return g.links[node][level]
+	}
+	g.locks[node].Lock()
+	buf = append(buf[:0], g.links[node][level]...)
+	g.locks[node].Unlock()
+	return buf
 }
 
 // pickLinks chooses up to m links from cands, which must be sorted nearest first. A candidate is kept only
@@ -196,9 +326,11 @@ func (g *Graph[K]) pickLinks(cands []candidate, m int) []int32 {
 // descend walks one level greedily from ep toward q until no neighbour is closer. Tombstones still route.
 func (g *Graph[K]) descend(q []float32, ep int32, level int) int32 {
 	cur, curDist := ep, g.dist(q, g.vecs[ep])
+	var buf []int32
 	for moved := true; moved; {
 		moved = false
-		for _, nb := range g.links[cur][level] {
+		buf = g.neighbors(cur, level, buf)
+		for _, nb := range buf {
 			if d := g.dist(q, g.vecs[nb]); d < curDist {
 				cur, curDist, moved = nb, d, true
 			}
@@ -227,12 +359,14 @@ func (g *Graph[K]) searchLayer(q []float32, eps []candidate, ef, level int) []ca
 	for len(best) > ef {
 		best.pop()
 	}
+	var buf []int32
 	for len(frontier) > 0 {
 		c := frontier.pop()
 		if len(best) >= ef && c.dist > best[0].dist {
 			break
 		}
-		for _, nb := range g.links[c.id][level] {
+		buf = g.neighbors(c.id, level, buf)
+		for _, nb := range buf {
 			if seen.mark(nb) {
 				continue
 			}

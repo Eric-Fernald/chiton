@@ -1,6 +1,6 @@
 # Spec: HNSW vector index
 
-Status: PR 1 (R1 to R9) implemented on the `hnsw` branch; R10 not started. Audience: an implementing engineer or model with no prior context. Facts marked "verify" came from web summaries or memory and must be checked before relying on them.
+Status: PR 1 (R1 to R9) implemented on the `hnsw` branch; R10 implemented on `hnsw-persist-parallel`, with a parallel build. Audience: an implementing engineer or model with no prior context. Facts marked "verify" came from web summaries or memory and must be checked before relying on them.
 
 ## Implementation notes
 
@@ -9,11 +9,13 @@ Where the build departs from this spec, and why:
 - **No coder/hnsw.** It does not compile on Windows: `SavedGraph` imports `google/renameio`, whose files are all `!windows`, which breaks this machine and the `windows-amd64` release. A vendored copy measured slower than `Flat` at 5k vectors (map adjacency, a sort and allocation per hop) with recall@8 of 0.81 at ef 64, and its delete left dangling links. `internal/vector/hnswlib` is a new implementation written from the paper. It shares no code with coder/hnsw.
 - **Distance.** R3's custom distance is the built-in `hnswlib.UnitCosine` metric, so there is no function registry.
 - **Extra key.** `vector.hnsw_ef_construction` sets the build-time candidate list, which this spec did not list.
-- **Defaults.** `M` 16, `ef_search` 128, `ef_construction` 200, threshold 100k, from the sweep in `docs/BENCHMARK.md`.
+- **Defaults.** `M` 16, `ef_search` 128, threshold 100k, from the sweep in `docs/BENCHMARK.md`. `ef_construction` started at 200 and was lowered to 100 to halve build time; at `ef_search` 128 recall@8 stayed 0.999 on embedding-like data and fell from 0.894 to 0.869 on iid data.
+- **Parallel build.** `hnswlib.Graph.InsertBatch` links nodes on `GOMAXPROCS` goroutines with a lock per node, as hnswlib does. Levels are drawn in input order first, but the links depend on scheduling, so a parallel build is no longer bit-reproducible; `Workers = 1` still is. R5's reproducibility now holds for sequential builds and for any saved index, and identical queries on one graph still return identical results.
+- **R10 as built.** The sidecar is `hnsw.idx` beside the store and holds only the topology (keys and links); `LoadHNSW` takes the vectors back from the store, so the file is about 2% of the vector data (68 MB for 1M 768-d vectors) and nothing is stored twice. The validity key is one SHA-256 over every (ID, vector) in store order plus `M`, `ef_construction`, dimension, and seed, which covers the count, dimension, model, and ID-list checks R10 asks for. When the store is encrypted the file is sealed with AES-256-GCM under a key derived from the store key (`crypto.FileKey`), since node IDs name code. `chiton embed` writes it, even when nothing new needed embedding; `serve` only reads it, and on a missing, stale, or unreadable file falls back to the background build with a log line, never an error.
 - **Recall test data.** T2's random-vector test uses clustered "embedding-like" vectors. iid Gaussian vectors in 64 or more dimensions have almost no neighbour structure, so they are kept as a separate worst-case test (recall@8 at least 0.85).
 - **Determinism.** The entry point is the live node with the highest level and lowest id, so identical queries return identical results, not only reproducible builds.
 - **Race test.** T3's `-race` run needs cgo. The development machine has no C toolchain, so only CI runs it.
-- **No blocking build.** R7 put the selected backend at all three call sites. Building HNSW takes about a minute per 100k vectors, and that would delay `serve`'s MCP handshake past assistant startup timeouts. So `serve` starts on Flat and swaps HNSW in from a background build (`vector.Swappable`), and a one-shot `chiton search` stays exact unless `vector.index` is `hnsw`.
+- **No blocking build.** R7 put the selected backend at all three call sites. Building HNSW took about a minute per 100k vectors single-threaded, and that would delay `serve`'s MCP handshake past assistant startup timeouts. So when no saved index is current, `serve` starts on Flat and swaps HNSW in from a background build (`vector.Swappable`), and a one-shot `chiton search` stays exact unless `vector.index` is `hnsw`.
 - **Hardened decoding.** `ReadFrom` already validates every bound and cross-reference R10 will need, and has a fuzz test.
 - **Mixed dimensions.** `buildIndex` sizes HNSW to the store's most common vector length rather than the embedder's `Dim()`, which reports the configured default until Ollama's first call.
 

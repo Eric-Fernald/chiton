@@ -966,7 +966,7 @@ func buildSemanticDeps(cmd *cobra.Command, cfg *config.Config, gs store.GraphSto
 		return deps
 	}
 	logf := func(format string, args ...any) { fmt.Fprintf(errOut, format+"\n", args...) }
-	idx, _, err := serveIndex(cmd.Context(), cfg.Vector, embs, es.AllEmbeddings, logf)
+	idx, _, err := serveIndex(cmd.Context(), cfg.Vector, embs, es.AllEmbeddings, savedIndexFor(cfg.GraphPath, gs), logf)
 	if err != nil {
 		fmt.Fprintf(errOut, "serve: warning: semantic_search disabled: %v\n", err)
 		return deps

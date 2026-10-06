@@ -174,6 +174,62 @@ func FuzzReadFrom(f *testing.F) {
 	})
 }
 
+func TestTopologyRoundTrip(t *testing.T) {
+	rng := rand.New(rand.NewSource(8))
+	g1 := New[string]()
+	vecs := map[string][]float32{}
+	for i := range 400 {
+		k := fmt.Sprintf("node-%d", i)
+		vecs[k] = randVec(rng, 12)
+		g1.Insert(k, vecs[k])
+	}
+	var topo, full bytes.Buffer
+	if _, err := g1.WriteTopology(&topo); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g1.WriteTo(&full); err != nil {
+		t.Fatal(err)
+	}
+	if want := full.Len() - 400*12*4; topo.Len() >= want {
+		t.Errorf("topology is %d bytes, want under %d: the full stream less its vectors", topo.Len(), want)
+	}
+	lookup := func(k string) ([]float32, bool) { v, ok := vecs[k]; return v, ok }
+
+	g2 := &Graph[string]{}
+	if _, err := g2.ReadTopology(bytes.NewReader(topo.Bytes()), lookup); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(g1.links, g2.links) || !reflect.DeepEqual(g1.vecs, g2.vecs) || g1.entry != g2.entry {
+		t.Fatal("graph read from its topology differs")
+	}
+	checkInvariants(t, g2)
+
+	if _, err := (&Graph[string]{}).ReadTopology(bytes.NewReader(full.Bytes()), lookup); err == nil {
+		t.Error("ReadTopology accepted a full stream")
+	}
+	if _, err := (&Graph[string]{}).ReadFrom(bytes.NewReader(topo.Bytes())); err == nil {
+		t.Error("ReadFrom accepted a topology stream")
+	}
+	delete(vecs, "node-5")
+	target := New[string]()
+	target.Insert("kept", []float32{1})
+	if _, err := target.ReadTopology(bytes.NewReader(topo.Bytes()), lookup); err == nil ||
+		!strings.Contains(err.Error(), "no vector") {
+		t.Errorf("ReadTopology with a missing vector: err = %v", err)
+	}
+	if target.Len() != 1 {
+		t.Error("a failed ReadTopology changed the graph")
+	}
+}
+
+func TestWriteTopologyRefusesTombstones(t *testing.T) {
+	g := lineGraph(10)
+	g.Remove(4)
+	if _, err := g.WriteTopology(&bytes.Buffer{}); err == nil {
+		t.Fatal("WriteTopology wrote a graph with a removed node")
+	}
+}
+
 func TestWriteToRejectsUnsupportedKeys(t *testing.T) {
 	g := New[float64]()
 	g.Insert(1.5, []float32{1})

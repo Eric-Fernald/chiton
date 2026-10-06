@@ -153,6 +153,22 @@ func TestDecrypt_WrongKey(t *testing.T) {
 	}
 }
 
+func TestFileKey_DerivedAndDistinct(t *testing.T) {
+	storeKey := bytes.Repeat([]byte{0x42}, 32)
+	a, err := FileKey(storeKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := FileKey(storeKey)
+	other, _ := FileKey(bytes.Repeat([]byte{0x43}, 32))
+	if len(a) != 32 || !bytes.Equal(a, b) || bytes.Equal(a, storeKey) || bytes.Equal(a, other) {
+		t.Fatalf("FileKey must be a deterministic 32-byte key distinct from the store key and per store")
+	}
+	if _, err := FileKey(nil); err == nil {
+		t.Fatal("FileKey accepted an empty store key")
+	}
+}
+
 func TestGetPassphrase_FromEnv(t *testing.T) {
 	t.Setenv(EnvVarPassphrase, "from-env")
 	got, err := GetPassphrase("ignored", false)
