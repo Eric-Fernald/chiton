@@ -4,6 +4,8 @@ package metrics
 
 import (
 	"math/rand"
+	"runtime"
+	"sync"
 
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
@@ -91,13 +93,38 @@ func buildIntGraph(n int, edges []model.Edge, idToIdx map[string]int) *intGraph 
 
 // ── Brandes algorithm ─────────────────────────────────────────────────────────
 
-// betweenness runs Brandes from each source, scaling every contribution by scale, and normalizes the sums.
-// It runs in O(len(sources)·m).
+// maxWorkers caps betweenness's goroutines, since each holds five n-length buffers.
+const maxWorkers = 8
+
+// betweenness runs Brandes from each source on up to maxWorkers goroutines, scaling every contribution by
+// scale, and normalizes the sums. It runs in O(len(sources)·m) total work.
 func betweenness(g *intGraph, sources []int, scale float64) []float64 {
-	bet := make([]float64, g.n)
-	b := newBrandes(g)
-	for _, s := range sources {
-		b.accumulate(s, bet, scale)
+	return betweennessWorkers(g, sources, scale, min(runtime.GOMAXPROCS(0), maxWorkers))
+}
+
+// betweennessWorkers gives each worker a contiguous run of sources, its own buffers, and its own partial
+// sums, then adds the partials in worker order, so a given worker count always yields the same floats.
+func betweennessWorkers(g *intGraph, sources []int, scale float64, workers int) []float64 {
+	workers = max(1, min(workers, len(sources)))
+	chunk := (len(sources) + workers - 1) / workers
+	partial := make([][]float64, workers)
+	var wg sync.WaitGroup
+	for w := range workers {
+		partial[w] = make([]float64, g.n)
+		lo, hi := min(w*chunk, len(sources)), min((w+1)*chunk, len(sources))
+		wg.Go(func() {
+			b := newBrandes(g)
+			for _, s := range sources[lo:hi] {
+				b.accumulate(s, partial[w], scale)
+			}
+		})
+	}
+	wg.Wait()
+	bet := partial[0]
+	for _, p := range partial[1:] {
+		for i, v := range p {
+			bet[i] += v
+		}
 	}
 	normalize(bet, g.n)
 	return bet

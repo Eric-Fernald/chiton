@@ -91,6 +91,10 @@ dated section.
 
 ### Changed
 
+- **`chiton cluster` computes betweenness on up to 8 cores.** Brandes pivots are split across workers with
+  private buffers and summed in a fixed order; a full pass over a 118k-node graph dropped from 4.3 s to
+  0.95 s of compute.
+
 - The Badger value log is capped at 64 MiB per file (Badger preallocates 128 MiB instead of 2 GiB while a writer is open), and a writable store runs a bounded value-log GC on close.
 - Label lookups on a read-only store (`get_node`, `query_graph`, `shortest_path`, `chiton query`) answer from an in-memory label index after the first search instead of decoding every node.
 - `get_node_neighborhood` takes `max_nodes`/`max_tokens` (defaults 100 / 4000) and reports `truncated`; all MCP tool results are compact JSON (no indentation or HTML escaping). `god_nodes` clamps `limit` to 1-100.
