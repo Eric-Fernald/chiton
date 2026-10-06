@@ -181,3 +181,55 @@ func TestWebhookAcksBeforeIngest(t *testing.T) {
 	close(release)
 	h.Close()
 }
+
+func TestWebhookCoalescesMeetingAndKeysByResource(t *testing.T) {
+	prev := notificationDebounce
+	notificationDebounce = time.Minute // only Close's drain runs the queue
+	t.Cleanup(func() { notificationDebounce = prev })
+	var got []ChangeItem
+	h := NewWebhookHandler("s3cr3t", func(_ context.Context, c ChangeItem) error {
+		got = append(got, c) // single worker, and Close waits for it
+		return nil
+	}, nil)
+	body := `{"value":[
+	  {"subscriptionId":"s","clientState":"s3cr3t","resource":"communications/onlineMeetings('M1')/transcripts('T1')"},
+	  {"subscriptionId":"s","clientState":"s3cr3t","resource":"communications/onlineMeetings('M1')/transcripts('T2')"},
+	  {"subscriptionId":"s","clientState":"s3cr3t","resource":"chats/other"}
+	]}`
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/hook", strings.NewReader(body)))
+	h.Close()
+	if len(got) != 2 {
+		t.Fatalf("onChange ran %d times, want 2 (one per meeting, one for the non-transcript resource)", len(got))
+	}
+	for _, c := range got {
+		if strings.Contains(c.Resource, "M1") && !strings.HasSuffix(c.Resource, "transcripts('T2')") {
+			t.Errorf("meeting M1 ingest used %q, want the newest notification", c.Resource)
+		}
+	}
+	if k := changeKey(ChangeItem{Resource: "chats/other"}); k != "resource:chats/other" {
+		t.Errorf("changeKey = %q, want resource: prefix", k)
+	}
+}
+
+func TestWebhookCloseCancelsStuckIngest(t *testing.T) {
+	prev := closeGrace
+	closeGrace = 20 * time.Millisecond
+	t.Cleanup(func() { closeGrace = prev })
+	aborted := make(chan error, 1)
+	h := NewWebhookHandler("s3cr3t", func(ctx context.Context, _ ChangeItem) error {
+		<-ctx.Done()
+		aborted <- ctx.Err()
+		return ctx.Err()
+	}, nil)
+	body := `{"value":[{"clientState":"s3cr3t","resource":"communications/onlineMeetings('M1')/transcripts('T1')"}]}`
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/hook", strings.NewReader(body)))
+	h.Close()
+	select {
+	case err := <-aborted:
+		if err != context.Canceled {
+			t.Errorf("ingest ctx err = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close returned without aborting the stuck ingest")
+	}
+}

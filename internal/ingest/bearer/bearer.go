@@ -67,6 +67,9 @@ func get(ctx context.Context, client *http.Client, reqURL, token string) (int, [
 func retryDelay(header string, attempt int) time.Duration {
 	d := time.Second << attempt
 	if secs, err := strconv.Atoi(strings.TrimSpace(header)); err == nil && secs >= 0 {
+		if secs >= int(maxRetryWait/time.Second) {
+			return maxRetryWait // cap before multiplying, so a huge value can't overflow Duration
+		}
 		d = time.Duration(secs) * time.Second
 	} else if t, err := http.ParseTime(header); err == nil {
 		d = time.Until(t)

@@ -28,6 +28,9 @@ type changeNotification struct {
 	Value []ChangeItem `json:"value"`
 }
 
+// closeGrace is how long Close lets queued ingests finish before cancelling them. A var so tests can shorten it.
+var closeGrace = 10 * time.Second
+
 // notificationDebounce coalesces repeated notifications for one meeting into a single fetch. A var for tests.
 var notificationDebounce = time.Second
 
@@ -39,6 +42,7 @@ type WebhookHandler struct {
 	log         func(format string, args ...any)
 
 	queue   *jobs.Queue
+	cancel  context.CancelFunc // aborts in-flight ingests when Close's grace period runs out
 	mu      sync.Mutex
 	pending map[string]ChangeItem // newest change per meeting, taken by the queue worker
 }
@@ -60,12 +64,32 @@ func NewWebhookHandler(clientState string, onChange func(ctx context.Context, c 
 		Debounce: notificationDebounce,
 		OnError:  func(key string, err error) { log("teams webhook: onChange failed for %s: %v", key, err) },
 	})
-	h.queue.Start(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	h.cancel = cancel
+	h.queue.Start(ctx)
 	return h
 }
 
-// Close stops accepting notifications and finishes every queued ingest. Call it after the server stops.
-func (h *WebhookHandler) Close() { h.queue.Drain() }
+// Close stops accepting notifications and finishes queued ingests for up to closeGrace, then cancels what is still
+// running and logs how many were dropped. Call it after the server stops, before the store closes.
+func (h *WebhookHandler) Close() {
+	defer h.cancel()
+	done := make(chan struct{})
+	go func() { h.queue.Drain(); close(done) }()
+	timer := time.NewTimer(closeGrace)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return
+	case <-timer.C:
+	}
+	h.mu.Lock()
+	n := len(h.pending)
+	h.mu.Unlock()
+	h.log("teams webhook: shutdown grace expired; cancelling in-flight ingest, dropping %d queued meeting(s)", n)
+	h.cancel()
+	<-done
+}
 
 // changeKey groups notifications by meeting, since one fetch ingests all of a meeting's transcripts.
 func changeKey(c ChangeItem) string {

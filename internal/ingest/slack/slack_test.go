@@ -199,7 +199,7 @@ func TestEventsRejectsBadSignature(t *testing.T) {
 	req.Header.Set("X-Slack-Signature", "v0=deadbeef")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	h.Close() // runs the queued re-ingest
+	h.Close()
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("code=%d want 401", rec.Code)
@@ -222,7 +222,7 @@ func TestEventsRejectsStaleTimestamp(t *testing.T) {
 	req.Header.Set("X-Slack-Signature", signSlack(secret, staleTS, body))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	h.Close() // runs the queued re-ingest
+	h.Close()
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("code=%d want 401 for stale ts", rec.Code)
@@ -244,7 +244,7 @@ func TestEventsFailsClosedWithoutSecret(t *testing.T) {
 	req.Header.Set("X-Slack-Signature", signSlack("", "1735689600", body))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	h.Close() // runs the queued re-ingest
+	h.Close()
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("code=%d want 401 (fail closed when no secret configured)", rec.Code)
@@ -585,5 +585,31 @@ func TestRecentIDsEvictsOldest(t *testing.T) {
 	}
 	if !r.add("") || !r.add("") {
 		t.Fatal("an empty id is always new")
+	}
+}
+
+// TestEventsCloseCancelsStuckIngest checks Close aborts an ingest that outlives the grace period.
+func TestEventsCloseCancelsStuckIngest(t *testing.T) {
+	prev := closeGrace
+	closeGrace = 20 * time.Millisecond
+	t.Cleanup(func() { closeGrace = prev })
+	const secret = "topsecret"
+	aborted := make(chan error, 1)
+	h := NewEventsHandler(secret, func(ctx context.Context, _ MessageEvent) error {
+		<-ctx.Done() // stands in for a 429 wait or a slow fetch
+		aborted <- ctx.Err()
+		return ctx.Err()
+	}, nil)
+	h.now = func() time.Time { return time.Unix(1735689600, 0) }
+	body := `{"type":"event_callback","event_id":"Ev1","event":{"type":"message","channel":"C1","user":"U1","text":"hi","ts":"1735689600.000100"}}`
+	postEvent(t, h, secret, body, "")
+	h.Close() // drain starts the debounced job, which blocks until the grace period cancels it
+	select {
+	case err := <-aborted:
+		if err != context.Canceled {
+			t.Errorf("ingest ctx err = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close returned without aborting the stuck ingest")
 	}
 }

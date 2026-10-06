@@ -110,9 +110,22 @@ func TestRetryDelay(t *testing.T) {
 		{"", 2, 4 * time.Second},
 		{"999999", 0, maxRetryWait},
 		{"junk", 0, time.Second},
+		{"-5", 1, 2 * time.Second},
+		{"9223372036854775807", 0, maxRetryWait},
+		{time.Now().Add(24 * time.Hour).UTC().Format(http.TimeFormat), 0, maxRetryWait},
+		{time.Now().Add(-time.Hour).UTC().Format(http.TimeFormat), 0, 0},
 	} {
 		if got := retryDelay(tc.header, tc.attempt); got != tc.want {
 			t.Errorf("retryDelay(%q, %d) = %v, want %v", tc.header, tc.attempt, got, tc.want)
 		}
+	}
+}
+
+func TestSleepReturnsPromptlyWhenCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	if err := sleep(ctx, time.Hour); err != context.Canceled || time.Since(start) > 5*time.Second {
+		t.Fatalf("sleep = %v after %v, want an immediate context.Canceled", err, time.Since(start))
 	}
 }

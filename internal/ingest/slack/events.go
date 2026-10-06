@@ -19,6 +19,9 @@ import (
 // eventDebounce coalesces a burst of messages in one conversation into a single re-ingest. A var so tests can change it.
 var eventDebounce = time.Second
 
+// closeGrace is how long Close lets queued ingests finish before cancelling them. A var so tests can shorten it.
+var closeGrace = 10 * time.Second
+
 // seenEventsCap bounds how many recent event_ids the handler remembers to drop Slack's redeliveries.
 const seenEventsCap = 1024
 
@@ -55,6 +58,7 @@ type EventsHandler struct {
 	now           func() time.Time
 
 	queue   *jobs.Queue
+	cancel  context.CancelFunc // aborts in-flight ingests when Close's grace period runs out
 	seen    *recentIDs
 	mu      sync.Mutex
 	pending map[string]MessageEvent // newest event per conversation, taken by the queue worker
@@ -85,12 +89,32 @@ func NewEventsHandler(signingSecret string, onMessage func(ctx context.Context, 
 		Debounce: eventDebounce,
 		OnError:  func(key string, err error) { log("slack events: re-ingest of %s failed: %v", key, err) },
 	})
-	h.queue.Start(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	h.cancel = cancel
+	h.queue.Start(ctx)
 	return h
 }
 
-// Close stops accepting events and finishes every queued re-ingest. Call it after the server stops, before the store closes.
-func (h *EventsHandler) Close() { h.queue.Drain() }
+// Close stops accepting events and finishes queued re-ingests for up to closeGrace, then cancels what is still running
+// (aborting fetches and 429 waits) and logs how many were dropped. Call it after the server stops, before the store closes.
+func (h *EventsHandler) Close() {
+	defer h.cancel()
+	done := make(chan struct{})
+	go func() { h.queue.Drain(); close(done) }()
+	timer := time.NewTimer(closeGrace)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return
+	case <-timer.C:
+	}
+	h.mu.Lock()
+	n := len(h.pending)
+	h.mu.Unlock()
+	h.log("slack events: shutdown grace expired; cancelling in-flight ingest, dropping %d queued conversation(s)", n)
+	h.cancel()
+	<-done
+}
 
 // enqueue records ev as its conversation's newest event and schedules a coalesced re-ingest.
 func (h *EventsHandler) enqueue(ev MessageEvent) {
