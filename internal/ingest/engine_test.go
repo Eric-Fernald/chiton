@@ -501,3 +501,30 @@ func findingsWithRule(views []analyze.FindingView, ruleID string) []analyze.Find
 	}
 	return out
 }
+
+// TestSyncDirHonoursIgnorePolicy checks SyncDir skips the default directory list and the root's .chitonignore.
+func TestSyncDirHonoursIgnorePolicy(t *testing.T) {
+	h := newHarness(t, false, false)
+	ctx := context.Background()
+	for _, d := range []string{"gen", ".venv"} {
+		if err := os.MkdirAll(filepath.Join(h.dir, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	kept := h.write(t, "a.go", "package src\nfunc A() {}\n")
+	gen := h.write(t, filepath.Join("gen", "g.go"), "package gen\nfunc G() {}\n")
+	venv := h.write(t, filepath.Join(".venv", "v.py"), "def v():\n    pass\n")
+	h.write(t, ".chitonignore", "gen/\n")
+
+	if _, err := h.eng.SyncDir(ctx, h.dir, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.nodesForURI(t, model.FileURI(kept))) == 0 {
+		t.Error("a.go should be indexed")
+	}
+	for _, p := range []string{gen, venv} {
+		if n := len(h.nodesForURI(t, model.FileURI(p))); n != 0 {
+			t.Errorf("%s should be skipped, got %d node(s)", p, n)
+		}
+	}
+}

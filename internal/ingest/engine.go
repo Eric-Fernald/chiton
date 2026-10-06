@@ -9,7 +9,6 @@ import (
 	"io/fs"
 	"math/rand"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +23,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/ingest/fswatch"
 	gitpkg "github.com/Eric-Fernald/chiton/internal/ingest/git"
 	"github.com/Eric-Fernald/chiton/internal/jobs"
+	"github.com/Eric-Fernald/chiton/internal/walk"
 )
 
 // Op is the kind of change applied to a file.
@@ -235,23 +235,18 @@ func (e *Engine) SyncChanges(ctx context.Context, changes []Change) (*BatchSumma
 	return sum, nil
 }
 
-// SyncDir reconciles a directory tree in one pass. It (re-)syncs every supported file and, when prune is
-// true, deletes indexed files under the tree that are gone from disk.
+// SyncDir reconciles a directory tree in one pass. It (re-)syncs every supported file the walk policy keeps
+// and, when prune is true, deletes indexed files under the tree that are gone from disk.
 func (e *Engine) SyncDir(ctx context.Context, root string, prune bool) (*BatchSummary, error) {
 	defer e.saveCache()
 	sum := &BatchSummary{}
 	seen := map[string]bool{}
+	policy, err := walk.LoadPolicy(root)
+	if err != nil {
+		return sum, err
+	}
 
-	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if path != root && DefaultIgnoreDir(d.Name()) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
+	_, walkErr := walk.Files(ctx, root, policy, func(path string) error {
 		if extast.ForFile(path) == nil {
 			return nil
 		}
@@ -262,7 +257,7 @@ func (e *Engine) SyncDir(ctx context.Context, root string, prune bool) (*BatchSu
 		seen[model.FileURI(path)] = true
 		e.tally(sum, out)
 		return nil
-	})
+	}, func(path string, err error) { e.log("sync: skip %s: %v", path, err) })
 	if walkErr != nil {
 		return sum, walkErr
 	}
@@ -298,6 +293,10 @@ func (e *Engine) SyncDir(ctx context.Context, root string, prune bool) (*BatchSu
 // Watch re-syncs changed files under root until ctx is cancelled, then drains in-flight work and re-clusters.
 // Queues run on context.Background() so a cancel stops fsnotify but Drain still processes queued edits.
 func (e *Engine) Watch(ctx context.Context, root string) error {
+	policy, err := walk.LoadPolicy(root)
+	if err != nil {
+		return err
+	}
 	// A single-worker, longer-debounced queue serialises cluster passes.
 	clusterQ := jobs.New(func(c context.Context, _ string) error {
 		_, err := e.recluster(c)
@@ -318,9 +317,9 @@ func (e *Engine) Watch(ctx context.Context, root string) error {
 	fileQ.Start(context.Background())
 
 	w, err := fswatch.New(root, fileQ.Enqueue, fswatch.Options{
-		IgnoreDir: DefaultIgnoreDir,
-		Accept:    func(p string) bool { return extast.ForFile(p) != nil },
-		OnError:   func(err error) { e.log("watch: %v", err) },
+		Skip:    policy.Skip,
+		Accept:  func(p string) bool { return extast.ForFile(p) != nil },
+		OnError: func(err error) { e.log("watch: %v", err) },
 		// A renamed/removed directory yields no per-child events, so prune the
 		// graph for every file previously indexed under it.
 		OnDirRemove: func(dir string) {
@@ -540,16 +539,6 @@ func (e *Engine) takeTouched() (map[string]bool, bool) {
 	e.touched = map[string]bool{}
 	e.dirty = false
 	return t, true
-}
-
-// DefaultIgnoreDir reports whether the watcher and reconciler skip a directory base name. It includes the
-// chiton output dirs so store and cache writes never feed back into the watcher.
-func DefaultIgnoreDir(name string) bool {
-	switch name {
-	case ".git", ".chiton", "chiton-out", "node_modules", "vendor", ".hg", ".svn":
-		return true
-	}
-	return false
 }
 
 // GitChanges adapts git-package changes (from a diff) into engine Changes.

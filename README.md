@@ -192,7 +192,7 @@ chiton search "where do we handle auth?"
 | Command | Purpose |
 |---|---|
 | `chiton init` | Scaffold `.chiton/` (policy files, `.gitignore`, encryption keyfile). `--encrypt=false` for plaintext. |
-| `chiton build <path>` | Walk a tree, extract code/docs/images into the graph (SHA-256 cache skips unchanged files). |
+| `chiton build <path>` | Walk a tree, extract code/docs/images into the graph (SHA-256 cache skips unchanged files). Skips VCS, `node_modules`, `vendor`, virtualenv, `target`/`dist` and chiton output directories, plus anything in a repo-root `.chitonignore`. |
 | `chiton query <label>` | Look up a node by label substring and print its neighborhood (`--depth`, `--edge-kinds`, `--json`). |
 | `chiton cluster` | Run Leiden community detection + betweenness; writes `cluster.json` sidecar. |
 | `chiton report` | Generate `GRAPH_REPORT.md` (god nodes, community summaries). Needs a prior `cluster`. |
@@ -331,6 +331,22 @@ embeddings refreshed. Re-embedding makes the saved HNSW index stale; run
 After a batch settles, the touched 2-hop neighborhood is incrementally
 re-clustered. Betweenness is a global metric carried forward between full
 `chiton cluster` passes.
+
+### Ignoring paths
+
+`sync`, `sync watch` and `bench` skip these directory names at any depth:
+`.git`, `.hg`, `.svn`, `.chiton`, `chiton-out`, `node_modules`, `vendor`,
+`.venv`, `venv`, `__pycache__`, `target`, `dist`. Symlinks are never followed.
+
+A repo-root `.chitonignore` adds more, one entry per line:
+
+- `name` or a glob such as `*.pb.go` matches at any depth; `#` starts a comment.
+- A trailing `/` matches directories only (`build/`).
+- A leading or inner `/` anchors the pattern to the repo root (`/gen/`, `docs/api`).
+- `!name` re-includes a built-in directory (`!vendor`).
+- `**` is not supported.
+
+`sync watch` reads the file at start, so restart it after an edit.
 
 > Stop the watcher with Ctrl-C so BadgerDB closes cleanly; a hard kill can leave
 > the write-ahead log needing recovery on the next open.

@@ -16,6 +16,8 @@ dated section.
 
 ### Added
 
+- **`.chitonignore`.** A repo-root ignore file (names and globs, trailing `/` for directories, a leading or inner `/` anchors to the root, `!name` re-includes a built-in directory) now applies to `sync`, `sync watch`, and `bench`.
+
 - **HNSW index for semantic search.** Large stores no longer scan every vector
   per query. `vector.index = auto` (the default) keeps the exact flat scan below
   100k embeddings and switches to an HNSW graph at or above it; `flat` and
@@ -87,6 +89,8 @@ dated section.
   `internal/ingest/email/outlook_msgraph_test.go`.
 
 ### Changed
+
+- **One ignore list for every walk.** `sync`, `sync watch`, and `bench` skip `.git`, `.hg`, `.svn`, `.chiton`, `chiton-out`, `node_modules`, `vendor`, `.venv`, `venv`, `__pycache__`, `target`, and `dist` at any depth; `bench` previously skipped nothing.
 
 - **Live sync with `--analyze` is linear again.** Re-analyzing a file used to load and decode every
   deterministic finding in the store to prune that file's; it now reads the file's findings through their

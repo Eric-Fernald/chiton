@@ -34,8 +34,15 @@ func (c *collector) has(p string) bool {
 
 func goOpts() Options {
 	return Options{
-		IgnoreDir: func(name string) bool { return name == ".git" || name == "chiton-out" },
-		Accept:    func(p string) bool { return strings.HasSuffix(p, ".go") },
+		Skip: func(p string, _ bool) bool {
+			for _, part := range strings.Split(filepath.ToSlash(p), "/") {
+				if part == ".git" || part == "chiton-out" {
+					return true
+				}
+			}
+			return false
+		},
+		Accept: func(p string) bool { return strings.HasSuffix(p, ".go") },
 	}
 }
 
