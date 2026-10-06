@@ -130,7 +130,7 @@ func submitExtractionTool() mcplib.Tool {
 		mcplib.WithDescription("Ingest the results of one extraction task (from pending_extractions). Creates concept nodes and semantic edges tagged INFERRED (or AMBIGUOUS below the confidence threshold). Idempotent: re-submitting the same task is a no-op."),
 		mcplib.WithString("task_id",
 			mcplib.Required(),
-			mcplib.Description("The task spec's id (the source node ID from pending_extractions)"),
+			mcplib.Description("The task spec's id: a doc_section or image node ID from pending_extractions. Concepts that already exist are linked, never overwritten."),
 		),
 		mcplib.WithArray("concepts",
 			mcplib.Required(),

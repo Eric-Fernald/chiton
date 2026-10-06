@@ -413,3 +413,54 @@ func TestSubmitUnknownTaskErrors(t *testing.T) {
 		t.Fatal("expected error for unknown task id")
 	}
 }
+
+// A task_id naming a symbol or meeting must not mark it extracted (which would also hide the meeting from
+// pending_meeting_links, since both flows share extraction_status) or hang concepts off it.
+func TestSubmitRejectsNodesThatAreNotExtractionTasks(t *testing.T) {
+	gs := newStore(t)
+	ctx := context.Background()
+	_ = gs.UpsertNodes(ctx, []model.Node{
+		{ID: "sym1", Kind: model.KindSymbol, Label: "fetchAll", SourceURI: "file://a.go"},
+		{ID: "m1", Kind: model.KindMeeting, Label: "Sync", SourceURI: "meeting://sync", Attrs: map[string]any{"text": "x"}},
+		docSection("empty", "Empty", ""),
+	})
+	svc := New(gs, nil, 0.5)
+	for _, id := range []string{"sym1", "m1", "empty"} {
+		if _, err := svc.Submit(ctx, SubmitResult{TaskID: id, Concepts: []ConceptResult{{Label: "X", Confidence: 0.9}}}); err == nil {
+			t.Errorf("Submit(task_id=%s) succeeded; want it rejected", id)
+		}
+		if n, _ := gs.GetNode(ctx, id); model.AttrString(n.Attrs, "extraction_status") != "" {
+			t.Errorf("%s was marked extracted", id)
+		}
+	}
+}
+
+// Concepts are global, so a later task must not rewrite one an earlier task created.
+func TestSubmitKeepsExistingConcept(t *testing.T) {
+	gs := newStore(t)
+	ctx := context.Background()
+	_ = gs.UpsertNodes(ctx, []model.Node{docSection("d1", "Auth", "we use JWTs"), docSection("d2", "Notes", "tokens")})
+	svc := New(gs, nil, 0.5)
+	if _, err := svc.Submit(ctx, SubmitResult{TaskID: "d1",
+		Concepts: []ConceptResult{{Label: "JWT", Description: "JSON Web Token", Confidence: 0.9}}}); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := svc.Submit(ctx, SubmitResult{TaskID: "d2",
+		Concepts: []ConceptResult{{Label: "JWT", Description: "attacker text", Confidence: 0.1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.ConceptsAdded != 0 {
+		t.Errorf("ConceptsAdded = %d for an existing concept, want 0", rep.ConceptsAdded)
+	}
+	id := model.NewNodeID("concept://jwt", "JWT")
+	n, _ := gs.GetNode(ctx, id)
+	if n == nil || model.AttrString(n.Attrs, "description") != "JSON Web Token" ||
+		model.AttrString(n.Attrs, "extracted_from") != "d1" || n.Provenance != model.ProvInferred {
+		t.Fatalf("existing concept was rewritten: %+v", n)
+	}
+	edges, _ := gs.AllEdges(ctx)
+	if !slices.ContainsFunc(edges, func(e model.Edge) bool { return e.Src == "d2" && e.Dst == id }) {
+		t.Error("d2 was not linked to the existing concept")
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 	"time"
 
@@ -67,23 +68,8 @@ func (s *Service) Pending(ctx context.Context, kind string, limit int) ([]TaskSp
 		if model.AttrString(n.Attrs, "extraction_status") == extractionStatusDone {
 			continue
 		}
-		var spec TaskSpec
-		switch n.Kind {
-		case model.KindDocSection:
-			if kind != "" && kind != KindDocConcepts {
-				continue
-			}
-			text := model.AttrString(n.Attrs, "text")
-			if strings.TrimSpace(text) == "" {
-				continue // nothing to extract from an empty section
-			}
-			spec = docTask(n, text)
-		case model.KindImage:
-			if kind != "" && kind != KindImageDescription {
-				continue
-			}
-			spec = imageTask(n)
-		default:
+		spec, ok := taskFor(n, kind)
+		if !ok {
 			continue
 		}
 		specs = append(specs, spec)
@@ -142,6 +128,10 @@ func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, err
 	if src == nil {
 		return SubmitReport{}, fmt.Errorf("submit: no node with id %q (call pending_extractions first)", r.TaskID)
 	}
+	// Bind task_id to a node Pending issues tasks for, so a submit can't mark or link arbitrary nodes.
+	if _, ok := taskFor(*src, ""); !ok {
+		return SubmitReport{}, fmt.Errorf("submit: node %q is a %s, not an extraction task (want a doc_section with text, or an image)", r.TaskID, src.Kind)
+	}
 
 	now := s.now()
 	rep := SubmitReport{TaskID: r.TaskID}
@@ -155,9 +145,6 @@ func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, err
 			continue
 		}
 		prov, conf := model.ResolveProvenance(c.Confidence, s.threshold)
-		if prov == model.ProvAmbiguous {
-			rep.Ambiguous++
-		}
 		uri := "concept://" + model.Slug(label, "concept")
 		id := model.NewNodeID(uri, label)
 		conceptID[label] = id
@@ -176,7 +163,16 @@ func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, err
 			UpdatedAt:  now,
 		}
 		nodes = append(nodes, n)
-		rep.ConceptsAdded++
+	}
+	// conceptID keeps the dropped IDs, so this task's edges still link to concepts other tasks created.
+	if nodes, err = s.dropExisting(ctx, nodes); err != nil {
+		return SubmitReport{}, err
+	}
+	rep.ConceptsAdded = len(nodes)
+	for _, n := range nodes {
+		if n.Provenance == model.ProvAmbiguous {
+			rep.Ambiguous++
+		}
 	}
 
 	// Embedding is best-effort, since the next `chiton embed` covers any concept left without a vector.
@@ -260,6 +256,27 @@ func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, err
 	}
 
 	return rep, nil
+}
+
+// dropExisting removes concepts already in the store. Concept IDs are global (concept://<slug>), so a task may
+// link to another task's concept but never rewrite its description, provenance, or confidence.
+func (s *Service) dropExisting(ctx context.Context, concepts []model.Node) ([]model.Node, error) {
+	if len(concepts) == 0 {
+		return concepts, nil
+	}
+	ids := make([]string, len(concepts))
+	for i, c := range concepts {
+		ids[i] = c.ID
+	}
+	existing, err := store.GetNodes(ctx, s.store, ids)
+	if err != nil {
+		return nil, fmt.Errorf("load existing concepts: %w", err)
+	}
+	have := make(map[string]bool, len(existing))
+	for _, n := range existing {
+		have[n.ID] = true
+	}
+	return slices.DeleteFunc(concepts, func(n model.Node) bool { return have[n.ID] }), nil
 }
 
 // embedConcepts embeds concepts in one batch, retrying per concept on failure so only concepts that fail alone

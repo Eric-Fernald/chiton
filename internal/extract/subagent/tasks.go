@@ -1,6 +1,29 @@
 package subagent
 
-import "github.com/Eric-Fernald/chiton/internal/graph/model"
+import (
+	"strings"
+
+	"github.com/Eric-Fernald/chiton/internal/graph/model"
+)
+
+// taskFor returns n's extraction task when n is a doc_section with text or an image matching kind ("" = any).
+// Pending and Submit share it, so a submit can only name a node Pending would issue a task for.
+func taskFor(n model.Node, kind string) (TaskSpec, bool) {
+	switch n.Kind {
+	case model.KindDocSection:
+		text := model.AttrString(n.Attrs, "text")
+		if (kind != "" && kind != KindDocConcepts) || strings.TrimSpace(text) == "" {
+			return TaskSpec{}, false
+		}
+		return docTask(n, text), true
+	case model.KindImage:
+		if kind != "" && kind != KindImageDescription {
+			return TaskSpec{}, false
+		}
+		return imageTask(n), true
+	}
+	return TaskSpec{}, false
+}
 
 // submitSchema describes the concepts and typed edges that both task kinds return via submit_extraction or
 // `chiton extract submit`.

@@ -198,6 +198,7 @@ dated section.
 
 ### Security
 
+- `submit_extraction` rejects a `task_id` that isn't a doc_section or image and no longer overwrites concepts other tasks created, so a forged submit can't mark meetings as linked or rewrite concept descriptions.
 - `diff_findings` baseline/target refs are validated and passed to `git rev-parse --verify --end-of-options`, so an option-like ref such as `--show-toplevel` can no longer leak the repository path.
 - `add_url`'s SSRF guard now checks the IP it actually dials (closing the DNS-rebinding race) and blocks CGNAT, benchmarking, reserved, multicast, NAT64/6to4/Teredo and IPv4-mapped ranges; `add_url` no longer goes through `HTTP(S)_PROXY`.
 - **Indexing no longer follows symlinks.** `build`, `sync`, and `sync watch` index regular files only; a symlink or junction (e.g. `notes.md -> ~/.ssh/id_rsa`) is skipped, so its target never lands in the graph or in `pending_extractions`.

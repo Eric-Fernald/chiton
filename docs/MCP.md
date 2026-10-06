@@ -794,10 +794,11 @@ path). None carry the read-only hint.
 Ingest the results of one extraction task (from `pending_extractions`). Creates
 concept nodes and semantic edges tagged `INFERRED` (or `AMBIGUOUS` below the
 confidence threshold). **Idempotent:** re-submitting the same task is a no-op.
+A concept that already exists (concept IDs are global by label) is linked to this source but not rewritten; `concepts_added` counts only new concepts.
 
 | Parameter | Type | Required / default | Description |
 |---|---|---|---|
-| `task_id` | string | required | The task spec's `id` (the source node ID from `pending_extractions`). |
+| `task_id` | string | required | The task spec's `id`: a doc_section or image node ID from `pending_extractions`; other nodes are rejected. |
 | `concepts` | object[] | required | Extracted concepts: objects `{label, description, confidence}`. `label` is required per item. |
 | `edges` | object[] | optional | Typed edges: objects `{from, to, kind, confidence}`. `from` empty = the source node; `kind` defaults to `DESCRIBES`. `to` is required per item. |
 
