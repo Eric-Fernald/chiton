@@ -2,6 +2,7 @@ package fswatch
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -293,5 +294,25 @@ func TestDirRemoveForgetsSubtree(t *testing.T) {
 	}
 	if !w.isWatchedDir(root) {
 		t.Errorf("root %s should still be watched", root)
+	}
+}
+
+// TestOverflowCallsOnOverflow checks an event overflow reaches OnOverflow as well as OnError, and other errors
+// reach only OnError.
+func TestOverflowCallsOnOverflow(t *testing.T) {
+	var overflows, errs int
+	opts := goOpts()
+	opts.OnOverflow = func() { overflows++ }
+	opts.OnError = func(error) { errs++ }
+	w, err := New(t.TempDir(), func(string) {}, opts)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+
+	w.handleError(fsnotify.ErrEventOverflow)
+	w.handleError(errors.New("other"))
+	if overflows != 1 || errs != 2 {
+		t.Errorf("overflows=%d errors=%d, want 1 and 2", overflows, errs)
 	}
 }

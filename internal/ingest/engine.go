@@ -523,6 +523,33 @@ func (e *Engine) prune(ctx context.Context, root string, seen map[string]bool, s
 	return nil
 }
 
+// rescan enqueues every supported file under root and every indexed file under it gone from disk, so after an
+// overflow the file queue re-syncs what changed and deletes what vanished; the content cache skips the rest.
+func (e *Engine) rescan(ctx context.Context, root string, policy *walk.Policy, enqueue func(path string)) error {
+	seen := map[string]bool{}
+	if _, err := walk.Files(ctx, root, policy, func(path string) error {
+		if extast.ForFile(path) != nil {
+			seen[model.FileURI(path)] = true
+			enqueue(path)
+		}
+		return nil
+	}, func(path string, err error) { e.log("watch: rescan: skip %s: %v", path, err) }); err != nil {
+		return err
+	}
+	rootURI := model.FileURI(root)
+	for _, uri := range e.cache.URIs() {
+		if seen[uri] || !underURI(uri, rootURI) {
+			continue
+		}
+		if p, ok := model.PathFromFileURI(uri); ok {
+			if _, err := e.stat(p); errors.Is(err, fs.ErrNotExist) {
+				enqueue(p)
+			}
+		}
+	}
+	return nil
+}
+
 // Watch re-syncs changed files under root until ctx is cancelled, then drains in-flight work and re-clusters.
 // Queues run on context.Background() so a cancel stops fsnotify but Drain still processes queued edits.
 func (e *Engine) Watch(ctx context.Context, root string) error {
@@ -549,10 +576,18 @@ func (e *Engine) Watch(ctx context.Context, root string) error {
 	})
 	fileQ.Start(context.Background())
 
+	// An overflow means fsnotify dropped changes; one coalesced rescan feeds the whole tree to fileQ.
+	rescanQ := jobs.New(func(c context.Context, _ string) error {
+		e.log("watch: event overflow — rescanning %s", root)
+		return e.rescan(c, root, policy, fileQ.Enqueue)
+	}, jobs.Options{Workers: 1, Debounce: e.cfg.Debounce})
+	rescanQ.Start(context.Background())
+
 	w, err := fswatch.New(root, fileQ.Enqueue, fswatch.Options{
-		Skip:    policy.Skip,
-		Accept:  func(p string) bool { return extast.ForFile(p) != nil },
-		OnError: func(err error) { e.log("watch: %v", err) },
+		Skip:       policy.Skip,
+		Accept:     func(p string) bool { return extast.ForFile(p) != nil },
+		OnError:    func(err error) { e.log("watch: %v", err) },
+		OnOverflow: func() { rescanQ.Enqueue("rescan") },
 		// A renamed/removed directory yields no per-child events, so prune the
 		// graph for every file previously indexed under it.
 		OnDirRemove: func(dir string) {
@@ -563,6 +598,7 @@ func (e *Engine) Watch(ctx context.Context, root string) error {
 		},
 	})
 	if err != nil {
+		rescanQ.Stop()
 		fileQ.Stop()
 		clusterQ.Stop()
 		return err
@@ -572,8 +608,9 @@ func (e *Engine) Watch(ctx context.Context, root string) error {
 	runErr := w.Run(ctx) // blocks until ctx cancelled
 	_ = w.Close()
 
-	// Graceful shutdown: drain queued file work first (its OnDone re-arms the
-	// cluster trigger), then drain the cluster queue, then a final flush.
+	// Graceful shutdown: drain a pending rescan (it feeds fileQ), then queued file work (its OnDone re-arms the
+	// cluster trigger), then the cluster queue, then a final flush.
+	rescanQ.Drain()
 	fileQ.Drain()
 	clusterQ.Drain()
 

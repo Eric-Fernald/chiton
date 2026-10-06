@@ -4,6 +4,7 @@ package fswatch
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +23,9 @@ type Options struct {
 	Accept func(path string) bool
 	// OnError, if set, receives non-fatal watcher errors.
 	OnError func(error)
+	// OnOverflow, if set, runs when fsnotify reports dropped events (ErrEventOverflow, e.g. a bulk checkout on
+	// Windows), so the consumer can rescan instead of silently missing changes.
+	OnOverflow func()
 	// OnDirRemove, if set, is called when a watched directory is removed or renamed away. fsnotify
 	// sends no per-child events for this, so the consumer must prune what it indexed underneath.
 	OnDirRemove func(dir string)
@@ -96,15 +100,26 @@ func (w *Watcher) Run(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
-			if w.opts.OnError != nil && err != nil {
-				w.opts.OnError(err)
-			}
+			w.handleError(err)
 		case ev, ok := <-w.w.Events:
 			if !ok {
 				return nil
 			}
 			w.handle(ev)
 		}
+	}
+}
+
+// handleError reports a watcher error and, when fsnotify dropped events, calls OnOverflow first.
+func (w *Watcher) handleError(err error) {
+	if err == nil {
+		return
+	}
+	if errors.Is(err, fsnotify.ErrEventOverflow) && w.opts.OnOverflow != nil {
+		w.opts.OnOverflow()
+	}
+	if w.opts.OnError != nil {
+		w.opts.OnError(err)
 	}
 }
 

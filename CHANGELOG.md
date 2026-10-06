@@ -154,6 +154,7 @@ dated section.
 
 ### Fixed
 
+- **`sync watch` recovers from event overflow.** When fsnotify reports dropped events, the watcher rescans the tree instead of silently missing changes.
 - **`chiton build` runs the sync engine.** It removes symbols renamed or deleted since the last build, prunes files gone from disk (`--prune`, default true), skips ignored directories and `.chitonignore` paths, extracts on `GOMAXPROCS` workers, and batches store writes. The summary line is unchanged; per-file skip messages on stderr now start with `sync: skip`.
 - **Windows path case no longer duplicates files.** `file://` URIs use an upper-case drive letter and on-disk case, so `chiton build c:\repo` and `chiton build .` index one copy. The next `build`/`sync once` drops entries an older build stored under a different case (those files are re-indexed once).
 - **`sync once` survives unreadable directories and honours Ctrl-C.** A permission error below the root is logged and counted (`N unreadable` in the summary) instead of aborting the run, and `sync git`/`sync once` stop between files when cancelled.

@@ -21,6 +21,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
 	badgerstore "github.com/Eric-Fernald/chiton/internal/graph/store/badger"
+	"github.com/Eric-Fernald/chiton/internal/walk"
 )
 
 type harness struct {
@@ -813,5 +814,56 @@ func TestSyncDirPrunesCaseAliases(t *testing.T) {
 	}
 	if len(h.nodesForURI(t, model.FileURI(p))) == 0 {
 		t.Error("the canonical URI should be indexed")
+	}
+}
+
+// TestRescanAfterOverflow checks the overflow rescan enqueues changed, new, and vanished files, and that
+// processing them reconciles the graph.
+func TestRescanAfterOverflow(t *testing.T) {
+	h := newHarness(t, false, false)
+	ctx := context.Background()
+	pa := h.write(t, "a.go", "package src\nfunc A() {}\n")
+	pb := h.write(t, "b.go", "package src\nfunc B() {}\n")
+	if _, err := h.eng.SyncDir(ctx, h.dir, true); err != nil {
+		t.Fatal(err)
+	}
+	// Changes the watcher dropped: edit a.go, delete b.go, add c.go.
+	h.write(t, "a.go", "package src\nfunc A2() {}\n")
+	if err := os.Remove(pb); err != nil {
+		t.Fatal(err)
+	}
+	pc := h.write(t, "c.go", "package src\nfunc C() {}\n")
+
+	policy, err := walk.LoadPolicy(h.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var queued []string
+	if err := h.eng.rescan(ctx, h.dir, policy, func(p string) { queued = append(queued, p) }); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, p := range queued {
+		got[model.FileURI(p)] = true
+	}
+	for _, want := range []string{pa, pb, pc} {
+		if !got[model.FileURI(want)] {
+			t.Errorf("rescan did not enqueue %s (queued %v)", want, queued)
+		}
+	}
+
+	for _, p := range queued {
+		if err := h.eng.syncKey(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, ok := h.nodesForURI(t, model.FileURI(pa))["A2"]; !ok {
+		t.Error("edited a.go not re-synced")
+	}
+	if n := len(h.nodesForURI(t, model.FileURI(pb))); n != 0 {
+		t.Errorf("deleted b.go still has %d node(s)", n)
+	}
+	if len(h.nodesForURI(t, model.FileURI(pc))) == 0 {
+		t.Error("new c.go not indexed")
 	}
 }

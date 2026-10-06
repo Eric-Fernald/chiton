@@ -340,6 +340,8 @@ embeddings refreshed. Re-embedding makes the saved HNSW index stale; run
 After a batch settles, the touched 2-hop neighborhood is incrementally
 re-clustered. Betweenness is a global metric carried forward between full
 `chiton cluster` passes.
+If the OS drops file events (a bulk checkout can overflow the Windows buffer),
+`sync watch` rescans the tree automatically.
 
 ### Ignoring paths
 
