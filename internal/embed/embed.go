@@ -54,7 +54,7 @@ func New(cfg Config) (Embedder, error) {
 func TextFor(n model.Node) string {
 	switch n.Kind {
 	case model.KindSymbol:
-		if isExternalStub(n) {
+		if model.IsExternal(n) {
 			return "" // a label-only stub for an import or cross-package call; graph expansion still reaches it
 		}
 		return join(n.Label, model.AttrString(n.Attrs, "docstring"))
@@ -68,12 +68,6 @@ func TextFor(n model.Node) string {
 	default:
 		return ""
 	}
-}
-
-// isExternalStub reports whether n is an external package stub; D4's model.IsExternal replaces it.
-func isExternalStub(n model.Node) bool {
-	ext, _ := n.Attrs["external"].(bool)
-	return ext
 }
 
 // NodeEmbeddings embeds each node that TextFor gives text for in one Embed call and returns results as

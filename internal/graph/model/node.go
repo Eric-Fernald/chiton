@@ -66,3 +66,10 @@ func ContentSHA(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
+
+// IsExternal reports whether n is an extractor stub for something outside the scanned tree, such as an
+// imported package, which extractors mark with attrs.external=true.
+func IsExternal(n Node) bool {
+	ext, _ := n.Attrs["external"].(bool)
+	return ext
+}

@@ -40,7 +40,7 @@ func (DeadSymbol) MatchGraph(_ context.Context, t analyze.GraphTarget) []analyze
 		if n.Kind != model.KindSymbol {
 			continue
 		}
-		if isExternal(n) {
+		if model.IsExternal(n) {
 			continue
 		}
 		if isExportedName(n.Label) {

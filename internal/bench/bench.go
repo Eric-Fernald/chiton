@@ -220,7 +220,7 @@ func (g *graph) topSymbols(n int) []string {
 		}
 		// Skip external import targets (fmt, http.Get). Their huge degree doesn't match any real question
 		// and would inflate every column.
-		if ext, _ := node.Attrs["external"].(bool); ext {
+		if model.IsExternal(node) {
 			continue
 		}
 		rs = append(rs, ranked{id, g.degree[id]})

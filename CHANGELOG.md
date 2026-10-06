@@ -161,6 +161,8 @@ dated section.
 
 ### Fixed
 
+- **`architecture/circular-import` can fire again.** Every extracted import points at an external package node, which the rule skipped, so it never reported anything on a real graph. It now resolves JS/TS and Python relative imports back to the scanned file they name. Go is excluded, because `go build` already rejects import cycles.
+
 - **`chiton build` no longer skips files the graph store never received.** `cache.json` now records the store's random epoch, and entries written for another store (for example after the store directory was deleted) are discarded, with a stderr note that every file will be re-extracted. Build and sync also make the store's writes durable before saving the cache. Existing caches predate the epoch and are discarded once.
 
 - `chiton slack serve-events` and `chiton teams serve-webhook` ack before ingesting, so slow ingests no longer trigger Slack/Graph retries and duplicate re-ingests. Bursts coalesce per conversation or meeting, and Slack redeliveries are dropped by `event_id`. The Slack and Gmail clients retry HTTP 429 using `Retry-After`.
