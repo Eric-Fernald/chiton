@@ -16,6 +16,7 @@ dated section.
 
 ### Added
 
+- **Graph store layout version.** The Badger store now records its key layout under `m:schema`. Opening a store written by a newer chiton fails with an "upgrade chiton" error instead of misreading it, and an older layout is migrated on the first open (a read-only open does it through a one-time read-write pass). `.chiton/schema_version` is unchanged and still describes only the `.chiton/` scaffold.
 - **`.chitonignore`.** A repo-root ignore file (names and globs, trailing `/` for directories, a leading or inner `/` anchors to the root, `!name` re-includes a built-in directory) now applies to `sync`, `sync watch`, and `bench`.
 
 - **HNSW index for semantic search.** Large stores no longer scan every vector

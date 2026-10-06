@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	badgerdb "github.com/dgraph-io/badger/v4"
@@ -147,7 +148,9 @@ func TestColonEdgeKindAdjacency(t *testing.T) {
 	var left []string
 	if err := gs.db.View(func(txn *badgerdb.Txn) error {
 		return scan(txn, "", func(k, _ []byte) error {
-			left = append(left, string(k))
+			if !strings.HasPrefix(string(k), pfxMeta) {
+				left = append(left, string(k))
+			}
 			return nil
 		})
 	}); err != nil {

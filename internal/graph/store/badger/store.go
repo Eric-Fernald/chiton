@@ -23,8 +23,8 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
 )
 
-// Key prefixes. Node IDs and edge IDs are 32-char lowercase hex strings,
-// so prefix bytes ('d','e','n','s','v') never collide with key content.
+// Key prefixes. Node IDs and edge IDs are 32-char lowercase hex strings, so the prefix bytes ('d','e','m','n','s','v')
+// never collide with key content (metadata keys are in schema.go).
 const (
 	pfxNode = "n:" // n:{nodeID}            → json(Node)
 	pfxEdge = "e:" // e:{edgeID}            → json(Edge)
@@ -74,7 +74,8 @@ func Open(path string) (*Store, error) { return OpenWith(path, Options{}) }
 func OpenReadOnly(path string) (*Store, error) { return OpenReadOnlyWith(path, Options{}) }
 
 // OpenWith opens (or creates) the store with explicit options, enabling Badger encryption when
-// opts.EncryptionKey is set. It returns ErrStoreBusy while another chiton process holds the store.
+// opts.EncryptionKey is set. It returns ErrStoreBusy while another chiton process holds the store, stamps a
+// fresh store with the key-layout version, migrates an older layout, and refuses a newer one with ErrSchemaTooNew.
 func OpenWith(path string, opts Options) (*Store, error) {
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		return nil, fmt.Errorf("open badger at %s: %w", path, err)
@@ -88,11 +89,17 @@ func OpenWith(path string, opts Options) (*Store, error) {
 		lock.release()
 		return nil, fmt.Errorf("open badger at %s: %w", path, err)
 	}
-	return &Store{db: db, key: opts.EncryptionKey, lock: lock}, nil
+	s := &Store{db: db, key: opts.EncryptionKey, lock: lock}
+	if err := s.prepare(); err != nil {
+		s.abandon()
+		return nil, err
+	}
+	return s, nil
 }
 
 // OpenReadOnlyWith is the read-only variant of OpenWith. When a crashed writer left a log that a read-only open
-// can't replay, it replays the log with one read-write open and close, then retries.
+// can't replay, or the store has an older key layout, it replays the log and migrates the layout with one
+// read-write open and close, then retries.
 func OpenReadOnlyWith(path string, opts Options) (*Store, error) {
 	s, err := openReadOnly(path, opts)
 	if !errors.Is(err, errNeedsWriterPass) {
@@ -130,11 +137,28 @@ func openReadOnly(path string, opts Options) (*Store, error) {
 		}
 		return nil, fmt.Errorf("open badger at %s: %w", path, err)
 	}
-	if !holdReaderLock {
-		lock.release()
-		lock = nil
+	s := &Store{db: db, readOnly: true, key: opts.EncryptionKey, lock: lock}
+	if err := s.prepare(); err != nil {
+		s.abandon()
+		return nil, err
 	}
-	return &Store{db: db, readOnly: true, key: opts.EncryptionKey, lock: lock}, nil
+	if !holdReaderLock {
+		s.lock.release()
+		s.lock = nil
+	}
+	return s, nil
+}
+
+// prepare readies a just-opened store: it checks, and when writable stamps or migrates, the key layout.
+func (s *Store) prepare() error {
+	return prepareSchema(s.db, s.readOnly)
+}
+
+// abandon closes a store whose open failed after Badger opened, dropping close errors so the caller reports
+// the open's.
+func (s *Store) abandon() {
+	s.db.Close()
+	s.lock.release()
 }
 
 // badgerOptions returns the Badger options for path. Read-only opens bypass Badger's directory lock, which
