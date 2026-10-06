@@ -422,7 +422,7 @@ The graph is encrypted by default with BadgerDB's native AES-256 encryption
 (CTR mode), under a key derived from a passphrase with argon2id. The salt and KDF
 parameters live in `.chiton/keyfile.json`; the passphrase and key are never
 written to disk. The passphrase is read from `CHITON_PASSPHRASE` or prompted
-interactively. The saved HNSW index is sealed too (AES-256-GCM, under a key
+interactively. An assistant-launched `chiton serve --stdio` cannot prompt, so export `CHITON_PASSPHRASE` in the environment that starts the assistant. The saved HNSW index is sealed too (AES-256-GCM, under a key
 derived from the store's); the other files in `chiton-out/` and `.chiton/` stay
 plaintext. Opt out for CI or synthetic data with `chiton init --encrypt=false`.
 

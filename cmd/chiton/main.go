@@ -325,6 +325,7 @@ After init, run "chiton build ." to populate the graph.`,
 				fmt.Fprintln(out, "init: passphrase set. Subsequent commands read CHITON_PASSPHRASE from the environment or prompt interactively.")
 				created++
 			}
+			fmt.Fprintf(out, "init: note: an assistant-launched 'chiton serve --stdio' cannot prompt; set %s in the environment that starts your assistant or its MCP connection will fail\n", chitoncrypto.EnvVarPassphrase)
 
 			fmt.Fprintf(out, "init: done - %d file(s) created, %d skipped\n", created, skipped)
 			fmt.Fprintf(out, "init: next step: chiton build .\n")
@@ -342,7 +343,7 @@ After init, run "chiton build ." to populate the graph.`,
 func openGraphStore(graphPath string, readOnly bool) (*badgerstore.Store, error) {
 	key, kf, err := chitoncrypto.ResolveKeyForGraph(graphPath, config.StateDir())
 	if err != nil {
-		return nil, fmt.Errorf("open store: resolve encryption key: %w", err)
+		return nil, fmt.Errorf("open store: resolve encryption key: %w", passphraseHint(err))
 	}
 	open := badgerstore.OpenWith
 	if readOnly {
@@ -359,6 +360,16 @@ func openGraphStore(graphPath string, readOnly bool) (*badgerstore.Store, error)
 		}
 	}
 	return gs, nil
+}
+
+// passphraseHint adds the fix for a missing passphrase, which an assistant-launched server hits because it has
+// no terminal to prompt on. Other errors pass through unchanged.
+func passphraseHint(err error) error {
+	if !errors.Is(err, chitoncrypto.ErrNoPassphrase) {
+		return err
+	}
+	return fmt.Errorf("%w\n  fix: set %s in the environment that starts your assistant (for example your shell profile), "+
+		"then restart the assistant. Never put the passphrase in .mcp.json or any file in the repository", err, chitoncrypto.EnvVarPassphrase)
 }
 
 // loadStore loads the config and opens its graph store. The caller must Close the store.

@@ -91,6 +91,7 @@ dated section.
 
 ### Changed
 
+- **The missing-passphrase error now says how to fix it for an assistant**, and `chiton init` warns that an assistant-launched `serve --stdio` needs `CHITON_PASSPHRASE`.
 - **Fewer duplicate writes.** The Go extractor emits each node and edge once per file, and a `build`/`sync once` run writes each shared `pkg://` stub once; `build`'s node and edge counts drop accordingly.
 
 - **`shortest_path` walks adjacency keys** and decodes only the edges on the returned path.

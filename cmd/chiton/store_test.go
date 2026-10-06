@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -105,5 +107,38 @@ func TestOpenGraphStoreUpgradesLegacyKeyfile(t *testing.T) {
 	}
 	if kf.Verifier == "" {
 		t.Error("legacy keyfile was not upgraded with a verifier after a successful open")
+	}
+}
+
+// An assistant-launched server has no terminal, so its error must say where to supply the passphrase.
+func TestOpenGraphStoreExplainsMissingPassphrase(t *testing.T) {
+	project := testProject(t)
+	writeKeyfile(t, project)
+
+	gs, err := openGraphStore(filepath.Join(project, "chiton-out", "graph.kuzu"), true)
+	if err == nil {
+		gs.Close()
+		t.Fatal("openGraphStore succeeded without a passphrase")
+	}
+	if !errors.Is(err, chitoncrypto.ErrNoPassphrase) {
+		t.Errorf("err = %v, want it to wrap ErrNoPassphrase", err)
+	}
+	if !strings.Contains(err.Error(), "environment that starts your assistant") {
+		t.Errorf("err = %q, want the assistant fix spelled out", err)
+	}
+}
+
+func TestInitNotesAssistantPassphrase(t *testing.T) {
+	project := testProject(t)
+	t.Setenv(chitoncrypto.EnvVarPassphrase, "pw")
+	var out bytes.Buffer
+	initc := initCmd()
+	initc.SetArgs([]string{"--dir", project})
+	initc.SetOut(&out)
+	if err := initc.Execute(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if !strings.Contains(out.String(), "serve --stdio") {
+		t.Errorf("init output lacks the assistant passphrase note:\n%s", out.String())
 	}
 }
