@@ -6,9 +6,8 @@ single hero number**. It deliberately includes the cases where chiton *loses* �
 and on raw token count vs `grep+read`, that is more often than the marketing
 version of this project would like.
 
-Generated with `chiton bench` (built into the binary). The Phase 0 micro-study
-lives in [PHASE0_BENCHMARK.md](PHASE0_BENCHMARK.md); this is the Phase 5
-cross-corpus successor.
+Generated with `chiton bench` (built into the binary). It is the Phase 5
+cross-corpus successor to the Phase 0 micro-study.
 
 ## What is measured
 
@@ -68,8 +67,9 @@ is identical on every machine.
 
 ## Results
 
-Measured on the chiton repo (Go, `windows/amd64`). Corpus sizes drift as the
-repo grows; re-run `chiton bench` to refresh.
+Measured on the chiton repo at the `hnsw` branch (Go, `windows/amd64`,
+2026-10-06). Corpus sizes drift as the repo grows; re-run `chiton bench` to
+refresh.
 
 ### A — synthetic ring (40 files) — the case chiton loses badly
 
@@ -77,11 +77,13 @@ repo grows; re-run `chiton bench` to refresh.
 
 | Question | naive | grep+read | chiton | chiton vs grep+read |
 |---|---:|---:|---:|---|
-| What does Func20 depend on / connect to? | 2 391 | 120 | 4 588 | 38× costlier |
-| What does Func38 depend on / connect to? | 2 391 | 120 | 4 588 | 38× costlier |
-| What does Func10 depend on / connect to? | 2 391 | 120 | 4 588 | 38× costlier |
+| What does Func10 depend on / connect to? | 2 391 | 120 | 4 609 | 38× costlier |
+| What does Func8 depend on / connect to? | 2 391 | 118 | 4 608 | 39× costlier |
+| What does Func33 depend on / connect to? | 2 391 | 120 | 4 609 | 38× costlier |
+| What does Func9 depend on / connect to? | 2 391 | 119 | 4 608 | 39× costlier |
+| What does Func15 depend on / connect to? | 2 391 | 120 | 4 609 | 38× costlier |
 
-**Median:** chiton ~4 588 tokens vs grep+read ~120 (**38× costlier**); naive ~2 391.
+**Median:** chiton ~4 609 tokens vs grep+read ~120 (**38× costlier**); naive ~2 391.
 
 On a tiny corpus where each symbol is defined once and grep lands precisely on a
 small file, **grep wins decisively** — and chiton's depth-2 neighborhood of a
@@ -90,54 +92,58 @@ memory on a hobby-sized repo.
 
 ### B — `internal/graph` (medium, densely connected)
 
-19 files · 398 nodes · 525 edges · ~24 461 tokens in scope · depth 2
+26 files · 595 nodes · 735 edges · ~29 750 tokens in scope · depth 2
 
 | Question | naive | grep+read | chiton | chiton vs grep+read |
 |---|---:|---:|---:|---|
-| What does node depend on / connect to? | 24 461 | 23 057 | 1 435 | **16× cheaper** |
-| What does TestTwoCliques depend on / connect to? | 24 461 | 860 | 2 827 | 3.3× costlier |
-| What does makeNode depend on / connect to? | 24 461 | 2 331 | 1 431 | 1.6× cheaper |
-| What does sameComm depend on / connect to? | 24 461 | 1 471 | 1 808 | 1.2× costlier |
-| What does RunIncremental depend on / connect to? | 24 461 | 3 346 | 3 380 | ~even |
+| What does makeNode depend on / connect to? | 29 750 | 2 770 | 1 880 | 1.5× cheaper |
+| What does node depend on / connect to? | 29 750 | 26 570 | 1 403 | **19× cheaper** |
+| What does TestTwoCliques depend on / connect to? | 29 750 | 1 026 | 3 027 | 3.0× costlier |
+| What does sameComm depend on / connect to? | 29 750 | 1 744 | 2 013 | 1.2× costlier |
+| What does makeEdge depend on / connect to? | 29 750 | 2 770 | 2 149 | 1.3× cheaper |
 
-**Median:** chiton ~1 808 tokens vs grep+read ~2 331 (**1.3× cheaper**); naive ~24 461 (**~14× cheaper**).
+**Median:** chiton ~2 013 tokens vs grep+read ~2 770 (**1.4× cheaper**); naive ~29 750 (**~15× cheaper**).
 
 For a hub symbol like `node` (referenced everywhere), grep reads nearly the whole
-package (23k tokens) while chiton returns a bounded ~1.4k-token neighborhood —
-**16× cheaper**. But for uniquely-named or weakly-connected symbols, grep is more
-precise and chiton's depth-2 neighborhood can cost more. It nets out to roughly
-**par-to-modestly-cheaper** vs grep, and a large win vs naive.
+package (27k tokens) while chiton returns a bounded ~1.4k-token neighborhood —
+**19× cheaper**. But for uniquely-named or weakly-connected symbols, grep is more
+precise and chiton's depth-2 neighborhood can cost more. It nets out to
+**modestly cheaper** vs grep, and a large win vs naive.
 
-### C — `internal/` (large, 4.6k nodes)
+### C — `internal/` (large, 7.2k nodes)
 
-163 files · 4 593 nodes · 5 112 edges · ~205 511 tokens in scope · depth 2
+285 files · 7 170 nodes · 7 953 edges · ~314 988 tokens in scope · depth 2
 
 | Question | naive | grep+read | chiton | chiton vs grep+read |
 |---|---:|---:|---:|---|
-| What does LinkService.Submit depend on / connect to? | 205 511 | 35 810 | 29 187 | 1.2× cheaper |
-| What does semanticSearchTool depend on / connect to? | 205 511 | 7 399 | 6 547 | 1.1× cheaper |
-| What does GoExtractor.ExtractFile depend on / connect to? | 205 511 | 27 035 | 35 635 | 1.3× costlier |
-| What does Generate depend on / connect to? | 205 511 | 9 883 | 13 403 | 1.4× costlier |
-| What does Service.Submit depend on / connect to? | 205 511 | 35 810 | 25 552 | 1.4× cheaper |
-| What does JavaScriptExtractor.ExtractFile depend on / connect to? | 205 511 | 27 035 | 38 030 | 1.4× costlier |
+| What does LinkService.Submit depend on / connect to? | 314 988 | 40 340 | 34 178 | 1.2× cheaper |
+| What does semanticSearchTool depend on / connect to? | 314 988 | 7 221 | 6 421 | 1.1× cheaper |
+| What does Generate depend on / connect to? | 314 988 | 16 749 | 9 294 | 1.8× cheaper |
+| What does TestVectorBenchReport depend on / connect to? | 314 988 | 839 | 16 947 | 20× costlier |
+| What does countFindings depend on / connect to? | 314 988 | 7 861 | 30 772 | 3.9× costlier |
+| What does Service.Submit depend on / connect to? | 314 988 | 40 340 | 29 546 | 1.4× cheaper |
 
-**Median:** chiton ~27 369 tokens vs grep+read ~27 035 (**~even**); naive ~205 511 (**~7× cheaper**).
+**Median:** chiton ~23 246 tokens vs grep+read ~12 305 (**1.9× costlier**); naive ~314 988 (**~14× cheaper**).
 
-At scale, naive context dumping is hopeless (200k+ tokens). chiton vs grep+read
-is **roughly a wash on raw token count** — a depth-2 neighborhood of a
-heavily-connected symbol can pull in as much as, or more than, grep does. The
-reliable, large win is over **naive** (~7–14×).
+At scale, naive context dumping is hopeless (300k+ tokens). Against grep+read
+the picture has shifted since the last run: `internal/` grew from 4.6k to 7.2k
+nodes, and two of the six highest-degree symbols are now test code:
+`TestVectorBenchReport`, and `countFindings`, a helper defined in three test
+files. grep lands on a file or three while chiton's depth-2 neighborhood of
+these busy test symbols is wide. The
+hub symbols still favour chiton. The reliable, large win is over **naive**
+(~14–15×).
 
 ## Honest summary
 
-- **vs naive context dumping:** chiton is reliably **~7–14× cheaper** at
+- **vs naive context dumping:** chiton is reliably **~14–15× cheaper** at
   medium/large scale. This is the dependable token win.
-- **vs `grep+read`:** roughly **par on raw token count**. chiton is markedly
-  cheaper for hub symbols (where grep drags in a whole package — up to ~16×) but
+- **vs `grep+read`:** **mixed on raw token count**. chiton is markedly cheaper
+  for hub symbols (where grep drags in a whole package — up to ~19×) but
   *costlier* for uniquely-named or highly-connected symbols whose depth-2
-  neighborhood is large. Median is near parity (medium ~1.3× cheaper, large
-  ~even). Drop to depth 1, or use `query_graph` instead of
-  `get_node_neighborhood`, when token cost matters more than breadth.
+  neighborhood is large. Medians: medium ~1.4× cheaper, large ~1.9× costlier.
+  Drop to depth 1, or use `query_graph` instead of `get_node_neighborhood`,
+  when token cost matters more than breadth.
 - **tiny corpora:** grep wins decisively (tens of tokens vs thousands).
 - **The token reduction vs grep is NOT the point** — on these corpora it barely
   exists. The point is *better* context: a typed, bounded neighborhood
@@ -146,3 +152,60 @@ reliable, large win is over **naive** (~7–14×).
   capabilities (meeting→code links, findings) grep simply cannot provide.
 
 These are measurements, not marketing. Re-run `chiton bench` on your own corpus.
+
+## Vector index: flat vs HNSW
+
+Semantic search seeds its graph walk from a nearest-neighbour index
+(`internal/vector`). `flat` scans every vector; `hnsw` walks a navigable graph.
+`vector.index = auto` uses `flat` below 100k vectors and `hnsw` at or above.
+
+### Method
+
+- 768-dimensional vectors (Ollama `nomic-embed-text` size), k = 8, 500 queries.
+- Data is synthetic and "embedding-like": points from 200 clusters in a
+  48-dimensional latent space, projected to 768 dimensions with noise. Real
+  embeddings have this kind of low intrinsic dimension. No real 768-dimensional
+  corpus was available offline when this was measured.
+- recall@8 is the share of `flat`'s exact top 8 that `hnsw` also returns.
+- Heap is live heap held by the index after GC; "raw" is n × 768 × 4 bytes.
+- Machine: Intel i9-13900K, Windows 11, Go 1.26, one thread. Its mix of
+  performance and efficiency cores makes repeated runs differ by up to 2×.
+
+Reproduce:
+
+```sh
+CHITON_VECTOR_BENCH=10000,100000 go test ./internal/vector/ -run TestVectorBenchReport -v
+CHITON_VECTOR_BENCH_1M=1 go test ./internal/vector/ -bench BenchmarkSearch -run '^$'
+```
+
+### Results (defaults: M 16, ef_search 128, ef_construction 200)
+
+RESULTS_TABLE
+
+### Choosing ef_search
+
+recall@8 by `ef_search` (M 16, ef_construction 200). The query time is per
+query at that setting.
+
+| Data | ef 16 | ef 32 | ef 64 | ef 128 | ef 256 |
+|---|---|---|---|---|---|
+| 100k embedding-like, 768-d | 0.929 (0.12 ms) | 0.987 (0.13 ms) | 0.998 (0.21 ms) | 0.999 (0.25 ms) | 1.000 (0.36 ms) |
+| 20k iid Gaussian, 64-d | 0.372 (0.01 ms) | 0.551 (0.03 ms) | 0.736 (0.05 ms) | 0.894 (0.10 ms) | 0.976 (0.16 ms) |
+
+iid Gaussian vectors are the worst case for any approximate index: in many
+dimensions every point is about equally far from every other, so there are no
+neighbourhoods to navigate. Real embeddings sit between the two rows. The
+default of 128 costs a fraction of a millisecond and keeps recall high even on
+hard data. Raise it with `vector.hnsw_ef_search` if your corpus behaves more
+like the second row.
+
+### Takeaways
+
+- Below 100k vectors `flat` costs at most about 30 ms a query and needs no
+  build, so `auto` keeps it.
+- At 100k and above, `hnsw` answers in well under a millisecond with
+  near-exact recall on embedding-like data. The graph costs about a minute per
+  100k vectors to build on every `serve` start; `serve` answers from `flat`
+  meanwhile and switches when the build finishes. Saving the built graph to
+  disk (spec R10) is the follow-up that would remove the rebuild.
+- `hnsw` holds about 10% more heap than the raw vectors. `flat` holds about 2%.
