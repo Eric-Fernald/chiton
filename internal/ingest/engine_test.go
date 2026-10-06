@@ -3,6 +3,7 @@ package ingest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -282,8 +283,8 @@ func TestSyncDirPruneKeepsPresentExcludedFiles(t *testing.T) {
 	h := newHarness(t, false, false)
 	ctx := context.Background()
 
-	// Index a file that lives under a dir SyncDir's walk ignores (vendor),
-	// simulating a prior `chiton build` that indexed it (build doesn't skip it).
+	// Index a file under a dir SyncDir's walk ignores (vendor), simulating a store written before the ignore
+	// policy existed.
 	vendorDir := filepath.Join(h.dir, "vendor")
 	if err := os.MkdirAll(vendorDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -619,5 +620,54 @@ func TestSyncDirCountsUnreadable(t *testing.T) {
 	}
 	if len(h.nodesForURI(t, model.FileURI(ok))) == 0 {
 		t.Error("a.go should still be indexed")
+	}
+}
+
+// countingStore records every ReplaceSources call and each node it writes.
+type countingStore struct {
+	*badgerstore.Store
+	calls      int
+	nodeWrites map[string]int
+}
+
+func (c *countingStore) ReplaceSources(ctx context.Context, updates []store.SourceUpdate) ([]int, error) {
+	c.calls++
+	for _, u := range updates {
+		for _, n := range u.Nodes {
+			c.nodeWrites[n.ID]++
+		}
+	}
+	return c.Store.ReplaceSources(ctx, updates)
+}
+
+// TestSyncDirBatchesWrites checks SyncDir writes many extracted files in one batched call, reports scan and
+// unchanged counts, and skips every file on a re-run.
+func TestSyncDirBatchesWrites(t *testing.T) {
+	h := newHarness(t, false, false)
+	ctx := context.Background()
+	cs := &countingStore{Store: h.gs, nodeWrites: map[string]int{}}
+	eng := New(cs, h.cache, Config{GraphPath: h.eng.cfg.GraphPath}, nil, nil, nil)
+	const files = 30
+	for i := range files {
+		h.write(t, fmt.Sprintf("f%02d.go", i), fmt.Sprintf("package src\nfunc F%02d() {}\n", i))
+	}
+
+	sum, err := eng.SyncDir(ctx, h.dir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.Scanned != files || sum.Upserted != files || sum.Nodes != 2*files {
+		t.Fatalf("summary %+v, want %d scanned and upserted, %d nodes", sum, files, 2*files)
+	}
+	if cs.calls != 1 {
+		t.Errorf("ReplaceSources calls = %d, want 1 batched write", cs.calls)
+	}
+
+	sum, err = eng.SyncDir(ctx, h.dir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.Unchanged != files || sum.Upserted != 0 {
+		t.Errorf("re-run summary %+v, want all %d unchanged", sum, files)
 	}
 }

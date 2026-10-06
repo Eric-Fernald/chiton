@@ -192,7 +192,7 @@ chiton search "where do we handle auth?"
 | Command | Purpose |
 |---|---|
 | `chiton init` | Scaffold `.chiton/` (policy files, `.gitignore`, encryption keyfile). `--encrypt=false` for plaintext. |
-| `chiton build <path>` | Walk a tree, extract code/docs/images into the graph (SHA-256 cache skips unchanged files). Skips VCS, `node_modules`, `vendor`, virtualenv, `target`/`dist` and chiton output directories, plus anything in a repo-root `.chitonignore`. |
+| `chiton build <path>` | Walk a tree, extract code/docs/images into the graph (SHA-256 cache skips unchanged files). Skips VCS, `node_modules`, `vendor`, virtualenv, `target`/`dist` and chiton output directories, plus anything in a repo-root `.chitonignore`. Removes symbols and files deleted since the last build (`--prune`, default true) and extracts in parallel. |
 | `chiton query <label>` | Look up a node by label substring and print its neighborhood (`--depth`, `--edge-kinds`, `--json`). |
 | `chiton cluster` | Run Leiden community detection + betweenness; writes `cluster.json` sidecar. |
 | `chiton report` | Generate `GRAPH_REPORT.md` (god nodes, community summaries). Needs a prior `cluster`. |

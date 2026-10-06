@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"math/rand"
 	"os"
 	"os/signal"
@@ -25,7 +24,6 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/config"
 	chitoncrypto "github.com/Eric-Fernald/chiton/internal/crypto"
 	"github.com/Eric-Fernald/chiton/internal/embed"
-	extast "github.com/Eric-Fernald/chiton/internal/extract/ast"
 	"github.com/Eric-Fernald/chiton/internal/extract/meeting"
 	"github.com/Eric-Fernald/chiton/internal/extract/subagent"
 	"github.com/Eric-Fernald/chiton/internal/graph/cluster"
@@ -34,6 +32,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
 	badgerstore "github.com/Eric-Fernald/chiton/internal/graph/store/badger"
 	"github.com/Eric-Fernald/chiton/internal/hooks"
+	"github.com/Eric-Fernald/chiton/internal/ingest"
 	urlingest "github.com/Eric-Fernald/chiton/internal/ingest/url"
 	"github.com/Eric-Fernald/chiton/internal/install"
 	mcpsrv "github.com/Eric-Fernald/chiton/internal/mcp"
@@ -432,7 +431,8 @@ func errLogf(cmd *cobra.Command) func(format string, args ...any) {
 }
 
 func buildCmd() *cobra.Command {
-	return &cobra.Command{
+	var prune bool
+	cmd := &cobra.Command{
 		Use:   "build <path>",
 		Short: "Walk a directory and extract its graph",
 		Args:  cobra.ExactArgs(1),
@@ -457,76 +457,22 @@ func buildCmd() *cobra.Command {
 				return err
 			}
 
+			// Build is SyncDir without re-embed, re-analyze, or re-cluster: the same walk policy, diff-based
+			// replacement, prune, and batched writes as `sync once`.
 			start := time.Now()
-			var scanned, skipped, totalNodes, totalEdges int
-			ctx := cmd.Context()
-
-			walkErr := filepath.WalkDir(args[0], func(path string, d fs.DirEntry, err error) error {
-				// Stop promptly on Ctrl-C (root context cancelled) so the
-				// deferred store close and the cache save below still run.
-				if cerr := ctx.Err(); cerr != nil {
-					return cerr
-				}
-				if err != nil {
-					// A traversal error (e.g. permission denied) shouldn't abort the build and
-					// discard cache progress. Log it and keep indexing.
-					fmt.Fprintf(os.Stderr, "chiton: skip %s: %v\n", path, err)
-					return nil
-				}
-				ex := extast.ForFile(path)
-				if d.IsDir() || ex == nil {
-					return nil
-				}
-				scanned++
-
-				content, err := os.ReadFile(path)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "chiton: skip %s: %v\n", path, err)
-					return nil
-				}
-				hexSum := model.ContentSHA(content)
-				uri := model.FileURI(path)
-
-				if !ch.Changed(uri, hexSum) {
-					skipped++
-					return nil
-				}
-
-				nodes, edges, err := ex.ExtractSource(ctx, path, content)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "chiton: skip %s: %v\n", path, err)
-					return nil
-				}
-
-				if err := gs.UpsertNodes(ctx, nodes); err != nil {
-					return fmt.Errorf("upsert nodes for %s: %w", path, err)
-				}
-				if err := gs.UpsertEdges(ctx, edges); err != nil {
-					return fmt.Errorf("upsert edges for %s: %w", path, err)
-				}
-
-				ch.Mark(uri, hexSum)
-				totalNodes += len(nodes)
-				totalEdges += len(edges)
-				return nil
-			})
-			// Persist cache progress even if the walk aborted (e.g. an upsert
-			// error), so a partial build still skips files already indexed.
-			saveErr := ch.Save()
-			if walkErr != nil {
-				return walkErr
+			eng := ingest.New(gs, ch, ingest.Config{GraphPath: cfg.GraphPath, NoRecluster: true}, nil, nil, errLogf(cmd))
+			sum, err := eng.SyncDir(cmd.Context(), args[0], prune)
+			if err != nil {
+				return err
 			}
-			if saveErr != nil {
-				return fmt.Errorf("save cache: %w", saveErr)
-			}
-
 			fmt.Fprintf(out, "build: done - %d files scanned, %d skipped (unchanged), %d nodes, %d edges [%s]\n",
-				scanned, skipped, totalNodes, totalEdges, time.Since(start).Round(time.Millisecond))
+				sum.Scanned, sum.Unchanged, sum.Nodes, sum.Edges, time.Since(start).Round(time.Millisecond))
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&prune, "prune", true, "Delete nodes for files under the tree that no longer exist")
+	return cmd
 }
-
 func queryCmd() *cobra.Command {
 	var depth int
 	var edgeKinds []string

@@ -177,3 +177,53 @@ func TestCountByKindFallbackAgrees(t *testing.T) {
 		}
 	}
 }
+
+// TestReplaceSourcesBatch replaces two sources in one call, one of them Fresh, through SourceReplacer and through
+// the DeleteBySourceURI fallback, which counts every prior node of the source as deleted, kept ones included.
+func TestReplaceSourcesBatch(t *testing.T) {
+	ctx := context.Background()
+	const x, y = "file:///x.go", "file:///y.go"
+	for name, tc := range map[string]struct {
+		wrap        func(store.GraphStore) store.GraphStore
+		wantDeleted []int
+	}{
+		"replacer": {func(gs store.GraphStore) store.GraphStore { return gs }, []int{1, 0}},
+		"fallback": {func(gs store.GraphStore) store.GraphStore { return plain{gs} }, []int{2, 0}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			gs := openStore(t)
+			s := tc.wrap(gs)
+			if _, err := store.ReplaceSources(ctx, s, store.SourceUpdate{URI: x, Nodes: []model.Node{
+				{ID: "xf", Kind: model.KindFile, SourceURI: x}, {ID: "old", Kind: model.KindSymbol, SourceURI: x},
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			deleted, err := store.ReplaceSources(ctx, s,
+				store.SourceUpdate{URI: x, Nodes: []model.Node{
+					{ID: "xf", Kind: model.KindFile, SourceURI: x}, {ID: "new", Kind: model.KindSymbol, SourceURI: x},
+				}},
+				store.SourceUpdate{URI: y, Fresh: true,
+					Nodes: []model.Node{{ID: "yf", Kind: model.KindFile, SourceURI: y}},
+					Edges: []model.Edge{{ID: "yx", Src: "yf", Dst: "new", Kind: model.EdgeReferences}}},
+			)
+			if err != nil || !slices.Equal(deleted, tc.wantDeleted) {
+				t.Fatalf("ReplaceSources = %v, %v; want %v", deleted, err, tc.wantDeleted)
+			}
+			nodes, err := gs.AllNodes(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ids []string
+			for _, n := range nodes {
+				ids = append(ids, n.ID)
+			}
+			slices.Sort(ids)
+			if want := []string{"new", "xf", "yf"}; !slices.Equal(ids, want) {
+				t.Errorf("nodes %v, want %v", ids, want)
+			}
+			if edges, err := gs.AllEdges(ctx); err != nil || len(edges) != 1 || edges[0].ID != "yx" {
+				t.Errorf("edges %v, %v; want only yx", edges, err)
+			}
+		})
+	}
+}

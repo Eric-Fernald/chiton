@@ -102,7 +102,8 @@ Do not put the passphrase in the plugin's `.mcp.json` or in any file inside the
 repository.
 
 `chiton build` is incremental — a SHA-256 content cache skips unchanged files,
-so re-running it is cheap.
+and a rebuild removes symbols and files deleted since the last one, so re-running
+it is cheap.
 
 Optional, in rough order of value:
 

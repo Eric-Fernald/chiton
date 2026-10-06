@@ -131,6 +131,7 @@ type SourceUpdate struct {
 // SourceReplacer is an optional capability replacing whole sources in one write batch while keeping edges other
 // sources attached to surviving nodes. Callers use the ReplaceSources helper.
 type SourceReplacer interface {
-	// ReplaceSources applies updates and returns, per update, how many stale nodes it deleted.
+	// ReplaceSources applies updates and returns, per update, how many stale nodes it deleted. Update URIs must be
+	// distinct: a repeated URI's prior nodes are diffed against each update separately.
 	ReplaceSources(ctx context.Context, updates []SourceUpdate) ([]int, error)
 }
