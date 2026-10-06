@@ -965,13 +965,13 @@ func buildSemanticDeps(cmd *cobra.Command, cfg *config.Config, gs store.GraphSto
 		fmt.Fprintln(errOut, "serve: note: no embeddings indexed — semantic_search disabled (run 'chiton embed')")
 		return deps
 	}
-	idx, rep, err := buildIndex(cfg.Vector, embs, false)
+	logf := func(format string, args ...any) { fmt.Fprintf(errOut, format+"\n", args...) }
+	idx, _, err := serveIndex(cmd.Context(), cfg.Vector, embs, es.AllEmbeddings, logf)
 	if err != nil {
 		fmt.Fprintf(errOut, "serve: warning: semantic_search disabled: %v\n", err)
 		return deps
 	}
 	deps.Retriever = retrieve.New(gs, idx, emb, clusterResults)
-	fmt.Fprintf(errOut, "serve: semantic_search enabled (%s)\n", rep)
 	return deps
 }
 

@@ -13,6 +13,8 @@ Where the build departs from this spec, and why:
 - **Recall test data.** T2's random-vector test uses clustered "embedding-like" vectors. iid Gaussian vectors in 64 or more dimensions have almost no neighbour structure, so they are kept as a separate worst-case test (recall@8 at least 0.85).
 - **Determinism.** The entry point is the live node with the highest level and lowest id, so identical queries return identical results, not only reproducible builds.
 - **Race test.** T3's `-race` run needs cgo. The development machine has no C toolchain, so only CI runs it.
+- **No blocking build.** R7 put the selected backend at all three call sites. Building HNSW takes about a minute per 100k vectors, and that would delay `serve`'s MCP handshake past assistant startup timeouts. So `serve` starts on Flat and swaps HNSW in from a background build (`vector.Swappable`), and a one-shot `chiton search` stays exact unless `vector.index` is `hnsw`.
+- **Hardened decoding.** `ReadFrom` already validates every bound and cross-reference R10 will need, and has a fuzz test.
 - **Mixed dimensions.** `buildIndex` sizes HNSW to the store's most common vector length rather than the embedder's `Dim()`, which reports the configured default until Ollama's first call.
 
 ## Goal

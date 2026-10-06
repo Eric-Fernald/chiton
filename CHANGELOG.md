@@ -20,12 +20,15 @@ dated section.
   per query. `vector.index = auto` (the default) keeps the exact flat scan below
   100k embeddings and switches to an HNSW graph at or above it; `flat` and
   `hnsw` force one. At 100k 768-dimensional vectors a query drops from about
-  30 ms to about 0.2 ms with recall@8 near 1.0 on embedding-like data, for a
-  one-time build of about a minute at `serve` startup. Tune it with
+  30 ms to about 0.2 ms with recall@8 near 1.0 on embedding-like data. The
+  graph takes about a minute per 100k vectors to build and is rebuilt on every
+  `serve` start, so `serve` answers from the exact flat index at once, builds
+  HNSW in the background, and switches over when it is ready, logging both
+  steps. A one-shot `chiton search` stays exact under `auto`. Tune it with
   `vector.hnsw_threshold`, `vector.hnsw_m`, `vector.hnsw_ef_search`, and
-  `vector.hnsw_ef_construction` (or `CHITON_VECTOR_*`). `serve` logs which
-  index it built and how long it took. The graph is chiton's own pure-Go
-  implementation (`internal/vector/hnswlib`); the default build stays cgo-free.
+  `vector.hnsw_ef_construction` (or `CHITON_VECTOR_*`). The graph is chiton's
+  own pure-Go implementation (`internal/vector/hnswlib`); the default build
+  stays cgo-free.
 - **`chiton embed --link-similar --exact`.** `--link-similar` now uses the
   configured index, so large stores finish in minutes instead of an O(n²) scan;
   `--exact` restores the exact pass.

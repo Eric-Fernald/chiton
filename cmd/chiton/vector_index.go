@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Eric-Fernald/chiton/internal/config"
@@ -23,6 +25,58 @@ func (r indexReport) String() string {
 		s += fmt.Sprintf(", %d skipped", r.Skipped)
 	}
 	return s
+}
+
+// serveIndex returns the index serve answers from, and a channel closed once it is final. When cfg selects
+// HNSW it returns a Flat index at once and builds HNSW in the background from reload, swapping it in when
+// done: the build takes about a minute per 100k vectors, and the MCP server must not wait on it to start.
+// If the background build fails, serve keeps the exact Flat index. logf reports progress.
+func serveIndex(ctx context.Context, cfg config.VectorConfig, embs []store.Embedding,
+	reload func(context.Context) ([]store.Embedding, error), logf func(string, ...any)) (vector.Index, <-chan struct{}, error) {
+	ready := make(chan struct{})
+	backend, err := vector.Resolve(vector.Options{Backend: cfg.Index, Threshold: cfg.HNSWThreshold}, len(embs))
+	if err != nil {
+		return nil, nil, err
+	}
+	idx, rep, err := buildIndex(cfg, embs, true) // Flat either way: final, or the stand-in while HNSW builds
+	if err != nil {
+		return nil, nil, err
+	}
+	if backend == "flat" {
+		logf("serve: semantic_search enabled (%s)", rep)
+		close(ready)
+		return idx, ready, nil
+	}
+
+	sw := vector.NewSwappable(idx)
+	logf("serve: semantic_search enabled (%s); building hnsw index over %d embeddings in the background", rep, rep.Vectors)
+	go func() {
+		defer close(ready)
+		fresh, err := reload(ctx)
+		if err != nil {
+			logf("serve: warning: hnsw build skipped, staying on the flat index: %v", err)
+			return
+		}
+		hcfg := cfg
+		hcfg.Index = "hnsw"
+		h, hrep, err := buildIndex(hcfg, fresh, false)
+		if err != nil {
+			logf("serve: warning: hnsw build failed, staying on the flat index: %v", err)
+			return
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		sw.Swap(h)
+		logf("serve: hnsw index ready (%s)", hrep)
+	}()
+	return sw, ready, nil
+}
+
+// oneShotExact reports whether a single CLI query should use exact search. Under auto it always should:
+// one query never repays an HNSW build. An explicit hnsw setting is honoured.
+func oneShotExact(cfg config.VectorConfig) bool {
+	return !strings.EqualFold(strings.TrimSpace(cfg.Index), "hnsw")
 }
 
 // buildIndex indexes embs with the backend cfg selects, or Flat when exact is set. It clears each

@@ -3,6 +3,7 @@ package hnswlib
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"math/rand"
 	"reflect"
 	"strings"
@@ -93,6 +94,84 @@ func TestReadFromRejectsBadInput(t *testing.T) {
 		!strings.Contains(err.Error(), "key kind") {
 		t.Errorf("reading int keys into a string graph: err = %v, want a key kind error", err)
 	}
+}
+
+// TestReadFromRejectsInconsistentGraphs writes graphs whose internal state was corrupted after building
+// and checks ReadFrom refuses each one instead of accepting a graph that would panic or misbehave later.
+func TestReadFromRejectsInconsistentGraphs(t *testing.T) {
+	build := func() *Graph[int] {
+		rng := rand.New(rand.NewSource(5))
+		g := New[int]()
+		g.M = 4
+		for i := range 300 {
+			g.Insert(i, randVec(rng, 6))
+		}
+		return g
+	}
+	var low, high int // a node with only layer 0, and one with layer 1
+	for id, levels := range build().links {
+		if len(levels) == 1 {
+			low = id
+		} else {
+			high = id
+		}
+	}
+	cases := map[string]func(g *Graph[int]){
+		"link to a node lacking that level": func(g *Graph[int]) {
+			g.links[high][1] = append(g.links[high][1], int32(low))
+		},
+		"self link":             func(g *Graph[int]) { g.links[7][0] = append(g.links[7][0], 7) },
+		"too many links":        func(g *Graph[int]) { g.links[7][0] = make([]int32, 2*g.M+1) },
+		"ragged vectors":        func(g *Graph[int]) { g.vecs[9] = []float32{1, 2} },
+		"empty vector":          func(g *Graph[int]) { g.vecs[9] = nil },
+		"duplicate live key":    func(g *Graph[int]) { g.keys[9] = g.keys[10] },
+		"NaN level multiplier":  func(g *Graph[int]) { g.LevelMult = math.NaN() },
+		"Inf level multiplier":  func(g *Graph[int]) { g.LevelMult = math.Inf(1) },
+		"huge level multiplier": func(g *Graph[int]) { g.LevelMult = 1e300 },
+		"zero M":                func(g *Graph[int]) { g.M = 0 },
+		"huge M":                func(g *Graph[int]) { g.M = 1 << 40 },
+		"huge EfSearch":         func(g *Graph[int]) { g.EfSearch = 1 << 40 },
+	}
+	for name, corrupt := range cases {
+		g := build()
+		corrupt(g)
+		var buf bytes.Buffer
+		if _, err := g.WriteTo(&buf); err != nil {
+			t.Fatalf("%s: WriteTo: %v", name, err)
+		}
+		target := lineGraph(3)
+		if _, err := target.ReadFrom(&buf); err == nil {
+			t.Errorf("%s: ReadFrom accepted it", name)
+		}
+		if target.Len() != 3 || target.M != 6 {
+			t.Errorf("%s: a failed ReadFrom changed the graph", name)
+		}
+	}
+}
+
+// FuzzReadFrom checks that no byte stream ReadFrom accepts yields a graph that panics when searched or
+// extended. Run it with `go test -fuzz FuzzReadFrom ./internal/vector/hnswlib/`.
+func FuzzReadFrom(f *testing.F) {
+	for _, g := range []*Graph[int]{lineGraph(1), lineGraph(40)} {
+		var buf bytes.Buffer
+		if _, err := g.WriteTo(&buf); err != nil {
+			f.Fatal(err)
+		}
+		f.Add(buf.Bytes())
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		g := &Graph[int]{}
+		if _, err := g.ReadFrom(bytes.NewReader(data)); err != nil {
+			return
+		}
+		if d := g.Dim(); d > 0 {
+			q := make([]float32, d)
+			q[0] = 1
+			g.Nearest(q, 3)
+			g.Insert(-1, q)
+			g.Nearest(q, 3)
+		}
+	})
 }
 
 func TestWriteToRejectsUnsupportedKeys(t *testing.T) {

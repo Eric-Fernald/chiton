@@ -17,9 +17,14 @@ const (
 	magic         = "chiton-hnsw"
 	formatVersion = 1
 
-	maxVectorLen = 1 << 20 // sanity bounds that keep a corrupt stream from allocating gigabytes
+	// Bounds a stream must respect. They keep a corrupt or hostile stream from forcing huge allocations,
+	// and from yielding a graph whose later Insert would.
+	maxVectorLen = 1 << 20
 	maxKeyLen    = 1 << 20
 	maxLevels    = 64
+	maxM         = 1 << 10
+	maxEf        = 1 << 16
+	maxLevelMult = 2 // 1/ln(2), the largest the M >= 2 default can produce, is about 1.44
 )
 
 // WriteTo writes the graph to w. It implements io.WriterTo.
@@ -78,10 +83,11 @@ func (g *Graph[K]) ReadFrom(r io.Reader) (int64, error) {
 		return cr.n, fmt.Errorf("hnswlib: stream holds key kind %d, graph uses %d", kind, want)
 	}
 	metric := Metric(d.uint())
-	m, mult := int(d.uint()), d.float64()
-	efSearch, efConstruction := int(d.uint()), int(d.uint())
-	n, entry, top := d.uint(), d.uint(), int(d.uint())
-	if d.err == nil && (!metric.valid() || n > math.MaxInt32 || (n > 0 && entry >= n)) {
+	m, mult := d.uint(), d.float64()
+	efSearch, efConstruction := d.uint(), d.uint()
+	n, entry, top := d.uint(), d.uint(), d.uint()
+	if d.err == nil && (!metric.valid() || m == 0 || m > maxM || !(mult >= 0 && mult <= maxLevelMult) ||
+		efSearch > maxEf || efConstruction > maxEf || n > math.MaxInt32 || (n > 0 && entry >= n) || top >= maxLevels) {
 		d.err = errors.New("hnswlib: corrupt graph header")
 	}
 
@@ -91,35 +97,59 @@ func (g *Graph[K]) ReadFrom(r io.Reader) (int64, error) {
 		dead  []bool
 		links [][][]int32
 		index = map[K]int32{}
+		dim   int
 	)
 	for id := uint64(0); id < n && d.err == nil; id++ {
 		key := decodeKey[K](&d)
 		isDead := d.bool()
 		vec := d.floats()
 		levels := d.uint()
-		if d.err == nil && (levels == 0 || levels > maxLevels) {
+		switch {
+		case d.err != nil:
+		case len(vec) == 0 || (dim != 0 && len(vec) != dim):
+			d.err = fmt.Errorf("hnswlib: node %d has a %d-dimensional vector", id, len(vec))
+		case levels == 0 || levels > maxLevels:
 			d.err = fmt.Errorf("hnswlib: node %d has %d levels", id, levels)
+		case !isDead:
+			if _, dup := index[key]; dup {
+				d.err = fmt.Errorf("hnswlib: key %v is live twice", key)
+			}
 		}
+		dim = len(vec)
 		lists := make([][]int32, 0, min(levels, maxLevels))
 		for l := uint64(0); l < levels && d.err == nil; l++ {
+			limit := m
+			if l == 0 {
+				limit = 2 * m
+			}
 			count := d.uint()
-			if d.err == nil && count > n {
-				d.err = fmt.Errorf("hnswlib: node %d has %d links", id, count)
+			if d.err == nil && count > limit {
+				d.err = fmt.Errorf("hnswlib: node %d has %d links on level %d", id, count, l)
 				break
 			}
 			list := make([]int32, count)
 			for i := range list {
 				nb := d.uint()
-				if d.err == nil && nb >= n {
-					d.err = fmt.Errorf("hnswlib: node %d links to %d of %d", id, nb, n)
+				if d.err == nil && (nb >= n || nb == id) {
+					d.err = fmt.Errorf("hnswlib: node %d has an invalid link to %d", id, nb)
 				}
 				list[i] = int32(nb)
 			}
 			lists = append(lists, list)
 		}
 		keys, vecs, dead, links = append(keys, key), append(vecs, vec), append(dead, isDead), append(links, lists)
-		if !isDead {
+		if !isDead && d.err == nil {
 			index[key] = int32(id)
+		}
+	}
+	// Every link must point at a node that exists on that level, or a search would index past its lists.
+	for id := 0; id < len(links) && d.err == nil; id++ {
+		for l, list := range links[id] {
+			for _, nb := range list {
+				if len(links[nb]) <= l {
+					d.err = fmt.Errorf("hnswlib: node %d links to %d on level %d, which %d lacks", id, nb, l, nb)
+				}
+			}
 		}
 	}
 	if d.err != nil {
@@ -129,13 +159,14 @@ func (g *Graph[K]) ReadFrom(r io.Reader) (int64, error) {
 		return cr.n, d.err
 	}
 
-	g.Metric, g.M, g.LevelMult, g.EfSearch, g.EfConstruction = metric, m, mult, efSearch, efConstruction
+	g.Metric, g.M, g.LevelMult = metric, int(m), mult
+	g.EfSearch, g.EfConstruction = int(efSearch), int(efConstruction)
 	g.keys, g.vecs, g.dead, g.links, g.index = keys, vecs, dead, links, index
-	g.entry, g.top = int32(entry), top
+	g.entry, g.top = int32(entry), int(top)
 	switch {
 	case len(index) == 0:
 		g.clear()
-	case dead[entry] || len(links[entry])-1 != top:
+	case dead[entry] || len(links[entry])-1 != int(top):
 		g.electEntry()
 	}
 	if g.Rand == nil {
@@ -219,7 +250,10 @@ func (d *decoder) uint() uint64 {
 		return 0
 	}
 	x, err := binary.ReadUvarint(d.r)
-	d.err = err
+	if err != nil { // on overflow ReadUvarint also returns a partial value; never let it escape
+		d.err = err
+		return 0
+	}
 	return x
 }
 
@@ -228,7 +262,10 @@ func (d *decoder) int() int64 {
 		return 0
 	}
 	x, err := binary.ReadVarint(d.r)
-	d.err = err
+	if err != nil {
+		d.err = err
+		return 0
+	}
 	return x
 }
 

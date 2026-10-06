@@ -16,29 +16,44 @@ type Options struct {
 	HNSW      HNSWConfig
 }
 
-// NewIndex returns an empty index of the backend opts selects for n vectors.
-func NewIndex(opts Options, n int) (Index, error) {
+// Resolve returns the backend, "flat" or "hnsw", that opts selects for n vectors.
+func Resolve(opts Options, n int) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(opts.Backend)) {
 	case "", "auto":
 		if n < cmpOr(opts.Threshold, DefaultHNSWThreshold) {
-			return NewFlatSized(n), nil
+			return "flat", nil
 		}
-		return NewHNSW(opts.HNSW), nil
+		return "hnsw", nil
 	case "flat":
-		return NewFlatSized(n), nil
+		return "flat", nil
 	case "hnsw":
-		return NewHNSW(opts.HNSW), nil
+		return "hnsw", nil
 	}
-	return nil, fmt.Errorf("vector: unknown index backend %q (want auto, flat, or hnsw)", opts.Backend)
+	return "", fmt.Errorf("vector: unknown index backend %q (want auto, flat, or hnsw)", opts.Backend)
 }
 
-// BackendName names idx's implementation for logs: "flat", "hnsw", or its Go type.
+// NewIndex returns an empty index of the backend opts selects for n vectors.
+func NewIndex(opts Options, n int) (Index, error) {
+	backend, err := Resolve(opts, n)
+	if err != nil {
+		return nil, err
+	}
+	if backend == "hnsw" {
+		return NewHNSW(opts.HNSW), nil
+	}
+	return NewFlatSized(n), nil
+}
+
+// BackendName names idx's implementation for logs: "flat", "hnsw", or its Go type. A Swappable reports
+// the backend it currently serves from.
 func BackendName(idx Index) string {
-	switch idx.(type) {
+	switch idx := idx.(type) {
 	case *Flat:
 		return "flat"
 	case *HNSW:
 		return "hnsw"
+	case *Swappable:
+		return BackendName(idx.Current())
 	}
 	return fmt.Sprintf("%T", idx)
 }

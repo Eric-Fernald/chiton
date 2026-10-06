@@ -221,7 +221,7 @@ func searchCmd() *cobra.Command {
 				return err
 			}
 			clusterResults, _ := cluster.LoadSidecar(cluster.SidecarPath(cfg.GraphPath))
-			idx, _, err := buildIndex(cfg.Vector, embs, false)
+			idx, _, err := buildIndex(cfg.Vector, embs, oneShotExact(cfg.Vector))
 			if err != nil {
 				return err
 			}

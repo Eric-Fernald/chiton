@@ -49,7 +49,8 @@ When sources conflict, prefer `EXTRACTED` facts over `INFERRED` ones.
 ```
 
 - **Single binary, zero runtime services.** Pure-Go throughout — BadgerDB for the
-  graph store (native AES-256-GCM at rest), a pure-Go flat-cosine vector index,
+  graph store (native AES-256-GCM at rest), a pure-Go vector index (exact flat
+  scan, or an HNSW graph for large stores),
   an in-process job queue, and a from-scratch Leiden implementation. No Redis, no
   CGo, no external database.
 - **chiton never calls an LLM itself.** Semantic extraction and LLM rules run
@@ -371,8 +372,8 @@ cannot drift onto a different store than `chiton build` wrote.
 | `embed.endpoint` | `http://localhost:11434` | Ollama endpoint. |
 | `embed.dim` | *(unset)* | Embedding dimension. Deliberately has no default: left at 0, each provider applies its native size (Ollama 768, hash 256) instead of the Ollama size being forced onto the hash provider. Set it only to override. |
 | `semantic.confidence_threshold` | `0.5` | Splits `INFERRED` from `AMBIGUOUS`. |
-| `vector.index` | `auto` | Index behind semantic search: `flat` (exact scan), `hnsw` (approximate graph), or `auto`, which uses `hnsw` at or above `vector.hnsw_threshold` vectors. |
-| `vector.hnsw_threshold` | `100000` | Vector count at which `auto` switches to `hnsw`. |
+| `vector.index` | `auto` | Index behind semantic search: `flat` (exact scan), `hnsw` (approximate graph), or `auto`, which uses `hnsw` at or above `vector.hnsw_threshold` vectors. `serve` starts on `flat` and builds `hnsw` in the background (about a minute per 100k vectors, on every start), then switches over. A one-shot `chiton search` stays exact unless this is set to `hnsw`. |
+| `vector.hnsw_threshold` | `100000` | Vector count at which `auto` switches to `hnsw`. 0 or less means the default. |
 | `vector.hnsw_m` | `16` | Maximum links per HNSW node (twice that on the bottom layer). Higher raises recall, memory, and build time. |
 | `vector.hnsw_ef_search` | `128` | HNSW candidate list per query. Higher raises recall and query time. |
 | `vector.hnsw_ef_construction` | `200` | HNSW candidate list while building. Higher raises graph quality and build time. |
@@ -433,7 +434,7 @@ chiton/
 │   ├── graph/metrics/     betweenness, degree, god-node surfacing
 │   ├── graph/retrieve/    hybrid vector + graph retrieval policy
 │   ├── graph/portable/    JSON snapshot read/merge (export, cross-repo merging)
-│   ├── vector/            pure-Go flat-cosine ANN index
+│   ├── vector/            nearest-neighbour index: flat scan + HNSW (hnswlib/)
 │   ├── embed/             embedding provider interface (Ollama + hash)
 │   ├── analyze/           rule engine, findings, diff, LLM-rule dispatch
 │   ├── ingest/            incremental updater + source front-ends:
@@ -459,7 +460,7 @@ The `GraphStore` interface is the project's spine — every package depends on i
 not on a concrete store. BadgerDB ships in v1; Kuzu lives as a stub
 (`internal/graph/store/kuzu/`) so it can slot in behind the same interface once
 its Go bindings stabilize on Windows. The same boundary-first approach applies to
-the vector index (flat today, HNSW/sqlite-vec deferred) and the job queue
+the vector index (flat and HNSW behind one `Index` interface) and the job queue
 (in-process today, distributed later).
 
 ## Roadmap
