@@ -576,10 +576,11 @@ func buildCmd() *cobra.Command {
 				return err
 			}
 
-			// Build is SyncDir without re-embed, re-analyze, or re-cluster: the same walk policy, diff-based
-			// replacement, prune, and batched writes as `sync once`.
+			// Build is SyncDir without re-embed, re-analyze, or re-cluster. The analyzer only prunes a deleted
+			// file's findings; with Reanalyze off it never re-runs rules.
 			start := time.Now()
-			eng := ingest.New(gs, ch, ingest.Config{GraphPath: cfg.GraphPath, NoRecluster: true}, nil, nil, errLogf(cmd))
+			eng := ingest.New(gs, ch, ingest.Config{GraphPath: cfg.GraphPath, NoRecluster: true}, nil,
+				analyze.New(gs, nil), errLogf(cmd))
 			sum, err := eng.SyncDir(cmd.Context(), args[0], prune)
 			if err != nil {
 				return err

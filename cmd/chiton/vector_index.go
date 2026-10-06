@@ -159,9 +159,8 @@ func loadFailure(err error) string {
 	return fmt.Sprintf("the saved hnsw index is unreadable (%v)", err)
 }
 
-// saveIndex makes sure the HNSW index serve would use for es's modelID vectors is saved, building and saving
-// it when the saved one is missing or stale, and returns it. A store small enough for serve to search exactly
-// needs no index, so saveIndex returns nil for it.
+// saveIndex returns the HNSW index serve would use for es's modelID vectors, building and saving it when the saved
+// one is missing or stale. It returns nil for a store small enough for serve to search exactly.
 func saveIndex(ctx context.Context, cfg config.VectorConfig, es store.EmbeddingStore, modelID string, saved savedIndex,
 	logf func(string, ...any)) (vector.Index, error) {
 	load := modelEmbeddings(es, modelID)

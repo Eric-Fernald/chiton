@@ -110,7 +110,7 @@ func TestNewFactory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hashE.Model() != "hash" || hashE.Dim() != 128 {
+	if hashE.Model() != "hash-128" || hashE.Dim() != 128 {
 		t.Fatalf("unexpected hash embedder: model=%s dim=%d", hashE.Model(), hashE.Dim())
 	}
 
@@ -267,8 +267,8 @@ func dot(a, b []float32) float32 {
 
 func TestNodeEmbeddingsTagsModelAndText(t *testing.T) {
 	embs, _, err := NodeEmbeddings(context.Background(), NewHashEmbedder(16), []model.Node{{ID: "s", Kind: model.KindSymbol, Label: "Retry"}})
-	if err != nil || len(embs) != 1 || embs[0].Model != "hash" || embs[0].TextSHA != TextSHA("Retry") {
-		t.Fatalf("got %+v, %v; want model hash and the text's SHA", embs, err)
+	if err != nil || len(embs) != 1 || embs[0].Model != "hash-16" || embs[0].TextSHA != TextSHA("Retry") {
+		t.Fatalf("got %+v, %v; want model hash-16 and the text's SHA", embs, err)
 	}
 }
 

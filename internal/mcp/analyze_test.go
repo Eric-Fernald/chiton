@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -54,7 +55,7 @@ func TestDiffFindingsHandlerResolved(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := diffFindingsHandler(gs, dir)(ctx, toolReq(map[string]any{"baseline": "latest"}))
+	res, err := diffFindingsHandler(gs, dir, ".")(ctx, toolReq(map[string]any{"baseline": "latest"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +74,7 @@ func TestDiffFindingsHandlerResolved(t *testing.T) {
 func TestDiffFindingsHandlerNoBaseline(t *testing.T) {
 	ctx := context.Background()
 	gs := openStore(t)
-	res, err := diffFindingsHandler(gs, analyze.BaselineDir(t.TempDir()))(ctx, toolReq(map[string]any{}))
+	res, err := diffFindingsHandler(gs, analyze.BaselineDir(t.TempDir()), ".")(ctx, toolReq(map[string]any{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,5 +185,28 @@ func TestPendingAnalysesStaysInsideProjectRoot(t *testing.T) {
 	}
 	if res.IsError || !strings.Contains(resultText(t, res), "in.go") {
 		t.Errorf("the default path should walk the project root: %s", resultText(t, res))
+	}
+}
+
+// diff_findings must resolve refs in the project repo, not the server's working directory.
+func TestResolveBaselineRefUsesProjectRoot(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	root := t.TempDir()
+	for _, args := range [][]string{{"init", "-q"}, {"commit", "--allow-empty", "-q", "-m", "c"}} {
+		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	want := analyze.GitCommit(root, "HEAD")
+	if len(want) != 40 {
+		t.Fatalf("setup: GitCommit(HEAD) = %q", want)
+	}
+	if got := resolveBaselineRef(root, "HEAD"); got != want {
+		t.Errorf("resolveBaselineRef(root, HEAD) = %q, want the project's HEAD %q", got, want)
 	}
 }

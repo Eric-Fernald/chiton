@@ -40,7 +40,8 @@ type Deps struct {
 	// BaselineDir is where diff_findings reads saved baselines from
 	// (default: .chiton/baselines).
 	BaselineDir string
-	// ProjectRoot confines pending_analyses' path argument (default "."; serve passes config.ProjectDir()).
+	// ProjectRoot confines pending_analyses' path argument and is where diff_findings resolves git refs
+	// (default "."; serve passes config.ProjectDir()).
 	ProjectRoot string
 	// IncludePII turns off redaction of people's names and addresses in the graph tools (serve --include-pii).
 	IncludePII bool
@@ -66,7 +67,7 @@ func New(gs store.GraphStore, overlay *cluster.Results, deps Deps) *mcpsdk.MCPSe
 	if baselineDir == "" {
 		baselineDir = analyze.BaselineDir(config.StateDir())
 	}
-	s.AddTool(diffFindingsTool(), diffFindingsHandler(gs, baselineDir))
+	s.AddTool(diffFindingsTool(), diffFindingsHandler(gs, baselineDir, cmp.Or(deps.ProjectRoot, ".")))
 	s.AddTool(pendingAnalysesTool(), pendingAnalysesHandler(deps.LLM, cmp.Or(deps.ProjectRoot, ".")))
 	s.AddTool(submitAnalysisTool(), submitAnalysisHandler(deps.LLM))
 	// Phase 4: meetings & external sources.
@@ -689,7 +690,7 @@ func bindAndSubmit[R, Rep any](ctx context.Context, req mcplib.CallToolRequest, 
 }
 
 // jsonResult renders v as compact JSON. HTML escaping is off, so code like "<-ch" or "a && b" stays readable
-// and doesn't grow into < / & sequences that cost tokens.
+// and doesn't grow into `\u003c` / `\u0026` sequences that cost tokens.
 func jsonResult(v any) (*mcplib.CallToolResult, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)

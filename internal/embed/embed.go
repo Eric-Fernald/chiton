@@ -19,7 +19,7 @@ type Embedder interface {
 	Embed(ctx context.Context, texts []string) ([][]float32, error)
 	// Dim is the dimensionality of every vector this embedder returns.
 	Dim() int
-	// Model is a human-readable identifier (e.g. "nomic-embed-text" or "hash").
+	// Model is a human-readable identifier (e.g. "nomic-embed-text" or "hash-256").
 	Model() string
 }
 

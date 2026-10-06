@@ -30,9 +30,8 @@ func (a *Analyzer) AnalyzeExtracted(ctx context.Context, path string, content []
 // PriorFindings holds a file's deterministic findings as ReadPriorFindings saw them.
 type PriorFindings struct{ nodes []model.Node }
 
-// ReadPriorFindings returns uri's deterministic findings by following the AFFECTS edges into its file node
-// and the symbols it CONTAINS, a read the size of the file. Call it before replacing uri's nodes, since
-// deleting them drops those edges.
+// ReadPriorFindings returns uri's deterministic findings via AFFECTS edges into its file node and CONTAINS'd
+// symbols, a file-sized read. Call it before replacing uri's nodes, since deleting them drops those edges.
 func (a *Analyzer) ReadPriorFindings(ctx context.Context, uri string) (*PriorFindings, error) {
 	kinds := []model.EdgeKind{model.EdgeContains, model.EdgeAffects}
 	sub, err := a.store.Neighbors(ctx, model.NewNodeID(uri, uri), 2, kinds)

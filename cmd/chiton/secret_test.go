@@ -22,6 +22,13 @@ func TestReadSecretPrefersFileAndTrims(t *testing.T) {
 	if got, err := readSecret("", "CHITON_TEST_SECRET"); err != nil || got != "from-env" {
 		t.Errorf("readSecret(env) = %q, %v; want from-env", got, err)
 	}
+	bom := filepath.Join(t.TempDir(), "bom")
+	if err := os.WriteFile(bom, []byte("\ufefffrom-file\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := readSecret(bom, "CHITON_TEST_SECRET"); err != nil || got != "from-file" {
+		t.Errorf("readSecret(BOM file) = %q, %v; want from-file without the BOM", got, err)
+	}
 	empty := filepath.Join(t.TempDir(), "empty")
 	if err := os.WriteFile(empty, []byte("\n"), 0o600); err != nil {
 		t.Fatal(err)

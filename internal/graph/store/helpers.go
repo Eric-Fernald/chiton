@@ -145,9 +145,8 @@ func EmbeddingMetas(ctx context.Context, es EmbeddingStore) ([]EmbeddingMeta, er
 	return metas, nil
 }
 
-// ReplaceSources makes each update its source's stored content via SourceReplacer, else by DeleteBySourceURI
-// plus upserts, which also drops edges other sources attached. It returns stale-node counts per update; update URIs
-// must be distinct.
+// ReplaceSources makes each update its source's stored content via SourceReplacer, else DeleteBySourceURI plus
+// upserts (which also drops edges other sources attached). Update URIs must be distinct; returns stale-node counts.
 func ReplaceSources(ctx context.Context, gs GraphStore, updates ...SourceUpdate) ([]int, error) {
 	if r, ok := gs.(SourceReplacer); ok {
 		return r.ReplaceSources(ctx, updates)

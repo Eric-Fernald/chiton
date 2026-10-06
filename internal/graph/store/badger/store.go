@@ -177,9 +177,8 @@ func (s *Store) prepare() error {
 	return nil
 }
 
-// Epoch returns the store's random identity, minted the first time the store is opened writable, so a sidecar
-// can tell that the store was replaced underneath it. It is empty only for a store opened read-only that no
-// writer has minted one for yet.
+// Epoch returns the store's random identity, minted on the first writable open, so a sidecar can tell the store
+// was replaced underneath it. It is empty for a read-only open of a store no writer has minted one for.
 func (s *Store) Epoch() string { return s.epoch }
 
 // Sync makes every write so far durable; it is a no-op on a read-only store. Implements store.Syncer.
@@ -223,10 +222,8 @@ func applyEncryption(bopts badgerdb.Options, key []byte) badgerdb.Options {
 		WithIndexCacheSize(64 << 20)
 }
 
-// collectValueLog runs bounded value-log GC before a writable store closes. Values rarely reach the log, so
-// this usually stops at once with ErrNoRewrite. ErrNoRewrite and ErrRejected are normal stops; any other
-// failure (iteration, read or write during a rewrite) leaves the data intact, so it is warned about and Close
-// carries on.
+// collectValueLog runs bounded value-log GC before a writable store closes; ErrNoRewrite and ErrRejected are
+// normal stops. Any other failure leaves the data intact, so it is only warned about and Close carries on.
 func (s *Store) collectValueLog() {
 	for range 4 {
 		err := s.db.RunValueLogGC(0.5)
@@ -423,9 +420,8 @@ func deleteNode(txn *badgerdb.Txn, wb *badgerdb.WriteBatch, id string, x indexed
 	return nil
 }
 
-// putNodes queues nodes and their index keys into wb, stamping CreatedAt when unset and UpdatedAt always, and
-// drops the keys a changed kind or source_uri left behind. txn is the batch's read view, which still shows the
-// records the nodes replace.
+// putNodes queues nodes and their index keys into wb, stamping timestamps and dropping index keys a changed kind
+// or source_uri left behind. txn is the batch's read view, which still shows the records being replaced.
 func putNodes(txn *badgerdb.Txn, wb *badgerdb.WriteBatch, nodes []model.Node, now time.Time) error {
 	written := map[string]indexed{} // this batch's earlier writes, which txn can't see
 	for i := range nodes {

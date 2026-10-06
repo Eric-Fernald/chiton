@@ -37,7 +37,7 @@ func serveUnix(cmd *cobra.Command, sse *mcpsdk.SSEServer, path string) error {
 	if err != nil {
 		return fmt.Errorf("listen on unix socket %s: %w", path, err)
 	}
-	// os.Remove on shutdown; the listener also unlinks on Close for "unix".
+	// listenUnixPrivate renames the socket into place, so Close unlinks only the old temp name; remove path here.
 	defer os.Remove(path)
 
 	srv := &http.Server{Handler: sse}

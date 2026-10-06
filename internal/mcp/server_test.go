@@ -70,6 +70,32 @@ func TestGraphSummaryTopNodesByBetweenness(t *testing.T) {
 	}
 }
 
+func TestGodNodesClampsLimit(t *testing.T) {
+	overlay := &cluster.Results{Nodes: map[string]cluster.NodeResult{}}
+	var nodes []model.Node
+	for i := range 150 {
+		id := fmt.Sprintf("n%03d", i)
+		overlay.Nodes[id] = cluster.NodeResult{Label: id, CommunityID: 1, Betweenness: float64(i)}
+		nodes = append(nodes, model.Node{ID: id, Kind: model.KindSymbol, Label: id, Provenance: model.ProvExtracted, Confidence: 1})
+	}
+	gs := openStore(t)
+	if err := gs.UpsertNodes(context.Background(), nodes); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ limit, want int }{{0, 1}, {1000, 100}} {
+		var got []struct {
+			Label string `json:"label"`
+		}
+		out := call(t, godNodesHandler(gs, overlay, redactor{}), map[string]any{"limit": tc.limit})
+		if err := json.Unmarshal([]byte(out), &got); err != nil {
+			t.Fatalf("limit %d: unmarshal: %v\n%s", tc.limit, err, out)
+		}
+		if len(got) != tc.want || got[0].Label != "n149" {
+			t.Errorf("limit %d: got %d nodes led by %+v, want %d led by n149", tc.limit, len(got), got[:min(len(got), 1)], tc.want)
+		}
+	}
+}
+
 func TestJSONResultIsCompactAndUnescaped(t *testing.T) {
 	res, err := jsonResult(map[string]string{"sig": "func f(ch <-chan int) bool { return a && b }"})
 	if err != nil {

@@ -82,6 +82,34 @@ func TestApplyRegionPinsExistingStub(t *testing.T) {
 	validatePartition(t, res, nodes[:len(nodes)-1])
 }
 
+// TestApplyRegionDropsNodeDeletedMidWalk checks a neighbour deleted between being listed and being expanded is
+// neither re-clustered nor written back as a ghost singleton.
+func TestApplyRegionDropsNodeDeletedMidWalk(t *testing.T) {
+	nodes, edges := twoCliques()
+	prev := Full(nodes, edges, 1.0, rand.New(rand.NewSource(1)))
+	inner := memNeighbors(nodes, edges)
+	nb := func(id string) (*model.Node, []model.Edge, []model.Node, error) {
+		if id == "B" { // A's neighbour list still names B, but B is gone by the time it is expanded
+			return nil, nil, nil, nil
+		}
+		return inner(id)
+	}
+	r, err := BuildRegion([]string{"A"}, 2, nb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Removed["B"] {
+		t.Fatalf("Removed = %v, want B", r.Removed)
+	}
+	res := ApplyRegion(prev, r, 1.0, rand.New(rand.NewSource(2)))
+	if _, ok := res.Nodes["B"]; ok {
+		t.Errorf("deleted neighbour B was written back: %+v", res.Nodes["B"])
+	}
+	if res.NodeCount != len(nodes)-1 {
+		t.Errorf("NodeCount = %d, want %d", res.NodeCount, len(nodes)-1)
+	}
+}
+
 // TestSidecarIsCompactAndRoundTrips checks WriteSidecar emits unindented JSON that LoadSidecar reads back.
 func TestSidecarIsCompactAndRoundTrips(t *testing.T) {
 	nodes, edges := twoCliques()

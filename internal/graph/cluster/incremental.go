@@ -18,16 +18,15 @@ type Region struct {
 	Nodes   []model.Node    // nodes to re-cluster, in first-reached order
 	Edges   []model.Edge    // edges with both ends in Nodes
 	Degree  map[string]int  // whole-graph degree of each node whose adjacency was read; others keep prev's
-	Removed map[string]bool // seeds no longer in the graph, dropped from the results
+	Removed map[string]bool // nodes found absent (a seed, or a neighbour deleted mid-walk), dropped from results
 }
 
 // NeighborFunc returns id's node (nil when absent), its incident edges, and its distinct neighbours other
 // than itself. ingest backs it with GraphStore.Neighbors, so a re-cluster reads only the region.
 type NeighborFunc func(id string) (self *model.Node, edges []model.Edge, nbrs []model.Node, err error)
 
-// BuildRegion collects the nodes within depth hops of seeds and the edges among them. Only nodes closer than
-// depth are expanded, so edges between two nodes at the hop limit are not read. External package stubs are
-// leaves, which keeps a hub like pkg://fmt from pulling in every importer. Absent seeds land in Removed.
+// BuildRegion collects nodes within depth hops of seeds and the edges among them. Nodes at the limit and external
+// stubs (so pkg://fmt pulls in no importers) are not expanded; nodes found absent land in Removed.
 func BuildRegion(seeds []string, depth int, nb NeighborFunc) (Region, error) {
 	r := Region{Degree: map[string]int{}, Removed: map[string]bool{}}
 	in := map[string]bool{}
@@ -47,7 +46,7 @@ func BuildRegion(seeds []string, depth int, nb NeighborFunc) (Region, error) {
 			if err != nil {
 				return Region{}, err
 			}
-			if self == nil { // only a seed can be absent; deeper nodes came from a neighbour list
+			if self == nil { // a deleted seed, or a neighbour deleted after its neighbour list was read
 				delete(in, id)
 				r.Removed[id] = true
 				continue
@@ -95,7 +94,7 @@ func ApplyRegion(prev *Results, r Region, resolution float64, rng *rand.Rand) *R
 	var sub []model.Node
 	keep := make(map[string]bool, len(r.Nodes))
 	for _, n := range r.Nodes {
-		if _, had := prev.Nodes[n.ID]; had && model.IsExternal(n) {
+		if _, had := prev.Nodes[n.ID]; r.Removed[n.ID] || had && model.IsExternal(n) {
 			continue
 		}
 		sub = append(sub, n)
@@ -114,6 +113,9 @@ func ApplyRegion(prev *Results, r Region, resolution float64, rng *rand.Rand) *R
 		base = max(base, pr.CommunityID+1)
 	}
 	for _, n := range r.Nodes {
+		if r.Removed[n.ID] {
+			continue
+		}
 		pr, had := prev.Nodes[n.ID]
 		nr := NodeResult{Label: n.Label, SourceURI: n.SourceURI, CommunityID: pr.CommunityID,
 			Betweenness: pr.Betweenness, Degree: pr.Degree}

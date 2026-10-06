@@ -27,22 +27,22 @@ func diffFindingsTool() mcplib.Tool {
 	)
 }
 
-// resolveBaselineRef resolves a git ref (HEAD, branch, short SHA) to the full SHA LoadBaseline keys
-// on. It returns "" and "latest" unchanged, and returns ref itself when git can't resolve it.
-func resolveBaselineRef(ref string) string {
+// resolveBaselineRef resolves a git ref (HEAD, branch, short SHA) in the project repo to the full SHA LoadBaseline
+// keys on. It returns "" and "latest" unchanged, and returns ref itself when git can't resolve it.
+func resolveBaselineRef(projectRoot, ref string) string {
 	if ref == "" || ref == "latest" {
 		return ref
 	}
-	if sha := analyze.GitCommit(".", ref); sha != "" {
+	if sha := analyze.GitCommit(projectRoot, ref); sha != "" {
 		return sha
 	}
 	return ref
 }
 
-func diffFindingsHandler(gs store.GraphStore, baselineDir string) mcpsdk.ToolHandlerFunc {
+func diffFindingsHandler(gs store.GraphStore, baselineDir, projectRoot string) mcpsdk.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-		baselineRef := resolveBaselineRef(req.GetString("baseline", "latest"))
-		targetRef := resolveBaselineRef(req.GetString("target", ""))
+		baselineRef := resolveBaselineRef(projectRoot, req.GetString("baseline", "latest"))
+		targetRef := resolveBaselineRef(projectRoot, req.GetString("target", ""))
 
 		base, err := analyze.LoadBaseline(baselineDir, baselineRef)
 		if err != nil {

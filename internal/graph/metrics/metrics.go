@@ -108,10 +108,8 @@ func betweenness(g *intGraph, sources []int, scale float64) []float64 {
 	return betweennessWorkers(g, sources, scale, min(runtime.GOMAXPROCS(0), maxWorkers))
 }
 
-// betweennessWorkers splits sources into fixed chunks of chunkSources, has workers claim chunks and sum each
-// into its own partial vector, then adds the partials in chunk order after the join. The float summation
-// order depends only on the sources, never on workers or scheduling. Partials number at most
-// ceil(len(sources)/chunkSources): 16 for the 500 sampled pivots, and at most 157 for exact mode (n <= 5000).
+// betweennessWorkers sums fixed chunkSources-sized chunks into per-chunk partials, then adds them in chunk order,
+// so float summation order never depends on workers or scheduling (16 partials sampled, at most 157 exact).
 func betweennessWorkers(g *intGraph, sources []int, scale float64, workers int) []float64 {
 	nChunks := (len(sources) + chunkSources - 1) / chunkSources
 	workers = max(1, min(workers, nChunks))

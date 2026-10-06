@@ -192,6 +192,8 @@ func TestHostAllowedBlocksSpecialPurposeRanges(t *testing.T) {
 		"0.1.2.3", "240.0.0.1", "255.255.255.255", "192.0.0.170", "224.0.0.251",
 		"::ffff:127.0.0.1", "::ffff:169.254.169.254", // IPv4-mapped
 		"64:ff9b::a9fe:a9fe", "2002:a9fe:a9fe::1", "2001:0:4136:e378:8000:63bf:3fff:fdd2", // embed IPv4
+		"::ffff:0:7f00:1", "::ffff:0:a9fe:a9fe", // SIIT IPv4-translated
+		"::", "::1", "::7f00:1", "::a9fe:a9fe", // unspecified, loopback, IPv4-compatible
 		"fd00::1", "fe80::1%eth0", "ff02::1",
 	} {
 		if err := hostAllowed(h); err == nil {

@@ -18,7 +18,8 @@ func readSecret(file, env string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read secret file: %w", err)
 	}
-	s := strings.TrimSpace(string(b))
+	// PowerShell 5.1's `Out-File -Encoding utf8` prepends a BOM, which would otherwise end up in the secret.
+	s := strings.TrimSpace(strings.TrimPrefix(string(b), "\ufeff"))
 	if s == "" {
 		return "", fmt.Errorf("secret file %s is empty", file)
 	}

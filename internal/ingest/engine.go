@@ -221,9 +221,8 @@ func (e *Engine) prepare(ctx context.Context, path string) prepared {
 
 func (e *Engine) reanalyzing() bool { return e.cfg.Reanalyze && e.analyzer != nil }
 
-// apply writes a batch of extracted files (distinct URIs) in one ReplaceSources call, then marks the cache and
-// runs each file's follow-ups. Every extraction includes its file node, so a file whose node is absent is Fresh.
-// shared, when non-nil, holds other sources' nodes (pkg:// stubs) already written this run.
+// apply writes a batch of distinct files in one ReplaceSources call, then marks the cache and runs follow-ups. A file
+// whose node was absent is Fresh; shared, when non-nil, holds pkg:// stubs already written this run.
 func (e *Engine) apply(ctx context.Context, batch []prepared, shared map[string]bool) ([]Outcome, error) {
 	if shared != nil {
 		for i := range batch {
@@ -378,11 +377,7 @@ func (e *Engine) SyncChanges(ctx context.Context, changes []Change) (*BatchSumma
 // keeps, this goroutine writes results in batches, and prune deletes indexed files gone from disk.
 func (e *Engine) SyncDir(ctx context.Context, root string, prune bool) (sum *BatchSummary, err error) {
 	sum = &BatchSummary{}
-	defer func() {
-		if serr := e.persistCache(); serr != nil && err == nil {
-			err = serr
-		}
-	}()
+	defer func() { err = errors.Join(err, e.persistCache()) }()
 	policy, err := walk.LoadPolicy(root)
 	if err != nil {
 		return sum, err
@@ -506,9 +501,8 @@ func underURI(uri, dirURI string) bool {
 	return uri == dirURI || strings.HasPrefix(uri, strings.TrimSuffix(dirURI, "/")+"/")
 }
 
-// prune deletes indexed files under root that the walk did not see and that are gone from disk, plus
-// non-canonical aliases (older builds kept the input path's case on Windows) of files this walk re-indexed.
-// A file the walk excluded (ignored dir, unsupported type, narrower root) but still present survives.
+// prune deletes indexed files under root that the walk missed and are gone from disk, plus non-canonical aliases
+// of files it re-indexed. A file the walk excluded (ignored, unsupported, narrower root) but still present survives.
 func (e *Engine) prune(ctx context.Context, root string, seen map[string]bool, sum *BatchSummary) error {
 	rootURI := model.FileURI(root)
 	for _, uri := range e.cache.URIs() {
@@ -794,9 +788,8 @@ func (e *Engine) flush(ctx context.Context, sum *BatchSummary) {
 	sum.Reclustered = haveSidecar
 }
 
-// persistCache makes the store's writes durable, then saves the content cache, so after a crash the cache never
-// vouches for data the store lost. It is the one place the cache reaches disk; on a failed store sync the
-// previous cache stays, and the next run re-extracts what this one wrote.
+// persistCache syncs the store, then saves the content cache, so the cache never vouches for writes a crash lost.
+// On a failed sync the previous cache stays, and the next run re-extracts what this one wrote.
 func (e *Engine) persistCache() error {
 	if err := store.Sync(e.store); err != nil {
 		return fmt.Errorf("store sync failed, cache not saved: %w", err)

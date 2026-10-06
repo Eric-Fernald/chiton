@@ -88,17 +88,14 @@ func openSyncEngine(cmd *cobra.Command, f *syncEngineFlags) (*ingest.Engine, fun
 		}
 	}
 
-	var analyzer *analyze.Analyzer
-	if f.reanalyze {
-		analyzer = analyze.New(gs, nil)
-	}
+	analyzer := analyze.New(gs, nil) // without --analyze it only prunes deleted files' findings
 
 	eng := ingest.New(gs, ch, ingest.Config{
 		GraphPath:       cfg.GraphPath,
 		SidecarKey:      keys.fileKey,
 		Resolution:      f.resolution,
 		Reembed:         embedder != nil,
-		Reanalyze:       analyzer != nil,
+		Reanalyze:       f.reanalyze,
 		Workers:         f.workers,
 		Debounce:        time.Duration(f.debounceMS) * time.Millisecond,
 		ClusterDebounce: time.Duration(f.clusterMS) * time.Millisecond,

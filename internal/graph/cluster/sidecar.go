@@ -59,9 +59,8 @@ func WriteSidecar(path string, r *Results, key []byte) error {
 	return nil
 }
 
-// LoadSidecar reads the cluster sidecar at path, unsealing it with key. A sidecar written before encryption was
-// on still loads. Returns (nil, nil) when the file does not exist so callers can treat a missing sidecar as
-// "not yet run".
+// LoadSidecar reads and unseals the cluster sidecar at path; one written before encryption was on still loads.
+// A missing file returns (nil, nil), meaning "not yet run".
 func LoadSidecar(path string, key []byte) (*Results, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {

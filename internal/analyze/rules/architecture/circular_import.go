@@ -97,9 +97,8 @@ func indexFilesByPath(ns []model.Node) fileIndex {
 // jsImportExts are the extensions, in resolution order, a JS/TS relative import may omit.
 var jsImportExts = []string{".ts", ".tsx", ".js", ".jsx"}
 
-// resolve maps an import spec written in the file fromURI to the scanned file it names. It handles relative
-// imports only: JS/TS "./x" and "../x" (with an omitted extension or index file) and Python ".x" / "..x.y".
-// Go has none, and the Go toolchain already rejects import cycles.
+// resolve maps a relative import spec in fromURI to the scanned file it names: JS/TS "./x", "../x" (extension or
+// index file omitted) and Python ".x" / "..x.y". Go has none, and its toolchain already rejects import cycles.
 func (idx fileIndex) resolve(fromURI, spec string) (string, bool) {
 	from, ok := strings.CutPrefix(fromURI, "file://")
 	if !ok {

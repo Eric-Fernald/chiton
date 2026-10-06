@@ -11,9 +11,8 @@ import (
 // maxSockPath is a conservative sun_path limit (macOS allows 104 bytes including the NUL).
 const maxSockPath = 103
 
-// listenUnixPrivate binds a Unix socket only its owner can connect to. It binds inside a fresh 0700 directory,
-// chmods the socket 0600, then renames it into place, so no other user can reach it at any moment and no
-// process-wide umask change is needed. The caller removes path on shutdown; Close would unlink the old temp name.
+// listenUnixPrivate binds an owner-only socket in a fresh 0700 dir, chmods it 0600 and renames it into place, with
+// no umask change. The caller removes path on shutdown, since Close would unlink only the old temp name.
 func listenUnixPrivate(path string) (net.Listener, error) {
 	dir, err := os.MkdirTemp(filepath.Dir(path), ".chiton-sock-*")
 	if err != nil {

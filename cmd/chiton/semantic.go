@@ -139,9 +139,8 @@ for CI and demos). Restart 'chiton serve' afterwards to load the new vectors.`,
 	return cmd
 }
 
-// linkSimilarNodes indexes the embeddings made by modelID and adds a SIMILAR_TO edge (INFERRED, confidence=score)
-// for each pair above threshold. Large stores get an approximate index, which can miss a few pairs; exact forces
-// Flat. A non-nil built index over the same embeddings is used instead of building one, unless exact is set.
+// linkSimilarNodes adds an INFERRED SIMILAR_TO edge for each modelID embedding pair above threshold. Large stores
+// use an approximate index (built, if non-nil) that may miss pairs; exact forces Flat.
 func linkSimilarNodes(ctx context.Context, gs store.GraphStore, es store.EmbeddingStore, modelID string,
 	threshold float32, vcfg config.VectorConfig, exact bool, built vector.Index) (int, error) {
 	embs, err := modelEmbeddings(es, modelID)(ctx) // never link vectors from different models
