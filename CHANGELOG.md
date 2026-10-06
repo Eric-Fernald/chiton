@@ -91,6 +91,7 @@ dated section.
 
 ### Changed
 
+- **`shortest_path` walks adjacency keys** and decodes only the edges on the returned path.
 - **Incremental sync no longer rescans the whole graph per file.** The Badger store keeps source_uri and kind
   indexes (store layout v2), so `DeleteBySourceURI` and kind or source filters read only matching nodes. The
   first open after upgrading builds the indexes once, and an open after an unclean shutdown rebuilds them.

@@ -549,8 +549,8 @@ func (s *Store) Neighbors(_ context.Context, id string, depth int, edgeKinds []m
 	return sub, nil
 }
 
-// ShortestPath returns the shortest undirected path between src and dst via BFS.
-// Returns an empty Path (no error) when no path exists.
+// ShortestPath returns the shortest undirected path between src and dst via BFS over adjacency keys, loading
+// only the path's nodes and edges. Returns an empty Path (no error) when no path exists.
 func (s *Store) ShortestPath(_ context.Context, src, dst string) (store.Path, error) {
 	var path store.Path
 	err := s.db.View(func(txn *badgerdb.Txn) error {
@@ -572,11 +572,11 @@ func (s *Store) ShortestPath(_ context.Context, src, dst string) (store.Path, er
 		for len(queue) > 0 && !found {
 			curr := queue[0]
 			queue = queue[1:]
-			adjEdges, err := adjacentEdges(txn, curr, nil)
+			adj, err := adjacentEdgeKeys(txn, curr, nil)
 			if err != nil {
 				return err
 			}
-			for _, e := range adjEdges {
+			for _, e := range adj {
 				neighbor := e.Dst
 				if neighbor == curr {
 					neighbor = e.Src
