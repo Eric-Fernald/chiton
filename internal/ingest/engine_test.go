@@ -769,3 +769,21 @@ func TestSyncSkipsSymlinks(t *testing.T) {
 		t.Errorf("symlinked file indexed with %d node(s)", n)
 	}
 }
+
+// TestSyncDirWritesSharedStubsOnce checks a package stub every file references is written once per run.
+func TestSyncDirWritesSharedStubsOnce(t *testing.T) {
+	h := newHarness(t, false, false)
+	cs := &countingStore{Store: h.gs, nodeWrites: map[string]int{}}
+	eng := New(cs, h.cache, Config{GraphPath: h.eng.cfg.GraphPath}, nil, nil, nil)
+	for _, name := range []string{"A", "B", "C"} {
+		h.write(t, name+".go", "package src\nimport \"fmt\"\nfunc "+name+"() { fmt.Println() }\n")
+	}
+	if _, err := eng.SyncDir(context.Background(), h.dir, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{model.NewNodeID("pkg://fmt", "fmt"), model.NewNodeID("pkg://fmt", "Println")} {
+		if got := cs.nodeWrites[id]; got != 1 {
+			t.Errorf("stub %s written %d times, want 1", id, got)
+		}
+	}
+}

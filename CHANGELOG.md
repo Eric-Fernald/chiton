@@ -91,6 +91,8 @@ dated section.
 
 ### Changed
 
+- **Fewer duplicate writes.** The Go extractor emits each node and edge once per file, and a `build`/`sync once` run writes each shared `pkg://` stub once; `build`'s node and edge counts drop accordingly.
+
 - **`shortest_path` walks adjacency keys** and decodes only the edges on the returned path.
 - **Incremental sync no longer rescans the whole graph per file.** The Badger store keeps source_uri and kind
   indexes (store layout v2), so `DeleteBySourceURI` and kind or source filters read only matching nodes. The

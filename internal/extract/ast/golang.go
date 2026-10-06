@@ -28,11 +28,8 @@ func (g *GoExtractor) ExtractSource(_ context.Context, path string, src []byte) 
 		return nil, nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 
-	fileNode := newFileNode(path, src, map[string]any{"language": "go", "package": f.Name.Name})
-	uri := fileNode.SourceURI
-
-	nodes := []model.Node{fileNode}
-	var edges []model.Edge
+	// fg drops repeat nodes and edges (a call site per call, a package imported twice, repeated init funcs).
+	fg := newFileGraph(newFileNode(path, src, map[string]any{"language": "go", "package": f.Name.Name}))
 
 	// symbols maps plain func and type names to node IDs for intra-file CALLS resolution. It omits methods
 	// because a bare call can't name one and same-named methods on different types would overwrite each other.
@@ -47,9 +44,7 @@ func (g *GoExtractor) ExtractSource(_ context.Context, path string, src []byte) 
 	importAliases := make(map[string]string, len(f.Imports))
 	for _, imp := range f.Imports {
 		pkgPath := strings.Trim(imp.Path.Value, `"`)
-		pkgNode := importNode(pkgPath)
-		nodes = append(nodes, pkgNode)
-		edges = append(edges, importEdge(fileNode.ID, pkgNode.ID))
+		fg.addExternal(fg.fileID, pkgPath, importEdge)
 
 		alias := pkgPath[strings.LastIndexByte(pkgPath, '/')+1:]
 		if imp.Name != nil && imp.Name.Name != "_" && imp.Name.Name != "." {
@@ -74,23 +69,23 @@ func (g *GoExtractor) ExtractSource(_ context.Context, path string, src []byte) 
 			}
 
 			sym := model.Node{
-				ID:         model.NewNodeID(uri, label),
+				ID:         model.NewNodeID(fg.uri, label),
 				Kind:       model.KindSymbol,
 				Label:      label,
-				SourceURI:  uri,
+				SourceURI:  fg.uri,
 				Span:       &model.SourceSpan{StartLine: pos.Line, EndLine: end.Line},
 				Provenance: model.ProvExtracted,
 				Confidence: 1.0,
 				Attrs:      attrs,
 			}
-			nodes = append(nodes, sym)
+			fg.addNode(sym)
 			if d.Recv == nil {
 				symbols[d.Name.Name] = sym.ID
 			}
 			if d.Body != nil {
 				bodies = append(bodies, funcBody{id: sym.ID, body: d.Body})
 			}
-			edges = append(edges, containsEdge(fileNode.ID, sym.ID))
+			fg.addEdge(containsEdge(fg.fileID, sym.ID))
 
 		case *goast.GenDecl:
 			for _, spec := range d.Specs {
@@ -106,18 +101,18 @@ func (g *GoExtractor) ExtractSource(_ context.Context, path string, src []byte) 
 					}
 				}
 				sym := model.Node{
-					ID:         model.NewNodeID(uri, ts.Name.Name),
+					ID:         model.NewNodeID(fg.uri, ts.Name.Name),
 					Kind:       model.KindSymbol,
 					Label:      ts.Name.Name,
-					SourceURI:  uri,
+					SourceURI:  fg.uri,
 					Span:       &model.SourceSpan{StartLine: pos.Line},
 					Provenance: model.ProvExtracted,
 					Confidence: 1.0,
 					Attrs:      attrs,
 				}
-				nodes = append(nodes, sym)
+				fg.addNode(sym)
 				symbols[ts.Name.Name] = sym.ID
-				edges = append(edges, containsEdge(fileNode.ID, sym.ID))
+				fg.addEdge(containsEdge(fg.fileID, sym.ID))
 			}
 		}
 	}
@@ -136,7 +131,7 @@ func (g *GoExtractor) ExtractSource(_ context.Context, path string, src []byte) 
 				if !ok || calleeID == callerID {
 					return true
 				}
-				edges = append(edges, callsEdge(callerID, calleeID))
+				fg.addEdge(callsEdge(callerID, calleeID))
 			case *goast.SelectorExpr:
 				xIdent, ok := fun.X.(*goast.Ident)
 				if !ok {
@@ -156,14 +151,14 @@ func (g *GoExtractor) ExtractSource(_ context.Context, path string, src []byte) 
 					Confidence: 1.0,
 					Attrs:      map[string]any{"external": true},
 				}
-				nodes = append(nodes, calleeNode)
-				edges = append(edges, callsEdge(callerID, calleeNode.ID))
+				fg.addNode(calleeNode)
+				fg.addEdge(callsEdge(callerID, calleeNode.ID))
 			}
 			return true
 		})
 	}
 
-	return nodes, edges, nil
+	return fg.nodes, fg.edges, nil
 }
 
 // --- helpers ---

@@ -218,7 +218,13 @@ func (e *Engine) reanalyzing() bool { return e.cfg.Reanalyze && e.analyzer != ni
 
 // apply writes a batch of extracted files (distinct URIs) in one ReplaceSources call, then marks the cache and
 // runs each file's follow-ups. Every extraction includes its file node, so a file whose node is absent is Fresh.
-func (e *Engine) apply(ctx context.Context, batch []prepared) ([]Outcome, error) {
+// shared, when non-nil, holds other sources' nodes (pkg:// stubs) already written this run.
+func (e *Engine) apply(ctx context.Context, batch []prepared, shared map[string]bool) ([]Outcome, error) {
+	if shared != nil {
+		for i := range batch {
+			batch[i].nodes = dropWritten(batch[i].nodes, batch[i].uri, shared)
+		}
+	}
 	fileIDs := make([]string, len(batch))
 	for i, p := range batch {
 		fileIDs[i] = model.NewNodeID(p.uri, p.uri)
@@ -254,6 +260,22 @@ func (e *Engine) apply(ctx context.Context, batch []prepared) ([]Outcome, error)
 		outs[i] = e.finish(ctx, p, deleted[i])
 	}
 	return outs, nil
+}
+
+// dropWritten removes nodes of other sources (pkg:// stubs) already in written and records the rest. Stubs
+// carry no per-file state, so rewriting one for every importing file is pure overhead.
+func dropWritten(nodes []model.Node, uri string, written map[string]bool) []model.Node {
+	out := nodes[:0]
+	for _, n := range nodes {
+		if n.SourceURI != uri {
+			if written[n.ID] {
+				continue
+			}
+			written[n.ID] = true
+		}
+		out = append(out, n)
+	}
+	return out
 }
 
 // finish re-embeds and re-analyzes a written file when configured and reports its outcome.
@@ -292,7 +314,7 @@ func (e *Engine) SyncFile(ctx context.Context, path string) (Outcome, error) {
 	case p.out.Skipped:
 		return p.out, nil
 	}
-	outs, err := e.apply(ctx, []prepared{p})
+	outs, err := e.apply(ctx, []prepared{p}, nil)
 	if err != nil {
 		return Outcome{}, err
 	}
@@ -415,12 +437,13 @@ func (e *Engine) SyncDir(ctx context.Context, root string, prune bool) (sum *Bat
 // tallying skips as they arrive.
 func (e *Engine) writeAll(ctx context.Context, results <-chan prepared, sum *BatchSummary) error {
 	var batch []prepared
+	shared := map[string]bool{}
 	records := 0
 	writeBatch := func() error {
 		if len(batch) == 0 {
 			return nil
 		}
-		outs, err := e.apply(ctx, batch)
+		outs, err := e.apply(ctx, batch, shared)
 		if err != nil {
 			return err
 		}
