@@ -473,6 +473,7 @@ func buildCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&prune, "prune", true, "Delete nodes for files under the tree that no longer exist")
 	return cmd
 }
+
 func queryCmd() *cobra.Command {
 	var depth int
 	var edgeKinds []string

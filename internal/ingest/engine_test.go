@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -669,5 +670,45 @@ func TestSyncDirBatchesWrites(t *testing.T) {
 	}
 	if sum.Unchanged != files || sum.Upserted != 0 {
 		t.Errorf("re-run summary %+v, want all %d unchanged", sum, files)
+	}
+}
+
+// TestSyncDirPruneKeepsUnstatableFiles checks prune deletes only files whose stat says they do not exist, so a
+// file hidden by a permission error (an unreadable directory) keeps its nodes.
+func TestSyncDirPruneKeepsUnstatableFiles(t *testing.T) {
+	h := newHarness(t, false, false)
+	ctx := context.Background()
+	p := h.write(t, "a.go", "package src\nfunc A() {}\n")
+	if _, err := h.eng.SyncDir(ctx, h.dir, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	h.eng.stat = func(string) (fs.FileInfo, error) { return nil, fs.ErrPermission }
+	sum, err := h.eng.SyncDir(ctx, h.dir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.Deleted != 0 || len(h.nodesForURI(t, model.FileURI(p))) == 0 {
+		t.Fatalf("a file whose stat failed with a permission error was pruned (summary %+v)", sum)
+	}
+
+	h.eng.stat = os.Stat
+	if sum, err = h.eng.SyncDir(ctx, h.dir, true); err != nil || sum.Deleted != 1 {
+		t.Fatalf("SyncDir = %+v, %v; want the gone file pruned", sum, err)
+	}
+}
+
+// TestNoReclusterSkipsTouchedSet checks a NoRecluster engine records no touched IDs for a re-cluster it never runs.
+func TestNoReclusterSkipsTouchedSet(t *testing.T) {
+	h := newHarness(t, false, false)
+	eng := New(h.gs, h.cache, Config{GraphPath: h.eng.cfg.GraphPath, NoRecluster: true}, nil, nil, nil)
+	h.write(t, "a.go", "package src\nfunc A() {}\n")
+	if _, err := eng.SyncDir(context.Background(), h.dir, true); err != nil {
+		t.Fatal(err)
+	}
+	if touched, dirty := eng.takeTouched(); dirty || len(touched) != 0 {
+		t.Errorf("touched = %d IDs, dirty = %v; want none", len(touched), dirty)
 	}
 }

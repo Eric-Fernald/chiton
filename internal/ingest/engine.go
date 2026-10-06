@@ -81,6 +81,7 @@ type Engine struct {
 	analyzer *analyze.Analyzer // nil ⇒ no re-analyze
 	cfg      Config
 	log      Logger
+	stat     func(string) (fs.FileInfo, error) // os.Stat; prune's existence check, swappable in tests
 
 	clusterMu sync.Mutex
 
@@ -110,6 +111,7 @@ func New(s store.GraphStore, c *cache.Cache, cfg Config, embedder embed.Embedder
 		analyzer: analyzer,
 		cfg:      cfg.withDefaults(),
 		log:      log,
+		stat:     os.Stat,
 		touched:  map[string]bool{},
 	}
 }
@@ -259,7 +261,9 @@ func (e *Engine) finish(ctx context.Context, p prepared, deleted int) Outcome {
 			e.log("sync: %s: re-analyze failed: %v", p.path, err)
 		}
 	}
-	e.markTouched(ids)
+	if !e.cfg.NoRecluster {
+		e.markTouched(ids)
+	}
 	return out
 }
 
@@ -453,7 +457,11 @@ func (e *Engine) prune(ctx context.Context, root string, seen map[string]bool, s
 			continue
 		}
 		if p, ok := model.PathFromFileURI(uri); ok {
-			if _, err := os.Stat(p); err == nil {
+			// Only a file known to be gone is pruned: a stat error such as EACCES says nothing about whether it exists.
+			if _, err := e.stat(p); !errors.Is(err, fs.ErrNotExist) {
+				if err != nil {
+					e.log("sync: keep %s: %v", p, err)
+				}
 				continue
 			}
 		}
@@ -625,7 +633,9 @@ func (e *Engine) reembed(ctx context.Context, nodes []model.Node) (int, error) {
 // deleteURI removes a source_uri's nodes, edges, cache entry, and findings, first marking its surviving
 // neighbors touched (before the edges vanish) so the re-cluster refreshes their communities.
 func (e *Engine) deleteURI(ctx context.Context, uri string) (Outcome, error) {
-	e.markSurvivorsTouched(ctx, uri)
+	if !e.cfg.NoRecluster {
+		e.markSurvivorsTouched(ctx, uri)
+	}
 	deleted, err := e.store.DeleteBySourceURI(ctx, uri)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("delete %s: %w", uri, err)
@@ -701,6 +711,7 @@ func (e *Engine) tally(sum *BatchSummary, out Outcome) {
 	}
 	sum.Reembedded += out.Reembedded
 }
+
 func (e *Engine) markTouched(ids []string) {
 	e.touchedMu.Lock()
 	defer e.touchedMu.Unlock()
