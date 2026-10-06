@@ -5,6 +5,7 @@ package url
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -32,10 +33,18 @@ type Ingester struct {
 // New builds an Ingester over the given store using the default HTTP/file
 // fetcher (which shells out to yt-dlp for YouTube URLs when present).
 func New(s store.GraphStore) *Ingester {
+	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second, Control: dialControl}
 	client := &http.Client{
 		Timeout: 30 * time.Second,
-		// Block redirects to private, loopback, and link-local hosts. add_url is reachable over MCP, so a
-		// hostile page could otherwise redirect into the internal network (e.g. cloud metadata at 169.254.169.254).
+		// No Proxy: through a proxy, dialControl would vet the proxy's address instead of the target's.
+		Transport: &http.Transport{
+			DialContext:           dialer.DialContext,
+			ForceAttemptHTTP2:     true,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 20 * time.Second,
+			IdleConnTimeout:       90 * time.Second,
+		},
+		// Fail fast on a redirect to a literal private IP; dialControl still vets every named host at connect time.
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return fmt.Errorf("stopped after 10 redirects")

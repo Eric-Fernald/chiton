@@ -2,6 +2,10 @@ package url
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -178,5 +182,42 @@ func TestAddRefusesLocalInputsUnlessAllowed(t *testing.T) {
 	ing.fetcher = rf
 	if _, err := ing.Add(ctx, "/tmp/notes.txt", AddOptions{AllowLocal: true}); err != nil || !rf.called {
 		t.Fatalf("Add with AllowLocal = %v (fetched=%v); want the CLI path to keep reading local files", err, rf.called)
+	}
+}
+
+func TestHostAllowedBlocksSpecialPurposeRanges(t *testing.T) {
+	for _, h := range []string{
+		"100.64.0.1", "100.127.255.254", // carrier-grade NAT
+		"198.18.0.1", "198.19.255.254", // benchmarking
+		"0.1.2.3", "240.0.0.1", "255.255.255.255", "192.0.0.170", "224.0.0.251",
+		"::ffff:127.0.0.1", "::ffff:169.254.169.254", // IPv4-mapped
+		"64:ff9b::a9fe:a9fe", "2002:a9fe:a9fe::1", "2001:0:4136:e378:8000:63bf:3fff:fdd2", // embed IPv4
+		"fd00::1", "fe80::1%eth0", "ff02::1",
+	} {
+		if err := hostAllowed(h); err == nil {
+			t.Errorf("hostAllowed(%q) = nil; want blocked", h)
+		}
+	}
+	for _, h := range []string{"93.184.216.34", "1.1.1.1", "100.128.0.1", "198.20.0.1", "2606:4700:4700::1111"} {
+		if err := hostAllowed(h); err != nil {
+			t.Errorf("hostAllowed(%q) = %v; want allowed", h, err)
+		}
+	}
+}
+
+// A name resolving to loopback passes the literal-IP pre-check, so only the dial-time guard can stop it. The
+// same guard sees every redirect hop and any DNS answer that changes between lookup and connect.
+func TestFetchRefusesNameResolvingToLoopback(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, "internal admin page")
+	}))
+	defer ts.Close()
+	_, port, err := net.SplitHostPort(ts.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = New(nil).fetcher.fetch(context.Background(), "http://localhost:"+port+"/")
+	if err == nil || !strings.Contains(err.Error(), "refusing to connect") {
+		t.Fatalf("fetch via localhost = %v; want the dial guard's refusal", err)
 	}
 }

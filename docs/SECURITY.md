@@ -473,19 +473,19 @@ Shipped mitigations (`internal/ingest/url/`):
 
 - The **read-only check runs before the fetch**, so a default (non-`--writable`)
   stdio server makes no request at all — it returns an error instead.
-- `hostAllowed` rejects loopback, private, link-local, and unspecified addresses
-  — both as literals *and* after DNS resolution — blocking SSRF at cloud
-  metadata endpoints such as `169.254.169.254`.
+- A dial-time guard (`net.Dialer.Control`) checks the address actually connected
+  to, on the first request and on every redirect. It refuses loopback, RFC 1918,
+  link-local (cloud metadata such as `169.254.169.254`), CGNAT `100.64/10`,
+  `198.18/15`, `0/8`, `240/4`, `192.0.0/24`, multicast, ULA, and IPv4-embedding
+  IPv6 (NAT64, 6to4, Teredo), and treats IPv4-mapped IPv6 as IPv4. `hostAllowed`
+  additionally fails fast on literal IPs.
 - `CheckRedirect` re-applies `hostAllowed` on **every** hop, with a 10-redirect
   cap, so a public host cannot redirect into the internal network.
 - Responses are capped at 32 MiB and the client has a 30 s timeout.
 
 Acknowledged residual gaps, stated plainly:
 
-- **DNS-rebinding TOCTOU.** `hostAllowed` resolves the name, then the HTTP
-  client resolves it again to dial. A determined attacker can race the two. The
-  code documents this itself; closing it needs a custom `DialContext`, which is
-  not implemented.
+- `add_url` connects directly and ignores `HTTP(S)_PROXY`.
 - **The `yt-dlp` branch bypasses `hostAllowed` entirely.** A YouTube-shaped host
   goes straight to the subprocess without the SSRF check.
 - Over MCP `add_url` accepts only http/https; local reads are CLI-only
@@ -512,7 +512,7 @@ status is labelled **shipped** or **planned**.
 | Meeting/email PII surfaced by the two meeting tools | `person` nodes tagged `pii=true`, hidden unless `include_pii` | **Shipped, but narrow** — see §3; the other read tools have no gate |
 | A symlink in an indexed repo pointing outside it (e.g. `notes.md -> ~/.ssh/id_rsa`) pulling its target into the graph and `pending_extractions` | `build`, `sync`, and `sync watch` index regular files only; symlinks and junctions are skipped at the walk and at the read | **Shipped** (`analyze` via Section D) |
 | Accidental upload of secrets to a remote LLM | Subagent mode = no built-in LLM calls; per-source allowlist + secret scrubbing | **Partly:** no built-in LLM egress (shipped); allowlist/scrubbing **planned** |
-| SSRF via assistant-driven `add_url` | Read-only default; `hostAllowed` on the host and on every redirect; 10-redirect cap | **Shipped, with known gaps** (§5.3) |
+| SSRF via assistant-driven `add_url` | Read-only default; `hostAllowed` on the host and on every redirect; 10-redirect cap | **Shipped; the `yt-dlp` branch is a known gap** (§5.3) |
 | Unauthenticated reader on the MCP HTTP port | Per-start bearer token, Origin allowlist, JSON-only POSTs with an 8 MiB cap, no `Access-Control-Allow-Origin: *`; loopback default + wildcard-bind warning | **Shipped** (no TLS; §5.1) |
 | Unauthenticated Teams/Slack webhook notifications | `clientState` and signing-secret checks now required to start | **Shipped** (previously fail-open for Teams) |
 | Secrets in environment variables | Env-only, header-only, never logged or persisted | **Shipped**; no OS keychain integration |
