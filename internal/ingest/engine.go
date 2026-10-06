@@ -153,6 +153,13 @@ func (e *Engine) SyncFile(ctx context.Context, path string) (Outcome, error) {
 		return Outcome{Path: path, Op: OpUpsert, Skipped: true, Reason: "extract: " + err.Error()}, nil
 	}
 
+	// Read the file's findings while the AFFECTS edges into its nodes still exist; the delete drops them.
+	var prior *analyze.PriorFindings
+	if e.cfg.Reanalyze && e.analyzer != nil {
+		if prior, err = e.analyzer.ReadPriorFindings(ctx, uri); err != nil {
+			e.log("sync: %s: %v", path, err) // a nil prior makes the re-analyze query the store instead
+		}
+	}
 	deleted, err := e.store.DeleteBySourceURI(ctx, uri)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("delete stale nodes for %s: %w", uri, err)
@@ -187,7 +194,7 @@ func (e *Engine) SyncFile(ctx context.Context, path string) (Outcome, error) {
 		out.Reembedded = n
 	}
 	if e.cfg.Reanalyze && e.analyzer != nil {
-		if _, err := e.analyzer.AnalyzeExtracted(ctx, path, content, nodes, edges); err != nil {
+		if _, err := e.analyzer.ReanalyzeExtracted(ctx, path, content, nodes, edges, prior); err != nil {
 			e.log("sync: %s: re-analyze failed: %v", path, err)
 		}
 	}

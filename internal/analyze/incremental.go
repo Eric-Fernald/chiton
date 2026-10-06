@@ -18,18 +18,45 @@ func (a *Analyzer) AnalyzeFile(ctx context.Context, path string) (*Result, error
 	if !ok {
 		return &Result{}, nil
 	}
-	return a.analyzeTarget(ctx, ft, start)
+	return a.analyzeTarget(ctx, ft, start, nil)
 }
 
 // AnalyzeExtracted is AnalyzeFile for a caller that already read path (content) and extracted it
 // (nodes and edges as ExtractSource returned them), so the file isn't read and parsed twice.
 func (a *Analyzer) AnalyzeExtracted(ctx context.Context, path string, content []byte, nodes []model.Node, edges []model.Edge) (*Result, error) {
+	return a.ReanalyzeExtracted(ctx, path, content, nodes, edges, nil)
+}
+
+// PriorFindings holds a file's deterministic findings as ReadPriorFindings saw them.
+type PriorFindings struct{ nodes []model.Node }
+
+// ReadPriorFindings returns uri's deterministic findings by following the AFFECTS edges into its file node
+// and the symbols it CONTAINS, a read the size of the file. Call it before replacing uri's nodes, since
+// deleting them drops those edges.
+func (a *Analyzer) ReadPriorFindings(ctx context.Context, uri string) (*PriorFindings, error) {
+	kinds := []model.EdgeKind{model.EdgeContains, model.EdgeAffects}
+	sub, err := a.store.Neighbors(ctx, model.NewNodeID(uri, uri), 2, kinds)
+	if err != nil {
+		return nil, fmt.Errorf("read prior findings for %s: %w", uri, err)
+	}
+	p := &PriorFindings{}
+	for _, n := range sub.Nodes {
+		if n.Kind == model.KindFinding && model.AttrString(n.Attrs, "rule_provenance") == string(ProvenanceDeterministic) {
+			p.nodes = append(p.nodes, n)
+		}
+	}
+	return p, nil
+}
+
+// ReanalyzeExtracted is AnalyzeExtracted for live sync: it prunes from prior, read by ReadPriorFindings
+// before the caller replaced path's nodes, instead of querying the store. A nil prior queries.
+func (a *Analyzer) ReanalyzeExtracted(ctx context.Context, path string, content []byte, nodes []model.Node, edges []model.Edge, prior *PriorFindings) (*Result, error) {
 	start := a.now()
-	return a.analyzeTarget(ctx, newFileTarget(path, content, nodes, edges), start)
+	return a.analyzeTarget(ctx, newFileTarget(path, content, nodes, edges), start, prior)
 }
 
 // analyzeTarget runs the FileRules applicable to ft and replaces ft's findings from those rules.
-func (a *Analyzer) analyzeTarget(ctx context.Context, ft FileTarget, start time.Time) (*Result, error) {
+func (a *Analyzer) analyzeTarget(ctx context.Context, ft FileTarget, start time.Time, prior *PriorFindings) (*Result, error) {
 	ext := FileExt(ft.Path)
 	rs := a.fileRuleSet()
 	var findings []Finding
@@ -53,7 +80,7 @@ func (a *Analyzer) analyzeTarget(ctx context.Context, ft FileTarget, start time.
 		scanned[ft.URI] = true
 	}
 	// Limit the prune to the rules that ran, because this file's GraphScope findings must survive the edit.
-	if err := a.pruneResolved(ctx, scanned, ids, ruleScope); err != nil {
+	if err := a.pruneResolved(ctx, scanned, ids, ruleScope, prior); err != nil {
 		return nil, err
 	}
 

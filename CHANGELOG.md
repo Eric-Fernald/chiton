@@ -88,6 +88,10 @@ dated section.
 
 ### Changed
 
+- **Live sync with `--analyze` is linear again.** Re-analyzing a file used to load and decode every
+  deterministic finding in the store to prune that file's; it now reads the file's findings through their
+  AFFECTS edges before replacing its nodes, and an Analyzer writes each rule node once. `sync once` over
+  Go's `src/net` (390 files) dropped from 10.1 s to 3.4 s.
 - `chiton serve` with no transport flag now speaks stdio instead of starting the
   HTTP/SSE daemon on 127.0.0.1:7474. Pass `--http 127.0.0.1:7474` for the
   daemon; `--stdio` is still accepted.

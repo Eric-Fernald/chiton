@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +26,9 @@ type Analyzer struct {
 
 	fileRulesOnce sync.Once
 	fileRules     fileRuleSet // AnalyzeFile's rule list, which the fileRuleSet method builds lazily
+
+	rulesMu   sync.Mutex
+	rulesDone map[string]bool // rule node IDs this Analyzer has upserted; rule metadata never changes
 }
 
 // New returns an Analyzer wired to the given store and rule registry.
@@ -76,7 +81,7 @@ func (a *Analyzer) Analyze(ctx context.Context, root string) (*Result, error) {
 	}
 	// A full Analyze runs every rule, so all deterministic findings for the
 	// scanned files are in scope to prune (ruleScope nil = no restriction).
-	if err := a.pruneResolved(ctx, w.scannedURIs, ids, nil); err != nil {
+	if err := a.pruneResolved(ctx, w.scannedURIs, ids, nil, nil); err != nil {
 		return nil, err
 	}
 
@@ -162,10 +167,13 @@ func (a *Analyzer) persist(ctx context.Context, rules []Rule, findings []Finding
 	now := a.now()
 
 	nodes := make([]model.Node, 0, len(rules)+len(findings))
-	ruleNodes := make(map[string]string, len(rules)) // maps rule ID to RuleNodeID
+	var fresh []string // rule nodes this call upserts for the first time
 	for _, r := range rules {
 		n := RuleAsNode(r.Meta(), now)
-		ruleNodes[n.Label] = n.ID
+		if a.rulePersisted(n.ID) {
+			continue
+		}
+		fresh = append(fresh, n.ID)
 		nodes = append(nodes, n)
 	}
 	edges := make([]model.Edge, 0, len(findings)*2)
@@ -173,12 +181,7 @@ func (a *Analyzer) persist(ctx context.Context, rules []Rule, findings []Finding
 	for _, f := range findings {
 		id := f.FindingID()
 		ids[id] = true
-		rule, ok := ruleNodes[f.RuleID]
-		if !ok {
-			rule = RuleNodeID(f.RuleID)
-			ruleNodes[f.RuleID] = rule
-		}
-		nodes, edges = f.appendGraph(nodes, edges, id, rule, now)
+		nodes, edges = f.appendGraph(nodes, edges, id, RuleNodeID(f.RuleID), now)
 	}
 	if err := a.store.UpsertNodes(ctx, nodes); err != nil {
 		return nil, fmt.Errorf("upsert nodes: %w", err)
@@ -186,21 +189,47 @@ func (a *Analyzer) persist(ctx context.Context, rules []Rule, findings []Finding
 	if err := a.store.UpsertEdges(ctx, edges); err != nil {
 		return nil, fmt.Errorf("upsert edges: %w", err)
 	}
+	a.markRulesPersisted(fresh)
 	return ids, nil
 }
 
+// rulePersisted reports whether this Analyzer already upserted rule node id.
+func (a *Analyzer) rulePersisted(id string) bool {
+	a.rulesMu.Lock()
+	defer a.rulesMu.Unlock()
+	return a.rulesDone[id]
+}
+
+func (a *Analyzer) markRulesPersisted(ids []string) {
+	a.rulesMu.Lock()
+	defer a.rulesMu.Unlock()
+	if a.rulesDone == nil {
+		a.rulesDone = make(map[string]bool, len(ids))
+	}
+	for _, id := range ids {
+		a.rulesDone[id] = true
+	}
+}
+
+// pruneByURIMax is the scanned-file count up to which pruneResolved queries findings per target_uri, so the
+// store's byte probe skips other files' records undecoded; larger passes load every finding once.
+const pruneByURIMax = 8
+
 // pruneResolved deletes a scanned file's deterministic findings that are missing from newIDs. LLM findings
-// are pruned separately. A non-nil ruleScope limits the delete to the rule IDs that ran.
-func (a *Analyzer) pruneResolved(ctx context.Context, scanned map[string]bool, newIDs map[string]bool, ruleScope map[string]bool) error {
+// are pruned separately. A non-nil ruleScope limits the delete to the rule IDs that ran, and a non-nil prior
+// supplies the candidates instead of a store query.
+func (a *Analyzer) pruneResolved(ctx context.Context, scanned, newIDs, ruleScope map[string]bool, prior *PriorFindings) error {
 	if len(scanned) == 0 {
 		return nil
 	}
-	findings, err := store.NodesMatching(ctx, a.store, store.NodeFilter{
-		Kinds: []model.NodeKind{model.KindFinding},
-		Attrs: map[string]string{"rule_provenance": string(ProvenanceDeterministic)},
-	})
-	if err != nil {
-		return fmt.Errorf("load nodes for prune: %w", err)
+	var findings []model.Node
+	if prior != nil {
+		findings = prior.nodes
+	} else {
+		var err error
+		if findings, err = a.deterministicFindings(ctx, scanned); err != nil {
+			return fmt.Errorf("load nodes for prune: %w", err)
+		}
 	}
 	var stale []model.Node
 	for _, n := range findings {
@@ -213,6 +242,29 @@ func (a *Analyzer) pruneResolved(ctx context.Context, scanned map[string]bool, n
 		stale = append(stale, n)
 	}
 	return deleteFindingNodes(ctx, a.store, stale)
+}
+
+// deterministicFindings loads the deterministic findings that may target a scanned file.
+func (a *Analyzer) deterministicFindings(ctx context.Context, scanned map[string]bool) ([]model.Node, error) {
+	filter := func(uri string) store.NodeFilter {
+		attrs := map[string]string{"rule_provenance": string(ProvenanceDeterministic)}
+		if uri != "" {
+			attrs["target_uri"] = uri
+		}
+		return store.NodeFilter{Kinds: []model.NodeKind{model.KindFinding}, Attrs: attrs}
+	}
+	if len(scanned) > pruneByURIMax {
+		return store.NodesMatching(ctx, a.store, filter(""))
+	}
+	var out []model.Node
+	for _, uri := range slices.Sorted(maps.Keys(scanned)) {
+		ns, err := store.NodesMatching(ctx, a.store, filter(uri))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ns...)
+	}
+	return out, nil
 }
 
 // deleteFindingNodes removes the nodes and their edges with NodeDeleter when available, else calls
