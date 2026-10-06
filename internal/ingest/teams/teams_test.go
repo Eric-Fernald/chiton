@@ -111,7 +111,7 @@ func TestWebhookWithoutClientStateFailsClosed(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/hook", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	h.Close() // runs the queued ingests
+	h.Close() // drains the queue, so a wrongly enqueued change would have run by now
 
 	if len(got) != 0 {
 		t.Fatalf("dispatched %d changes with no configured clientState; want 0 (fail closed)", len(got))
@@ -214,16 +214,25 @@ func TestWebhookCoalescesMeetingAndKeysByResource(t *testing.T) {
 func TestWebhookCloseCancelsStuckIngest(t *testing.T) {
 	prev := closeGrace
 	closeGrace = 20 * time.Millisecond
-	t.Cleanup(func() { closeGrace = prev })
+	prevDebounce := notificationDebounce
+	notificationDebounce = time.Millisecond
+	t.Cleanup(func() { closeGrace, notificationDebounce = prev, prevDebounce })
+	started := make(chan struct{})
 	aborted := make(chan error, 1)
 	h := NewWebhookHandler("s3cr3t", func(ctx context.Context, _ ChangeItem) error {
+		close(started)
 		<-ctx.Done()
 		aborted <- ctx.Err()
 		return ctx.Err()
 	}, nil)
 	body := `{"value":[{"clientState":"s3cr3t","resource":"communications/onlineMeetings('M1')/transcripts('T1')"}]}`
 	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/hook", strings.NewReader(body)))
-	h.Close()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the queued ingest never started")
+	}
+	h.Close() // the running ingest blocks until the grace period cancels it
 	select {
 	case err := <-aborted:
 		if err != context.Canceled {

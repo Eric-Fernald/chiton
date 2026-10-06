@@ -592,10 +592,14 @@ func TestRecentIDsEvictsOldest(t *testing.T) {
 func TestEventsCloseCancelsStuckIngest(t *testing.T) {
 	prev := closeGrace
 	closeGrace = 20 * time.Millisecond
-	t.Cleanup(func() { closeGrace = prev })
+	prevDebounce := eventDebounce
+	eventDebounce = time.Millisecond
+	t.Cleanup(func() { closeGrace, eventDebounce = prev, prevDebounce })
 	const secret = "topsecret"
+	started := make(chan struct{})
 	aborted := make(chan error, 1)
 	h := NewEventsHandler(secret, func(ctx context.Context, _ MessageEvent) error {
+		close(started)
 		<-ctx.Done() // stands in for a 429 wait or a slow fetch
 		aborted <- ctx.Err()
 		return ctx.Err()
@@ -603,7 +607,12 @@ func TestEventsCloseCancelsStuckIngest(t *testing.T) {
 	h.now = func() time.Time { return time.Unix(1735689600, 0) }
 	body := `{"type":"event_callback","event_id":"Ev1","event":{"type":"message","channel":"C1","user":"U1","text":"hi","ts":"1735689600.000100"}}`
 	postEvent(t, h, secret, body, "")
-	h.Close() // drain starts the debounced job, which blocks until the grace period cancels it
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the queued ingest never started")
+	}
+	h.Close() // the running ingest blocks until the grace period cancels it
 	select {
 	case err := <-aborted:
 		if err != context.Canceled {

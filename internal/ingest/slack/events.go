@@ -108,12 +108,13 @@ func (h *EventsHandler) Close() {
 		return
 	case <-timer.C:
 	}
+	h.cancel()
+	<-done
+	// Count after the queue stops: whatever is still pending was abandoned, not taken by the worker.
 	h.mu.Lock()
 	n := len(h.pending)
 	h.mu.Unlock()
-	h.log("slack events: shutdown grace expired; cancelling in-flight ingest, dropping %d queued conversation(s)", n)
-	h.cancel()
-	<-done
+	h.log("slack events: shutdown grace expired; cancelled in-flight ingest, dropped %d queued conversation(s)", n)
 }
 
 // enqueue records ev as its conversation's newest event and schedules a coalesced re-ingest.

@@ -83,12 +83,13 @@ func (h *WebhookHandler) Close() {
 		return
 	case <-timer.C:
 	}
+	h.cancel()
+	<-done
+	// Count after the queue stops: whatever is still pending was abandoned, not taken by the worker.
 	h.mu.Lock()
 	n := len(h.pending)
 	h.mu.Unlock()
-	h.log("teams webhook: shutdown grace expired; cancelling in-flight ingest, dropping %d queued meeting(s)", n)
-	h.cancel()
-	<-done
+	h.log("teams webhook: shutdown grace expired; cancelled in-flight ingest, dropped %d queued meeting(s)", n)
 }
 
 // changeKey groups notifications by meeting, since one fetch ingests all of a meeting's transcripts.
