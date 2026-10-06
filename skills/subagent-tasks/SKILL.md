@@ -68,6 +68,7 @@ chiton meeting submit results.json         # ingest decisions + DECIDED_IN edges
 ## Writing results back
 
 Every submit tool validates against the same schema the task spec was pinned to,
-so a malformed result is rejected rather than silently half-written. If a submit
-call fails with a store-lock error, another chiton process holds the write lock —
-stop `chiton build`/`embed`/`cluster`, or use the CLI submit path instead.
+so a malformed result is rejected rather than silently half-written. If
+`chiton serve --writable` or a CLI submit fails with `in use by another chiton
+process`, another chiton process has the store open. Stop it (`sync watch`,
+`build`, `embed`, or, on Windows, a read-only server), then retry.

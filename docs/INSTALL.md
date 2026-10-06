@@ -236,7 +236,7 @@ Other `serve` flags:
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--writable` | `false` | Open the store read-write so the `submit_*` write tools work over MCP. This takes the store's write lock, so concurrent `build`/`embed` cannot run. |
+| `--writable` | `false` | Open the store read-write so the `submit_*` write tools work over MCP. The server then holds the store exclusively: no other chiton process (`build`, `embed`, `cluster`, `query`) can open it until the server exits. |
 | `--graph` | *(empty)* | Graph store path to serve. Overrides the configured/built-in `graph_path`; this is what `chiton install --graph <path>` records so the server resolves the intended store regardless of its working directory. |
 
 The exact argv the installers record is `serve --stdio` (plus `--graph <path>`
@@ -350,15 +350,19 @@ different store than the one `chiton build` wrote.
 
 ### `submit_*` tools fail: read-only vs `--writable`
 
-By default `chiton serve` opens the store **read-only** so `chiton build`,
-`embed`, and `cluster` can run concurrently. The read tools work in this mode,
-but the write tools (`submit_extraction`, `submit_analysis`,
-`submit_meeting_links`, `add_url`) need a writable store. Either:
+By default `chiton serve` opens the store **read-only** so other read-only
+commands can run beside it (and, on Linux/macOS, writers such as
+`build`/`embed`; on Windows a writer fails fast while the server runs). The read
+tools work in this mode, but the write tools (`submit_extraction`,
+`submit_analysis`, `submit_meeting_links`, `add_url`) need a writable store.
+Either:
 
-- start the server with `chiton serve --writable` (this takes the write lock, so
-  concurrent `build`/`embed` cannot run), **or**
+- start the server with `chiton serve --writable` (the server then holds the
+  store exclusively), **or**
 - use the CLI write path instead, e.g. `chiton extract submit <file>`,
   `chiton analyze submit <file>`, `chiton meeting submit <file>`.
+
+On Windows the CLI path needs the read-only server stopped first.
 
 ### Reading `chiton doctor` output
 

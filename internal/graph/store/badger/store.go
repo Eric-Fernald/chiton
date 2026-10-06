@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -37,6 +38,7 @@ type Store struct {
 	db       *badgerdb.DB
 	readOnly bool
 	key      []byte
+	lock     *storeLock // chiton.lock; nil for a reader once holdReaderLock lets it go
 }
 
 // Compile-time checks that Store satisfies the store interfaces.
@@ -68,31 +70,87 @@ type Options struct {
 // Open opens or creates a BadgerDB store at path with read-write access.
 func Open(path string) (*Store, error) { return OpenWith(path, Options{}) }
 
-// OpenReadOnly opens an existing BadgerDB store in read-only mode without
-// acquiring the directory lock, so chiton build can run concurrently.
+// OpenReadOnly opens an existing store read-only. Readers never block each other; see OpenReadOnlyWith.
 func OpenReadOnly(path string) (*Store, error) { return OpenReadOnlyWith(path, Options{}) }
 
-// OpenWith opens (or creates) the store with explicit options. When
-// opts.EncryptionKey is set, Badger encryption is enabled.
+// OpenWith opens (or creates) the store with explicit options, enabling Badger encryption when
+// opts.EncryptionKey is set. It returns ErrStoreBusy while another chiton process holds the store.
 func OpenWith(path string, opts Options) (*Store, error) {
-	bopts := badgerdb.DefaultOptions(path).WithLogger(nil)
-	bopts = applyEncryption(bopts, opts.EncryptionKey)
-	db, err := badgerdb.Open(bopts)
-	if err != nil {
+	if err := os.MkdirAll(path, 0o700); err != nil {
 		return nil, fmt.Errorf("open badger at %s: %w", path, err)
 	}
-	return &Store{db: db, key: opts.EncryptionKey}, nil
+	lock, err := acquireLock(path, true)
+	if err != nil {
+		return nil, err
+	}
+	db, err := badgerdb.Open(badgerOptions(path, opts, false))
+	if err != nil {
+		lock.release()
+		return nil, fmt.Errorf("open badger at %s: %w", path, err)
+	}
+	return &Store{db: db, key: opts.EncryptionKey, lock: lock}, nil
 }
 
-// OpenReadOnlyWith is the read-only variant of OpenWith.
+// OpenReadOnlyWith is the read-only variant of OpenWith. When a crashed writer left a log that a read-only open
+// can't replay, it replays the log with one read-write open and close, then retries.
 func OpenReadOnlyWith(path string, opts Options) (*Store, error) {
-	bopts := badgerdb.DefaultOptions(path).WithLogger(nil).WithReadOnly(true).WithBypassLockGuard(true)
-	bopts = applyEncryption(bopts, opts.EncryptionKey)
-	db, err := badgerdb.Open(bopts)
+	s, err := openReadOnly(path, opts)
+	if !errors.Is(err, errNeedsWriterPass) {
+		return s, err
+	}
+	rw, rwErr := OpenWith(path, opts)
+	if rwErr != nil {
+		return nil, fmt.Errorf("%v: %w", err, rwErr)
+	}
+	if err := rw.Close(); err != nil {
+		return nil, err
+	}
+	return openReadOnly(path, opts)
+}
+
+// errNeedsWriterPass marks a read-only open that one read-write open and close would fix.
+var errNeedsWriterPass = errors.New("graph store needs a one-time read-write pass")
+
+// openReadOnly opens path read-only under a shared chiton.lock, kept until Close only where holdReaderLock.
+func openReadOnly(path string, opts Options) (*Store, error) {
+	lock, err := acquireLock(path, false)
 	if err != nil {
+		return nil, err
+	}
+	// Check before Badger opens: its failed read-only open leaks the log's mapping, which blocks repair on Windows.
+	if hasWriteLog(path) {
+		lock.release()
+		return nil, fmt.Errorf("%w (a writer did not close cleanly)", errNeedsWriterPass)
+	}
+	db, err := badgerdb.Open(badgerOptions(path, opts, true))
+	if err != nil {
+		lock.release()
+		if isTruncateNeeded(err) {
+			return nil, fmt.Errorf("open badger at %s: a writer started or crashed during the open; retry: %w", path, err)
+		}
 		return nil, fmt.Errorf("open badger at %s: %w", path, err)
 	}
-	return &Store{db: db, readOnly: true, key: opts.EncryptionKey}, nil
+	if !holdReaderLock {
+		lock.release()
+		lock = nil
+	}
+	return &Store{db: db, readOnly: true, key: opts.EncryptionKey, lock: lock}, nil
+}
+
+// badgerOptions returns the Badger options for path. Read-only opens bypass Badger's directory lock, which
+// Windows can't take shared; chiton.lock coordinates readers and writers instead.
+func badgerOptions(path string, opts Options, readOnly bool) badgerdb.Options {
+	bopts := badgerdb.DefaultOptions(path).WithLogger(nil)
+	if readOnly {
+		bopts = bopts.WithReadOnly(true).WithBypassLockGuard(true)
+	}
+	return applyEncryption(bopts, opts.EncryptionKey)
+}
+
+// isTruncateNeeded reports Badger's "Log truncate required" error. Outside debug builds Badger wraps it with
+// %+v, not %w, so errors.Is can't see it.
+func isTruncateNeeded(err error) bool {
+	return err != nil && strings.Contains(err.Error(), badgerdb.ErrTruncateNeeded.Error())
 }
 
 // applyEncryption enables Badger encryption when key is non-empty, plus the non-zero IndexCacheSize that
@@ -106,7 +164,7 @@ func applyEncryption(bopts badgerdb.Options, key []byte) badgerdb.Options {
 		WithIndexCacheSize(64 << 20)
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error { return errors.Join(s.db.Close(), s.lock.release()) }
 
 // --- key builders ---
 

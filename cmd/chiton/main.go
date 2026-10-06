@@ -793,9 +793,10 @@ func clusterCmd() *cobra.Command {
 		Short: "Run Leiden community detection and betweenness metrics on the graph",
 		Long: `Run Leiden community detection and betweenness metrics on the graph.
 
-Results are written to a JSON sidecar file (chiton-out/cluster.json) so this
-command can run while chiton serve is active - no write lock on the store is
-needed. Restart chiton serve after clustering to load the new results.`,
+Results are written to a JSON sidecar file (chiton-out/cluster.json). The
+store opens read-only, so this runs beside a read-only 'chiton serve', but not
+while a writer ('sync watch', 'build', 'serve --writable') holds the store.
+Restart chiton serve after clustering to load the new results.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := config.Load()
 			if err != nil {
@@ -804,7 +805,7 @@ needed. Restart chiton serve after clustering to load the new results.`,
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "cluster: reading graph at %s\n", cfg.GraphPath)
 
-			// Open read-only so this command can run while chiton serve is active.
+			// Open read-only so this runs beside a read-only chiton serve.
 			gs, err := openGraphStore(cfg.GraphPath, true)
 			if err != nil {
 				return err
@@ -880,11 +881,15 @@ daemon instead (identical tool surface):
                  with --allow-origin.
   --unix <path>  a Unix domain socket — low-latency shared daemon (Linux/macOS)
 
-By default the store opens read-only so 'chiton build', 'embed', and 'cluster'
-can run concurrently; the read tools (semantic_search, pending_extractions)
-work in this mode. Pass --writable to allow the submit_extraction write tool
-over MCP (this takes the store's write lock, so concurrent build/embed cannot
-run). The 'chiton extract submit' CLI is the alternative write path.
+By default the store opens read-only, and other read-only commands (query,
+cluster, search, report) run beside it; the read tools (semantic_search,
+pending_extractions) work in this mode. Writers (build, embed, sync, analyze,
+the CLI submit commands) may run beside a read-only server on Linux/macOS,
+which keeps serving its startup snapshot until restarted; on Windows they fail
+fast with "in use by another chiton process" until the server exits. The
+server itself fails fast while a writer holds the store. Pass --writable to
+allow the submit_* write tools over MCP; the server then holds the store
+exclusively. The 'chiton extract submit' CLI is the alternative write path.
 
 Pass --graph to point at a specific store; this is what 'chiton install'
 records in the MCP config so the server uses the same store as 'chiton build'.`,
@@ -934,7 +939,7 @@ records in the MCP config so the server uses the same store as 'chiton build'.`,
 	cmd.Flags().BoolVar(&stdio, "stdio", false, "serve over stdio (the default; kept for existing configs)")
 	cmd.Flags().StringVar(&addr, "http", "127.0.0.1:7474", "serve HTTP/SSE on this address instead of stdio, e.g. 127.0.0.1:7474 (shared daemon / debug)")
 	cmd.Flags().StringVar(&unixPath, "unix", "", "serve over a Unix domain socket at this path (Linux/macOS shared daemon)")
-	cmd.Flags().BoolVar(&writable, "writable", false, "open the store read-write so submit_extraction works over MCP (disables concurrent build/embed)")
+	cmd.Flags().BoolVar(&writable, "writable", false, "open the store read-write so the submit_* tools work over MCP (no other chiton process can open the store meanwhile)")
 	cmd.Flags().StringVar(&graphPath, "graph", "", "Graph store path to serve (default: configured/built-in graph_path)")
 	cmd.Flags().StringSliceVar(&allowOrigins, "allow-origin", nil, "browser Origin allowed to call the HTTP transport, e.g. http://localhost:5173 (repeatable; default none)")
 	return cmd

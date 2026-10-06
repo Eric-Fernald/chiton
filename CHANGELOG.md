@@ -146,6 +146,7 @@ dated section.
 
 ### Fixed
 
+- **The graph store no longer wedges with "Log truncate required".** On Windows, a writer opened while `chiton serve` had the store mapped could fail halfway and strand a 128 MiB memtable log that broke every later read-only open. chiton processes now coordinate on `chiton.lock` in the store directory and fail fast with `graph store is in use by another chiton process` instead of colliding. On Windows a writer is refused while any reader is open; on Linux/macOS writers may still open beside a read-only server. A read-only open now replays a crashed writer's log itself when nothing else holds the store.
 - **Leiden no longer collapses the graph into a few giant communities.** Aggregation dropped each
   community's internal weight from the super-node degree and the total, so every merge looked profitable,
   and each level restarted from singletons instead of the unrefined partition. On this repo's graph the

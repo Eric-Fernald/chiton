@@ -151,7 +151,8 @@ chiton sync once .                   # manual one-shot reconcile
 |---|---|---|
 | MCP tools missing entirely | `chiton` not on `PATH` when the server launched | install, then `/reload-plugins` |
 | `no passphrase available` | encrypted store, no terminal to prompt on | export `CHITON_PASSPHRASE`, or re-scaffold with `chiton init --encrypt=false` |
-| `open store: ... Log truncate required` | a previous process died holding the store | close other chiton processes; re-open read-write once to auto-truncate |
+| graph store is in use by another chiton process | a writer (sync watch, build, serve --writable) holds the store, or on Windows a running chiton serve blocks a writer | stop the other process (or the assistant's server) and retry |
+| needs a one-time read-write pass | a chiton writer crashed, or the store predates this chiton | close other chiton processes and retry; the next open repairs it |
 | Tools work but return nothing | graph never built, or built elsewhere | `chiton build .` at the workspace root, then restart |
 | `submit_*` tools fail to write | server started read-only | restart with `chiton serve --writable`, or use the CLI submit path |
 | `semantic_search` errors | no embeddings | `chiton embed`, then restart the server |

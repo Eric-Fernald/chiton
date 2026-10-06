@@ -257,8 +257,12 @@ wrapper over the same logic.
 Write tools (`submit_extraction`, `submit_analysis`, `submit_meeting_links`,
 `add_url`) need a writable store: run `chiton serve --writable`, or use the CLI
 write path (`chiton extract submit`, `chiton analyze submit`, `chiton meeting
-submit`, `chiton add-url`). The default read-only server lets `build`, `embed`,
-and `cluster` run concurrently.
+submit`, `chiton add-url`). The default read-only server shares the store with
+other read-only commands (`query`, `cluster`, `search`). On Linux/macOS, writers
+such as `build` and `embed` can also run beside it (restart the server to see
+their changes). On Windows they fail fast with `in use by another chiton
+process` until the server exits, so submit through `chiton serve --writable`
+there.
 
 The server speaks the same tool surface over three transports: stdio
 (the default; assistant-launched), `--http 127.0.0.1:7474` (SSE; a shared daemon
