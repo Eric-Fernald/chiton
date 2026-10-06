@@ -16,6 +16,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -42,7 +43,8 @@ type Store struct {
 	db       *badgerdb.DB
 	readOnly bool
 	key      []byte
-	lock     *storeLock // chiton.lock; nil for a reader once holdReaderLock lets it go
+	lock     *storeLock                   // chiton.lock; nil for a reader once holdReaderLock lets it go
+	labels   func() ([]labelEntry, error) // read-only stores: lowercased labels in key order, loaded on first search
 }
 
 // Compile-time checks that Store satisfies the store interfaces.
@@ -157,9 +159,16 @@ func openReadOnly(path string, opts Options) (*Store, error) {
 	return s, nil
 }
 
-// prepare readies a just-opened store: it checks, and when writable stamps or migrates, the key layout.
+// prepare readies a just-opened store: it checks, and when writable stamps or migrates, the key layout; a
+// read-only store also gets its lazy label index.
 func (s *Store) prepare() error {
-	return prepareSchema(s.db, s.readOnly)
+	if err := prepareSchema(s.db, s.readOnly); err != nil {
+		return err
+	}
+	if s.readOnly {
+		s.labels = sync.OnceValues(func() ([]labelEntry, error) { return loadLabels(s.db) })
+	}
+	return nil
 }
 
 // abandon closes a store whose open failed after Badger opened, dropping close errors so the caller reports
@@ -906,16 +915,45 @@ func (s *Store) DeleteByIDs(_ context.Context, ids []string) (int, error) {
 	return deleted, err
 }
 
-// SearchNodes returns all nodes whose label contains query (case-insensitive).
-func (s *Store) SearchNodes(_ context.Context, query string, limit int) ([]model.Node, error) {
+// labelEntry is one node in a read-only store's label index.
+type labelEntry struct{ lower, id string }
+
+// labelOnly decodes just a node record's label.
+type labelOnly struct {
+	Label string `json:"label"`
+}
+
+// SearchNodes returns the nodes whose label contains query (case-insensitive), in key order. A read-only
+// store never changes, so it matches against a label index built on first use; a writable one scans.
+func (s *Store) SearchNodes(ctx context.Context, query string, limit int) ([]model.Node, error) {
+	if s.labels == nil {
+		return s.scanLabels(query, limit)
+	}
+	idx, err := s.labels()
+	if err != nil {
+		return nil, err
+	}
+	q := strings.ToLower(query)
+	var ids []string
+	for _, e := range idx {
+		if !strings.Contains(e.lower, q) {
+			continue
+		}
+		ids = append(ids, e.id)
+		if limit > 0 && len(ids) >= limit {
+			break
+		}
+	}
+	return s.GetNodes(ctx, ids)
+}
+
+// scanLabels is SearchNodes over the live key space: it decodes each label, then only matching records in full.
+func (s *Store) scanLabels(query string, limit int) ([]model.Node, error) {
 	q := strings.ToLower(query)
 	var results []model.Node
 	err := s.db.View(func(txn *badgerdb.Txn) error {
 		return scan(txn, pfxNode, func(_, v []byte) error {
-			// Decode only the label first. Most nodes miss, so they skip the full decode.
-			var probe struct {
-				Label string `json:"label"`
-			}
+			var probe labelOnly
 			if err := json.Unmarshal(v, &probe); err != nil {
 				return err
 			}
@@ -934,6 +972,22 @@ func (s *Store) SearchNodes(_ context.Context, query string, limit int) ([]model
 		})
 	})
 	return results, err
+}
+
+// loadLabels reads every node's lowercased label, in key order, decoding only the label.
+func loadLabels(db *badgerdb.DB) ([]labelEntry, error) {
+	var idx []labelEntry
+	err := db.View(func(txn *badgerdb.Txn) error {
+		return scan(txn, pfxNode, func(k, v []byte) error {
+			var probe labelOnly
+			if err := json.Unmarshal(v, &probe); err != nil {
+				return err
+			}
+			idx = append(idx, labelEntry{lower: strings.ToLower(probe.Label), id: string(k)})
+			return nil
+		})
+	})
+	return idx, err
 }
 
 // AllNodes returns every node in the graph by scanning the node key space.

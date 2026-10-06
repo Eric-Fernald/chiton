@@ -91,6 +91,7 @@ dated section.
 
 ### Changed
 
+- Label lookups on a read-only store (`get_node`, `query_graph`, `shortest_path`, `chiton query`) answer from an in-memory label index after the first search instead of decoding every node.
 - `get_node_neighborhood` takes `max_nodes`/`max_tokens` (defaults 100 / 4000) and reports `truncated`; all MCP tool results are compact JSON (no indentation or HTML escaping). `god_nodes` clamps `limit` to 1-100.
 - `graph_summary` counts kinds from the store's kind index, and `search_meetings`/`decisions_about` read DECIDED_IN edges per decision (memoised on a read-only server) instead of decoding the whole graph on every call.
 - **`chiton embed` no longer embeds label-only external package stubs, and the next run prunes their vectors**; this cuts `serve` memory on large Go graphs. The in-memory vector index stores all vectors in one contiguous slab.
