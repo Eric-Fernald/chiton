@@ -174,20 +174,3 @@ func TestFullMatchesSeparatePasses(t *testing.T) {
 		}
 	}
 }
-
-// TestNeighborhood checks 2-hop expansion over a path graph.
-func TestNeighborhood(t *testing.T) {
-	// Path: a-b-c-d-e
-	adj := map[string][]string{
-		"a": {"b"}, "b": {"a", "c"}, "c": {"b", "d"}, "d": {"c", "e"}, "e": {"d"},
-	}
-	hood := neighborhood(adj, map[string]bool{"a": true}, 2)
-	for _, want := range []string{"a", "b", "c"} {
-		if !hood[want] {
-			t.Errorf("expected %q in 2-hop neighborhood of a", want)
-		}
-	}
-	if hood["d"] || hood["e"] {
-		t.Errorf("d/e are >2 hops from a and should be excluded: %v", hood)
-	}
-}

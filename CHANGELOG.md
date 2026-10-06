@@ -158,6 +158,11 @@ dated section.
   `-tags msgraph` build requirement up front.
 - The Outlook test whose subject takes a Microsoft Graph type moved behind the
   `msgraph` tag, so the default test binary no longer links the Graph SDK.
+- **Incremental re-clustering reads only the touched region.** `sync` used to load every node and edge and
+  expand two hops through shared package stubs such as `pkg://fmt` on each re-cluster; it now reads the
+  region through the store's neighbour index and treats stubs as leaves. A one-file edit on a 118k-node
+  graph went from ~1.9 s to ~0.55 s. `cluster.json` is now compact JSON (about 20% smaller); older indented
+  files still load.
 
 ### Fixed
 

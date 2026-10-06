@@ -337,9 +337,11 @@ and concepts attached to surviving symbols are kept), its deterministic
 findings refreshed (`--analyze`, on by default), and — with `--embed` — its
 embeddings refreshed. Re-embedding makes the saved HNSW index stale; run
 `chiton embed` afterwards to save a current one.
-After a batch settles, the touched 2-hop neighborhood is incrementally
-re-clustered. Betweenness is a global metric carried forward between full
-`chiton cluster` passes.
+After a batch settles, the 2-hop neighborhood of the changed files is
+re-clustered, read straight from the store (shared package stubs are not
+expanded); everything else keeps its community. Betweenness is a global metric
+carried forward between full `chiton cluster` passes, which also pick up nodes
+no change reached.
 If the OS drops file events (a bulk checkout can overflow the Windows buffer),
 `sync watch` rescans the tree automatically.
 

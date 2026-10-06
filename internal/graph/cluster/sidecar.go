@@ -42,11 +42,11 @@ func SidecarPath(graphPath string) string {
 	return filepath.Join(filepath.Dir(graphPath), "cluster.json")
 }
 
-// WriteSidecar atomically writes r to path as indented JSON, so a concurrent reader never sees a partial file.
+// WriteSidecar atomically writes r to path as compact JSON, so a concurrent reader never sees a partial file.
 func WriteSidecar(path string, r *Results) error {
-	b, err := json.MarshalIndent(r, "", "  ")
+	b, err := marshalSidecar(r)
 	if err != nil {
-		return fmt.Errorf("marshal cluster results: %w", err)
+		return err
 	}
 	if err := fsutil.WriteFileAtomic(path, b, 0o644); err != nil {
 		return fmt.Errorf("write cluster sidecar %s: %w", path, err)
@@ -64,9 +64,27 @@ func LoadSidecar(path string) (*Results, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read cluster sidecar %s: %w", path, err)
 	}
+	r, err := unmarshalSidecar(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse cluster sidecar %s: %w", path, err)
+	}
+	return r, nil
+}
+
+// marshalSidecar is the sidecar's one encoding seam: compact JSON, which reads back older indented files too.
+func marshalSidecar(r *Results) ([]byte, error) {
+	b, err := json.Marshal(r)
+	if err != nil {
+		return nil, fmt.Errorf("marshal cluster results: %w", err)
+	}
+	return b, nil
+}
+
+// unmarshalSidecar decodes marshalSidecar's output.
+func unmarshalSidecar(data []byte) (*Results, error) {
 	var r Results
 	if err := json.Unmarshal(data, &r); err != nil {
-		return nil, fmt.Errorf("parse cluster sidecar %s: %w", path, err)
+		return nil, err
 	}
 	return &r, nil
 }

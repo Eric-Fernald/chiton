@@ -710,8 +710,8 @@ func TestNoReclusterSkipsTouchedSet(t *testing.T) {
 	if _, err := eng.SyncDir(context.Background(), h.dir, true); err != nil {
 		t.Fatal(err)
 	}
-	if touched, dirty := eng.takeTouched(); dirty || len(touched) != 0 {
-		t.Errorf("touched = %d IDs, dirty = %v; want none", len(touched), dirty)
+	if touched, uris, dirty := eng.takeTouched(); dirty || len(touched) != 0 || len(uris) != 0 {
+		t.Errorf("touched = %d IDs, %d URIs, dirty = %v; want none", len(touched), len(uris), dirty)
 	}
 }
 

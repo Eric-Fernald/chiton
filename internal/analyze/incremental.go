@@ -48,6 +48,18 @@ func (a *Analyzer) ReadPriorFindings(ctx context.Context, uri string) (*PriorFin
 	return p, nil
 }
 
+// IDs returns the prior findings' node IDs; a nil p has none.
+func (p *PriorFindings) IDs() []string {
+	if p == nil {
+		return nil
+	}
+	ids := make([]string, len(p.nodes))
+	for i, n := range p.nodes {
+		ids[i] = n.ID
+	}
+	return ids
+}
+
 // ReanalyzeExtracted is AnalyzeExtracted for live sync: it prunes from prior, read by ReadPriorFindings
 // before the caller replaced path's nodes, instead of querying the store. A nil prior queries.
 func (a *Analyzer) ReanalyzeExtracted(ctx context.Context, path string, content []byte, nodes []model.Node, edges []model.Edge, prior *PriorFindings) (*Result, error) {

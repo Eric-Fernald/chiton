@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"math/rand"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -86,9 +88,10 @@ type Engine struct {
 
 	clusterMu sync.Mutex
 
-	touchedMu sync.Mutex
-	touched   map[string]bool
-	dirty     bool
+	touchedMu   sync.Mutex
+	touched     map[string]bool // re-cluster seed IDs
+	touchedURIs map[string]bool // files re-synced or deleted since the last re-cluster
+	dirty       bool
 }
 
 // New builds an Engine. embedder and analyzer may be nil to disable re-embed /
@@ -106,15 +109,16 @@ func New(s store.GraphStore, c *cache.Cache, cfg Config, embedder embed.Embedder
 		sink(format, args...)
 	}
 	return &Engine{
-		store:    s,
-		cache:    c,
-		embedder: embedder,
-		analyzer: analyzer,
-		cfg:      cfg.withDefaults(),
-		log:      log,
-		stat:     os.Stat,
-		lstat:    os.Lstat,
-		touched:  map[string]bool{},
+		store:       s,
+		cache:       c,
+		embedder:    embedder,
+		analyzer:    analyzer,
+		cfg:         cfg.withDefaults(),
+		log:         log,
+		stat:        os.Stat,
+		lstat:       os.Lstat,
+		touched:     map[string]bool{},
+		touchedURIs: map[string]bool{},
 	}
 }
 
@@ -299,9 +303,22 @@ func (e *Engine) finish(ctx context.Context, p prepared, deleted int) Outcome {
 		}
 	}
 	if !e.cfg.NoRecluster {
-		e.markTouched(ids)
+		// Prior findings are seeds too: the pruned ones drop out of the sidecar, the rest are re-clustered.
+		e.markTouched(append(clusterSeeds(p.nodes), p.prior.IDs()...), p.uri)
 	}
 	return out
+}
+
+// clusterSeeds returns the IDs a re-cluster starts from. External package stubs are shared hubs (pkg://fmt
+// has thousands of importers), so they are never seeds.
+func clusterSeeds(nodes []model.Node) []string {
+	ids := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		if !model.IsExternal(n) {
+			ids = append(ids, n.ID)
+		}
+	}
+	return ids
 }
 
 // SyncFile (re-)extracts a single file into the graph and hands a vanished file to DeleteFile.
@@ -665,7 +682,7 @@ func (e *Engine) recluster(ctx context.Context) (haveSidecar bool, err error) {
 	defer e.clusterMu.Unlock()
 
 	sidecarPath := cluster.SidecarPath(e.cfg.GraphPath)
-	touched, dirty := e.takeTouched()
+	touched, uris, dirty := e.takeTouched()
 	if !dirty {
 		_, statErr := os.Stat(sidecarPath)
 		return statErr == nil, nil
@@ -681,23 +698,39 @@ func (e *Engine) recluster(ctx context.Context) (haveSidecar bool, err error) {
 		return false, nil
 	}
 
-	nodes, err := e.store.AllNodes(ctx)
-	if err != nil {
-		return false, fmt.Errorf("load nodes for re-cluster: %w", err)
+	// A re-synced or deleted file's old nodes are seeds too, so any it no longer has drop out.
+	for id, nr := range prev.Nodes {
+		if uris[nr.SourceURI] {
+			touched[id] = true
+		}
 	}
-	edges, err := e.store.AllEdges(ctx)
+	region, err := cluster.BuildRegion(slices.Sorted(maps.Keys(touched)), cluster.RegionDepth, storeNeighbors(ctx, e.store))
 	if err != nil {
-		return false, fmt.Errorf("load edges for re-cluster: %w", err)
+		return false, fmt.Errorf("load re-cluster region: %w", err)
 	}
 
 	rng := rand.New(rand.NewSource(42))
-	res := cluster.RunIncremental(prev, nodes, edges, touched, e.cfg.Resolution, rng)
+	res := cluster.ApplyRegion(prev, region, e.cfg.Resolution, rng)
 	if err := cluster.WriteSidecar(sidecarPath, res); err != nil {
 		return false, err
 	}
-	e.log("sync: re-clustered %d touched node(s) → %d communities over %d nodes",
-		len(touched), res.CommunityCount, res.NodeCount)
+	e.log("sync: re-clustered %d node(s) around %d touched → %d communities over %d nodes",
+		len(region.Nodes), len(touched), res.CommunityCount, res.NodeCount)
 	return true, nil
+}
+
+// storeNeighbors backs cluster.BuildRegion with one gs.Neighbors read per expanded node.
+func storeNeighbors(ctx context.Context, gs store.GraphStore) cluster.NeighborFunc {
+	return func(id string) (*model.Node, []model.Edge, []model.Node, error) {
+		sub, err := gs.Neighbors(ctx, id, 1, nil)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if len(sub.Nodes) == 0 || sub.Nodes[0].ID != id {
+			return nil, nil, nil, nil // Neighbors lists the node itself first only when it exists
+		}
+		return &sub.Nodes[0], sub.Edges, sub.Nodes[1:], nil
+	}
 }
 
 // reembed embeds the embeddable nodes among the given set and upserts vectors.
@@ -735,20 +768,15 @@ func (e *Engine) deleteURI(ctx context.Context, uri string) (Outcome, error) {
 	return Outcome{Path: uri, Op: OpDelete, NodesDeleted: deleted}, nil
 }
 
-// markSurvivorsTouched marks a file's nodes and their neighbors within 2 hops touched, and always sets dirty.
-// Cross-file edges only point out to shared package nodes, which are the survivors whose community may shift.
+// markSurvivorsTouched marks a file's nodes and their neighbors within 2 hops touched (external stubs are
+// leaves, as in a re-cluster), and always marks uri and sets dirty.
 func (e *Engine) markSurvivorsTouched(ctx context.Context, uri string) {
-	fileID := model.NewNodeID(uri, uri)
-	sub, err := e.store.Neighbors(ctx, fileID, 2, nil)
+	r, err := cluster.BuildRegion([]string{model.NewNodeID(uri, uri)}, cluster.RegionDepth, storeNeighbors(ctx, e.store))
 	if err != nil {
-		e.markDirty()
+		e.markTouched(nil, uri)
 		return
 	}
-	ids := make([]string, 0, len(sub.Nodes))
-	for _, n := range sub.Nodes {
-		ids = append(ids, n.ID)
-	}
-	e.markTouched(ids) // sets dirty even when ids is empty
+	e.markTouched(clusterSeeds(r.Nodes), uri)
 }
 
 // flush re-clusters after a batch unless NoRecluster. The cache is persisted separately by the caller's
@@ -802,33 +830,28 @@ func (e *Engine) tally(sum *BatchSummary, out Outcome) {
 	sum.Reembedded += out.Reembedded
 }
 
-func (e *Engine) markTouched(ids []string) {
+// markTouched records re-cluster seeds and the file URI whose nodes changed, and sets dirty.
+func (e *Engine) markTouched(ids []string, uri string) {
 	e.touchedMu.Lock()
 	defer e.touchedMu.Unlock()
 	for _, id := range ids {
 		e.touched[id] = true
 	}
+	e.touchedURIs[uri] = true
 	e.dirty = true
 }
 
-func (e *Engine) markDirty() {
-	e.touchedMu.Lock()
-	defer e.touchedMu.Unlock()
-	e.dirty = true
-}
-
-// takeTouched atomically returns and resets the accumulated touched set and
-// dirty flag.
-func (e *Engine) takeTouched() (map[string]bool, bool) {
+// takeTouched atomically returns and resets the accumulated seeds, file URIs, and dirty flag.
+func (e *Engine) takeTouched() (ids, uris map[string]bool, dirty bool) {
 	e.touchedMu.Lock()
 	defer e.touchedMu.Unlock()
 	if !e.dirty {
-		return nil, false
+		return nil, nil, false
 	}
-	t := e.touched
-	e.touched = map[string]bool{}
+	ids, uris = e.touched, e.touchedURIs
+	e.touched, e.touchedURIs = map[string]bool{}, map[string]bool{}
 	e.dirty = false
-	return t, true
+	return ids, uris, true
 }
 
 // GitChanges adapts git-package changes (from a diff) into engine Changes.
