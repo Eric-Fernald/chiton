@@ -813,6 +813,7 @@ func serveCmd() *cobra.Command {
 	var writable bool
 	var graphPath string
 	var allowOrigins []string
+	var includePII bool
 
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -863,6 +864,7 @@ records in the MCP config so the server uses the same store as 'chiton build'.`,
 			}
 
 			deps := buildSemanticDeps(cmd, cfg, gs, clusterResults)
+			deps.IncludePII = includePII
 			s := mcpsrv.New(gs, clusterResults, deps)
 
 			// All three transports expose the same tool set.
@@ -889,6 +891,7 @@ records in the MCP config so the server uses the same store as 'chiton build'.`,
 	cmd.Flags().BoolVar(&writable, "writable", false, "open the store read-write so the submit_* tools work over MCP (no other chiton process can open the store meanwhile)")
 	cmd.Flags().StringVar(&graphPath, "graph", "", "Graph store path to serve (default: configured/built-in graph_path)")
 	cmd.Flags().StringSliceVar(&allowOrigins, "allow-origin", nil, "browser Origin allowed to call the HTTP transport, e.g. http://localhost:5173 (repeatable; default none)")
+	cmd.Flags().BoolVar(&includePII, "include-pii", false, "return people's names and email addresses from the generic graph tools (redacted by default)")
 	return cmd
 }
 

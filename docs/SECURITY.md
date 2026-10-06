@@ -328,10 +328,29 @@ Three ingest paths create `person` nodes, and all three tag them:
   (`internal/ingest/email/email.go`). The address is additionally stored in
   `attrs.email`. So the graph holds real addresses, not just display names.
 
-### Where the `include_pii` gate actually applies — read this part
+### Where the gate applies — read this part
 
-**PII gating is enforced in exactly one file: `internal/mcp/meetings.go`.** Only
-two of the nineteen MCP tools honour it:
+Redaction happens at two levels.
+
+**Server-wide, in the graph tools** (`internal/mcp/redact.go`). By default
+`get_node`, `query_graph`, `get_node_neighborhood`, `shortest_path`,
+`semantic_search`, `graph_summary` and `god_nodes` hide who people are:
+
+- A `person` node (or any node tagged `pii`) comes back as `[redacted person]`
+  with source URI `person://[redacted]` and no `attrs.email`. Edge endpoints and
+  cluster labels use the same placeholder.
+- Other nodes lose the attrs that name or address people: meeting
+  `participants` (replaced by `participant_count`), turn `speaker`,
+  `person_id`, email `from`/`from_name`/`to`/`cc`, and action-item assignees.
+  Speaker prefixes in transcript text and speaker-named turn labels become
+  `[redacted]`.
+- Label lookups skip a node whose label names a person, so `query_graph "alice"`
+  reports no match rather than confirming that Alice is in the graph.
+
+`chiton serve --include-pii` turns this off for the whole server.
+
+**Per call, in the two meeting tools** (`internal/mcp/meetings.go`), which keep
+their own `include_pii` argument whether or not the server flag is set:
 
 - `search_meetings` returns each meeting with its decisions and linked code
   symbols, but **participant names are omitted** unless `include_pii: true` is
@@ -342,16 +361,13 @@ two of the nineteen MCP tools honour it:
 - `decisions_about` drops **action-item assignee names** unless `include_pii` is
   set. (There is no separate "action-item tool"; the flag lives here.)
 
-**Every other read tool has no PII gating at all.** `get_node`, `query_graph`,
-`get_node_neighborhood`, `shortest_path`, `graph_summary`, `god_nodes`, and
-`semantic_search` will return `person` nodes — display names *and* the
-`attrs.email` addresses — and will return browser-history `url` nodes, which are
-not PII-tagged in the first place. A caller that wants the names does not need
-`include_pii`; it just needs to ask a different tool.
-
-Treat the gate as *a courtesy default on the two meeting tools*, not as an
-access control over the graph. If the graph must not contain a person's
-identifiers, don't ingest the source.
+Redaction is an output filter, not an access control over the store. Any MCP
+client can pass `include_pii: true` to the meeting tools, and anyone who can
+read the store can read every name in it. Browser-history `url` nodes are not
+PII-tagged and are returned as stored. `pending_meeting_links` task specs still
+carry transcripts verbatim, speaker names included, because the linking subagent
+needs them. If the graph must not contain a person's identifiers, don't ingest
+the source.
 
 > **Also out of scope today:** PII tagging covers `person` nodes only. Free-text
 > PII inside transcript bodies, email bodies, and doc sections is **never
@@ -509,7 +525,7 @@ status is labelled **shipped** or **planned**.
 | Backup leakage (`chiton-out/` in cloud/disk backups) | Same store encryption | **Shipped** |
 | Stolen `chiton-out/graph.kuzu/` yields readable data | Same store encryption | **Shipped** |
 | Plaintext sidecars / exports leaking the same data | — | **Not mitigated:** `cluster.json`, `cache.json`, `.chiton/baselines/`, `.chiton/llm-analyzed.json`, and `chiton export` output are plaintext |
-| Meeting/email PII surfaced by the two meeting tools | `person` nodes tagged `pii=true`, hidden unless `include_pii` | **Shipped, but narrow** — see §3; the other read tools have no gate |
+| Meeting/email PII surfaced by the two meeting tools | `person` nodes tagged `pii=true`, hidden unless `include_pii` | Shipped: redacted by default in every read tool; `--include-pii` opts out |
 | A symlink in an indexed repo pointing outside it (e.g. `notes.md -> ~/.ssh/id_rsa`) pulling its target into the graph and `pending_extractions` | `build`, `sync`, and `sync watch` index regular files only; symlinks and junctions are skipped at the walk and at the read | **Shipped** (`analyze` via Section D) |
 | Accidental upload of secrets to a remote LLM | Subagent mode = no built-in LLM calls; per-source allowlist + secret scrubbing | **Partly:** no built-in LLM egress (shipped); allowlist/scrubbing **planned** |
 | SSRF via assistant-driven `add_url` | Read-only default; `hostAllowed` on the host and on every redirect; 10-redirect cap | **Shipped; the `yt-dlp` branch is a known gap** (§5.3) |

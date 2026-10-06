@@ -218,7 +218,7 @@ chiton search "where do we handle auth?"
 | `chiton slack serve-events` | Run the Slack Events API receiver: a new message re-ingests its thread (or channel). Refuses to start without `CHITON_SLACK_SIGNING_SECRET`; `--addr` defaults to `127.0.0.1:8445`. |
 | `chiton browser ingest\|watch` | Ingest local browser history (Chrome/Edge/Brave) as `url` nodes; `watch` re-ingests on change. `--db <History>`, `--browser`, `--since`, `--min-visits`. |
 | `chiton email ingest\|gmail\|outlook` | Ingest email: local `.eml`/`.mbox` files, the Gmail API (`CHITON_GMAIL_TOKEN`, `--query`), or Microsoft Graph (`CHITON_OUTLOOK_*`, `--max`; needs a `-tags msgraph` build). |
-| `chiton serve` | Start the MCP server: stdio by default (`--stdio` still accepted), `--http 127.0.0.1:7474` (SSE / shared daemon; needs an explicit address), or `--unix <path>` (socket). `--writable` for submit tools. HTTP requires the bearer token from `<graph dir>/mcp-token`. |
+| `chiton serve` | Start the MCP server: stdio by default (`--stdio` still accepted), `--http 127.0.0.1:7474` (SSE / shared daemon; needs an explicit address), or `--unix <path>` (socket). `--writable` for submit tools. `--include-pii` returns people's names and addresses from the graph tools, which redact them by default. HTTP requires the bearer token from `<graph dir>/mcp-token`. |
 
 > **Note:** the two event receivers — `teams serve-webhook` and `slack
 > serve-events` — bind loopback by default and print a warning when `--addr`

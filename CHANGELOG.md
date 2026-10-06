@@ -198,6 +198,7 @@ dated section.
 
 ### Security
 
+- The graph tools (`get_node`, `query_graph`, `get_node_neighborhood`, `shortest_path`, `semantic_search`, `god_nodes`, `graph_summary`) now redact people's names, email addresses, speakers and assignees by default; `chiton serve --include-pii` restores them.
 - `submit_extraction` rejects a `task_id` that isn't a doc_section or image and no longer overwrites concepts other tasks created, so a forged submit can't mark meetings as linked or rewrite concept descriptions.
 - `diff_findings` baseline/target refs are validated and passed to `git rev-parse --verify --end-of-options`, so an option-like ref such as `--show-toplevel` can no longer leak the repository path.
 - `add_url`'s SSRF guard now checks the IP it actually dials (closing the DNS-rebinding race) and blocks CGNAT, benchmarking, reserved, multicast, NAT64/6to4/Teredo and IPv4-mapped ranges; `add_url` no longer goes through `HTTP(S)_PROXY`.

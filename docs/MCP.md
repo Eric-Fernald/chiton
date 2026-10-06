@@ -31,6 +31,7 @@ chiton serve --unix /tmp/chiton.sock    # Unix domain socket, SSE (Linux/macOS)
 | `--unix` | `""` | Serve over a Unix domain socket at this path (Linux/macOS shared daemon). |
 | `--writable` | `false` | Open the store read-write so the write tools work over MCP. The server then holds the store exclusively; no other chiton process can open it until it exits. |
 | `--graph` | `""` | Graph store path to serve (default: configured/built-in `graph_path`). |
+| `--include-pii` | `false` | Return people's names and email addresses from the generic graph tools, which redact them by default (see [PII redaction](#pii-redaction)). |
 
 Claude Code client config for the SSE transport:
 
@@ -140,17 +141,30 @@ A **lean edge** (`leanEdge`) — `from`/`to` are node **labels**, not IDs:
 `EXTRACTED` (confidence 1.0, ground truth) · `INFERRED` (LLM hints) ·
 `AMBIGUOUS` (below the confidence threshold; hidden by default).
 
-### PII gating is per-tool, not global
+### PII redaction
 
 Names of meeting speakers, Slack authors, and email participants all land on
-`person` nodes carrying `attrs.pii = true`. **Only `search_meetings` and
-`decisions_about` honour that tag**, suppressing names unless `include_pii` is
-passed. The generic graph tools — `get_node`, `query_graph`,
-`get_node_neighborhood`, `shortest_path`, `semantic_search`, `graph_summary`,
-`god_nodes` — return `person` nodes (and `url` nodes, including ingested browser
-history) ungated. A broad `query_graph` can therefore surface a name that
-`search_meetings` would have withheld; the gate is a default for the meeting
-tools' output shape, not an access control over the store.
+`person` nodes carrying `attrs.pii = true`. By default the graph tools
+(`get_node`, `query_graph`, `get_node_neighborhood`, `shortest_path`,
+`semantic_search`, `graph_summary`, `god_nodes`) redact them:
+
+- A person appears as `[redacted person]` with source URI `person://[redacted]`
+  and no attrs beyond `pii`. Edge endpoints and cluster labels use the same
+  placeholder.
+- Other nodes drop the attrs that identify people: `participants`, `speaker`,
+  `person_id`, email `from`/`from_name`/`to`/`cc`, `email` addresses, and
+  action-item assignees. Meetings keep a `participant_count`.
+- Speaker prefixes in transcript text and speaker names in turn labels become
+  `[redacted]`.
+- Label lookups never match a node whose label names a person. `get_node`,
+  `get_node_neighborhood`, `query_graph` and `shortest_path` report no match,
+  and `semantic_search` leaves such nodes (and their edges) out.
+
+`chiton serve --include-pii` turns redaction off. The meeting tools
+(`search_meetings`, `decisions_about`) keep their own per-call `include_pii`,
+which works the same with or without the flag. Free text such as email bodies
+and decision summaries is not scanned, and `url` nodes (browser history
+included) are returned as stored.
 
 > **Note:** the schema's `Min`/`Max` annotations are advisory — mcp-go does not
 > enforce them at dispatch, so the server clamps integer inputs to their

@@ -31,7 +31,7 @@ func TestGraphSummaryTopNodesByBetweenness(t *testing.T) {
 	}
 	overlay.Nodes["solo"] = cluster.NodeResult{Label: "solo", CommunityID: 2}
 
-	res, err := graphSummaryHandler(openStore(t), overlay)(context.Background(), toolReq(map[string]any{}))
+	res, err := graphSummaryHandler(openStore(t), overlay, redactor{})(context.Background(), toolReq(map[string]any{}))
 	if err != nil {
 		t.Fatal(err)
 	}
