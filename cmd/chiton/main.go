@@ -863,6 +863,7 @@ func serveCmd() *cobra.Command {
 	var unixPath string
 	var writable bool
 	var graphPath string
+	var allowOrigins []string
 
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -870,7 +871,11 @@ func serveCmd() *cobra.Command {
 		Long: `Start the MCP server over one of three transports (identical tool surface):
   --stdio        assistant-launched (the assistant starts/stops the process)
   --http <addr>  HTTP + SSE — a shared daemon across sessions, or for debugging
-                 (default 127.0.0.1:7474; non-loopback binds print a warning)
+                 (default 127.0.0.1:7474; non-loopback binds print a warning).
+                 Clients send 'Authorization: Bearer <token>'; the token is
+                 written to <graph dir>/mcp-token at start (or pinned with
+                 CHITON_MCP_TOKEN). Browser origins are refused unless listed
+                 with --allow-origin.
   --unix <path>  a Unix domain socket — low-latency shared daemon (Linux/macOS)
 
 By default the store opens read-only so 'chiton build', 'embed', and 'cluster'
@@ -913,12 +918,10 @@ records in the MCP config so the server uses the same store as 'chiton build'.`,
 			case unixPath != "":
 				return serveUnix(cmd, mcpsdk.NewSSEServer(s), unixPath)
 			default:
-				// The MCP server has no authentication, so warn without blocking on a wildcard bind.
-				warnIfNonLoopback(cmd.ErrOrStderr(),
-					addr, "the MCP server, which has NO authentication — the entire graph (code, meetings, emails, PII) would be readable by anyone on the network")
-				sse := mcpsdk.NewSSEServer(s)
-				fmt.Fprintf(cmd.OutOrStdout(), "serve: listening on %s (SSE)\n", addr)
-				return serveUntilDone(cmd.Context(), func() error { return sse.Start(addr) }, sse.Shutdown)
+				// No TLS, so warn without blocking on a wildcard bind.
+				warnIfNonLoopback(cmd.ErrOrStderr(), addr,
+					"the MCP server over plain HTTP — its bearer token and the entire graph (code, meetings, emails, PII) would cross the network unencrypted")
+				return serveHTTP(cmd, s, addr, serveTokenPath(cfg.GraphPath), allowOrigins)
 			}
 		},
 	}
@@ -928,6 +931,7 @@ records in the MCP config so the server uses the same store as 'chiton build'.`,
 	cmd.Flags().StringVar(&unixPath, "unix", "", "serve over a Unix domain socket at this path (Linux/macOS shared daemon)")
 	cmd.Flags().BoolVar(&writable, "writable", false, "open the store read-write so submit_extraction works over MCP (disables concurrent build/embed)")
 	cmd.Flags().StringVar(&graphPath, "graph", "", "Graph store path to serve (default: configured/built-in graph_path)")
+	cmd.Flags().StringSliceVar(&allowOrigins, "allow-origin", nil, "browser Origin allowed to call the HTTP transport, e.g. http://localhost:5173 (repeatable; default none)")
 	return cmd
 }
 

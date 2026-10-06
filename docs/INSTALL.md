@@ -229,7 +229,7 @@ written into any assistant config.
 | Transport | Flag | Default | Use |
 |---|---|---|---|
 | stdio | `--stdio` | off | Assistant-launched MCP server. This is what every installer records. |
-| HTTP / SSE | `--http <addr>` | `127.0.0.1:7474` | Shared daemon across sessions / debugging (default transport when neither `--stdio` nor `--unix` is given). |
+| HTTP / SSE | `--http <addr>` | `127.0.0.1:7474` | Shared daemon across sessions / debugging (default transport when neither `--stdio` nor `--unix` is given). Every request needs the bearer token (`Authorization: Bearer <token>`). |
 | Unix socket | `--unix <path>` | *(empty)* | Low-latency shared daemon over a Unix domain socket (Linux/macOS). |
 
 Other `serve` flags:
@@ -269,6 +269,7 @@ back to the right workspace.
 | `CHITON_PROJECT_DIR` | every command | Anchor directory: `.chitonrc` is read from here and a relative `graph_path` resolves against it. The plugin sets it to `${CLAUDE_PROJECT_DIR}`. Unset = the process working directory. |
 | `CHITON_GRAPH_PATH` | every command | Overrides `graph_path` from `.chitonrc` (the config layer maps any `CHITON_*` name onto its key, e.g. `CHITON_EMBED_PROVIDER`, `CHITON_EMBED_DIM`, `CHITON_SEMANTIC_CONFIDENCE_THRESHOLD`, `CHITON_VECTOR_INDEX`). |
 | `CHITON_PASSPHRASE` | encrypted stores | Passphrase for an encrypted graph (`chiton init` encrypts by default; `--encrypt=false` opts out). Without it, commands prompt interactively — which an assistant-launched server cannot do. |
+| `CHITON_MCP_TOKEN` | `chiton serve --http` | Pins the bearer token (at least 16 characters) instead of a fresh one per start written to `<graph dir>/mcp-token`. |
 | `CHITON_BIN` | plugin `bin/chiton` shim | Explicit path to the real binary, checked before `PATH`. |
 | `CHITON_VERSION`, `CHITON_INSTALL_DIR`, `GITHUB_TOKEN` | `scripts/install-chiton.{sh,ps1}` | Release tag to fetch, install directory, and the token the private repo needs. |
 

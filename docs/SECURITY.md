@@ -414,7 +414,7 @@ caller by identity.
 
 | Command | Default bind | Auth |
 |---|---|---|
-| `chiton serve` **with no flags** | `127.0.0.1:7474`, HTTP + SSE | **None** |
+| `chiton serve` **with no flags** | `127.0.0.1:7474`, HTTP + SSE | Per-start bearer token + Origin allowlist + JSON-only POST (no TLS) |
 | `chiton serve --stdio` | *no socket at all* | n/a |
 | `chiton serve --unix <path>` | filesystem socket (Linux/macOS) | filesystem permissions only |
 | `chiton teams serve-webhook` | `127.0.0.1:8444` | Graph `clientState` shared secret |
@@ -427,12 +427,26 @@ is not opt-in, it is the default, and `--stdio` is what you must ask for. The
 assistant installers and the plugin all pass `--stdio`, so this matters mainly
 when you start a daemon by hand.
 
-The HTTP/SSE transport has **no authentication, no TLS, and no origin check**.
-Anything that can reach the port can read the entire graph — code, findings,
-meetings, emails, browser history, PII. It binds loopback by default and prints
+The HTTP/SSE transport has four controls and **no TLS**:
+
+- **Bearer token.** Every request must send `Authorization: Bearer <token>`. The
+  token is generated at each start and written to `<graph dir>/mcp-token` (mode
+  0600, removed on exit), or pinned with `CHITON_MCP_TOKEN` (at least 16
+  characters).
+- **Origin allowlist.** A request carrying an `Origin` header is refused unless
+  that origin is listed with `--allow-origin` (default: none; `*` is rejected).
+- **JSON-only POSTs.** `Content-Type` must be `application/json`, and a body is
+  capped at 8 MiB. A `text/plain` POST needs no CORS preflight, so this is what
+  stops a web page from calling tools.
+- **No wildcard CORS.** The server never sends `Access-Control-Allow-Origin: *`.
+
+Because there is no TLS, the token and the entire graph — code, findings,
+meetings, emails, browser history, PII — cross the network unencrypted if you
+bind off loopback. It binds loopback by default and prints
 a loud stderr warning when asked to bind a wildcard address (`0.0.0.0`, `::`, or
 an empty host), but it will not stop you. Do not expose it, and be aware that a
-loopback bind is still reachable by every local process and, in a browser
+loopback bind is still reachable by every local process (any process that can
+read the token file can call tools) and, in a browser
 context, by any page that can talk to `127.0.0.1`.
 
 ### 5.2 The two receivers
@@ -498,7 +512,7 @@ status is labelled **shipped** or **planned**.
 | Meeting/email PII surfaced by the two meeting tools | `person` nodes tagged `pii=true`, hidden unless `include_pii` | **Shipped, but narrow** — see §3; the other read tools have no gate |
 | Accidental upload of secrets to a remote LLM | Subagent mode = no built-in LLM calls; per-source allowlist + secret scrubbing | **Partly:** no built-in LLM egress (shipped); allowlist/scrubbing **planned** |
 | SSRF via assistant-driven `add_url` | Read-only default; `hostAllowed` on the host and on every redirect; 10-redirect cap | **Shipped, with known gaps** (§5.3) |
-| Unauthenticated reader on the MCP HTTP port | Loopback default + wildcard-bind warning | **Partial:** there is no authentication at all (§5.1) |
+| Unauthenticated reader on the MCP HTTP port | Per-start bearer token, Origin allowlist, JSON-only POSTs with an 8 MiB cap, no `Access-Control-Allow-Origin: *`; loopback default + wildcard-bind warning | **Shipped** (no TLS; §5.1) |
 | Unauthenticated Teams/Slack webhook notifications | `clientState` and signing-secret checks now required to start | **Shipped** (previously fail-open for Teams) |
 | Secrets in environment variables | Env-only, header-only, never logged or persisted | **Shipped**; no OS keychain integration |
 | Cross-project leakage (query in repo A pulling repo B nodes) | Query scoping defaults to current repo, `--scope all` gated | **Planned** |
@@ -509,7 +523,7 @@ status is labelled **shipped** or **planned**.
 
 - **Multi-tenant isolation.** chiton is single-user, single-machine.
 - **Network attackers on the MCP socket.** See §5.1 — loopback default, wildcard
-  warning, and **no authentication whatsoever**. Do not expose it.
+  warning, and a bearer token, but **no TLS**. Do not expose it.
 - **Malicious or substituted subprocesses.** The whisper CLI is auto-detected
   from `PATH`; `yt-dlp` and `git` are resolved the same way. chiton does not pin
   or verify them.

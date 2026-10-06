@@ -27,10 +27,18 @@ chiton serve --unix /tmp/chiton.sock    # Unix domain socket, SSE (Linux/macOS)
 | Flag | Default | Description |
 |---|---|---|
 | `--stdio` | `false` | Serve over stdio (for MCP assistants). |
-| `--http` | `127.0.0.1:7474` | HTTP/SSE listen address (shared daemon / debug). Binding a non-loopback address (`0.0.0.0`, `::`, or an empty host) prints a stderr warning — the HTTP transport has no authentication. |
+| `--http` | `127.0.0.1:7474` | HTTP/SSE listen address. Every request must send `Authorization: Bearer <token>`. The token is generated at each start and written to `<graph dir>/mcp-token` (mode 0600, removed on exit), or pinned with `CHITON_MCP_TOKEN` (at least 16 characters). Requests with a browser `Origin` are refused unless the origin is listed with `--allow-origin`. POSTs must be `Content-Type: application/json`. There is no TLS, and a non-loopback bind prints a warning. |
+| `--allow-origin` | none | Browser origin allowed to call the HTTP transport (repeatable). `*` is rejected. |
 | `--unix` | `""` | Serve over a Unix domain socket at this path (Linux/macOS shared daemon). |
 | `--writable` | `false` | Open the store read-write so the write tools work over MCP (disables concurrent `build`/`embed`). |
 | `--graph` | `""` | Graph store path to serve (default: configured/built-in `graph_path`). |
+
+Claude Code client config for the SSE transport:
+
+```json
+{ "mcpServers": { "chiton": { "type": "sse", "url": "http://127.0.0.1:7474/sse",
+    "headers": { "Authorization": "Bearer ${CHITON_MCP_TOKEN}" } } } }
+```
 
 Transport selection precedence (from `serveCmd`): `--stdio` wins; otherwise
 `--unix` if set; otherwise HTTP/SSE on `--http`.

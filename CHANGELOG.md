@@ -156,6 +156,7 @@ dated section.
 
 ### Security
 
+- `chiton serve --http` now requires a bearer token (per start, written to `<graph dir>/mcp-token`, or `CHITON_MCP_TOKEN`), refuses browser `Origin`s not listed with `--allow-origin`, requires `application/json` POSTs, and no longer sends `Access-Control-Allow-Origin: *`. Before this, any web page could call tools on the loopback server with a `text/plain` POST.
 - **`chiton teams serve-webhook` now fails closed.** Two changes, both
   behaviour-visible:
   - The command **refuses to start** without a subscription `clientState`
