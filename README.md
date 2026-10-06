@@ -49,8 +49,9 @@ When sources conflict, prefer `EXTRACTED` facts over `INFERRED` ones.
 ```
 
 - **Single binary, zero runtime services.** Pure-Go throughout — BadgerDB for the
-  graph store (native AES-256-GCM at rest), a pure-Go vector index (exact flat
-  scan, or an HNSW graph for large stores),
+  graph store (native AES-256 encryption at rest), a pure-Go vector index (exact
+  flat scan, or an HNSW graph for large stores, built on every core and saved to
+  disk),
   an in-process job queue, and a from-scratch Leiden implementation. No Redis, no
   CGo, no external database.
 - **chiton never calls an LLM itself.** Semantic extraction and LLM rules run
@@ -89,9 +90,9 @@ make build              # or: go build ./cmd/chiton
 Microsoft Graph support — `chiton teams fetch`, `chiton teams serve-webhook`,
 and `chiton email outlook` — sits behind the `msgraph` build tag and is **not**
 in the default build or in any release artifact. The Graph SDK's generated
-request builders cost roughly 117 MB for the two API calls chiton makes through
-them (a stripped default binary is 24.6 MB; with the tag it is 142.0 MB), so
-they are opt-in:
+request builders cost roughly 120 MB for the two API calls chiton makes through
+them (a stripped default `windows/amd64` binary is 24.0 MB; with the tag it is
+144.0 MB), so they are opt-in:
 
 ```sh
 make build-msgraph      # or: go build -tags msgraph ./cmd/chiton
@@ -182,7 +183,7 @@ Then point your assistant at the MCP server (a `.mcp.json` is written by
 instead of grepping. To enable natural-language search:
 
 ```sh
-chiton embed .              # embed symbols/docs/concepts (Ollama by default)
+chiton embed                # embed symbols/docs/concepts (Ollama by default)
 chiton search "where do we handle auth?"
 ```
 
@@ -201,7 +202,7 @@ chiton search "where do we handle auth?"
 | `chiton merge <snap>…` | Merge exported snapshot(s) into the current graph (cross-repo merging; idempotent, dedups shared nodes). Alias: `import`. |
 | `chiton bench [path]` | Benchmark token cost (chiton vs naive vs grep+read); `--synth N` for a synthetic corpus, `--json`. |
 | `chiton version` | Print version + build metadata. |
-| `chiton embed` | Embed nodes for semantic search (`--provider`, `--all`, `--link-similar`, `--exact`). Takes no path — it always covers the whole store. |
+| `chiton embed` | Embed nodes for semantic search (`--provider`, `--all`, `--link-similar`, `--exact`). Takes no path — it always covers the whole store. For stores of 100k+ vectors it also builds and saves the HNSW index (`hnsw.idx`) that `serve` loads, even when nothing new needed embedding. |
 | `chiton search <query>` | Hybrid semantic + graph search from the CLI. |
 | `chiton extract pending\|submit` | Emit semantic-extraction task specs / ingest the structured results. |
 | `chiton analyze <path>` | Run deterministic rules; persist findings as graph nodes. `--diff` / `--since <ref>`, `--no-llm`. |
@@ -323,8 +324,10 @@ chiton sync git --since <ref>  # re-index files changed since a git ref
 chiton hooks install --stage post-commit,post-checkout   # auto-sync on git ops
 ```
 
-Each changed file is re-extracted (stale nodes/edges replaced) and — when enabled
-(`--embed`, `--analyze`) — its embeddings and deterministic findings refreshed.
+Each changed file is re-extracted (stale nodes/edges replaced), its deterministic
+findings refreshed (`--analyze`, on by default), and — with `--embed` — its
+embeddings refreshed. Re-embedding makes the saved HNSW index stale; run
+`chiton embed` afterwards to save a current one.
 After a batch settles, the touched 2-hop neighborhood is incrementally
 re-clustered. Betweenness is a global metric carried forward between full
 `chiton cluster` passes.
@@ -381,15 +384,19 @@ cannot drift onto a different store than `chiton build` wrote.
 The committed `.chiton/` files (`hooks.yaml`, `sources.yaml`) are the only shared
 state — `chiton init` writes a `.chiton/.gitignore` that keeps everything else
 under `.chiton/` (including the encryption keyfile) out of git. The graph store,
-cache, and cluster sidecar live under `chiton-out/`, which is **not**
-auto-ignored — add `chiton-out/` to your repo's `.gitignore`.
+cache, cluster sidecar, and saved HNSW index (`hnsw.idx`) live under
+`chiton-out/`, which is **not** auto-ignored — add `chiton-out/` to your repo's
+`.gitignore`.
 
 ## Encryption at rest
 
-The graph is encrypted by default (AES-256-GCM via BadgerDB; key derived from a
-passphrase with argon2id, salt stored in a sidecar keyfile next to the store).
-The passphrase is read from `CHITON_PASSPHRASE` or prompted interactively. Opt
-out for CI or synthetic data with `chiton init --encrypt=false`.
+The graph is encrypted by default with BadgerDB's native AES-256 encryption
+(CTR mode), under a key derived from a passphrase with argon2id. The salt and KDF
+parameters live in `.chiton/keyfile.json`; the passphrase and key are never
+written to disk. The passphrase is read from `CHITON_PASSPHRASE` or prompted
+interactively. The saved HNSW index is sealed too (AES-256-GCM, under a key
+derived from the store's); the other files in `chiton-out/` and `.chiton/` stay
+plaintext. Opt out for CI or synthetic data with `chiton init --encrypt=false`.
 
 ## Supported sources
 
@@ -440,10 +447,12 @@ chiton/
 │   ├── ingest/            incremental updater + source front-ends:
 │   │                        fswatch/ git/ audio/ url/ browser/ email/ slack/
 │   │                        teams/  (teams + email's Outlook source: -tags msgraph)
+│   │                        plus shared chunk/ (doc splitting) and bearer/ (HTTP auth)
 │   ├── cache/             content-SHA-256 cache that skips unchanged files
 │   ├── config/            .chitonrc + CHITON_* env, CHITON_PROJECT_DIR anchoring
 │   ├── jobs/              in-process debouncing/coalescing job queue
-│   ├── crypto/            argon2id KDF + keyfile for encryption at rest
+│   ├── crypto/            argon2id KDF + keyfile for encryption at rest, file sealing
+│   ├── fsutil/            atomic file writes
 │   ├── install/           per-assistant installers (Claude Code, Copilot, Cursor, Codex, Gemini CLI, OpenCode, Aider, Antigravity, Copilot CLI)
 │   ├── hooks/             git hook install + gating runner
 │   ├── mcp/               MCP server and tool handlers (stdio / SSE / unix)

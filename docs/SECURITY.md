@@ -212,7 +212,9 @@ required non-zero `IndexCacheSize` of 64 MiB) — see
 `internal/graph/store/badger/store.go` (`applyEncryption`). This covers the LSM
 tree, value log, and all node/edge/embedding data Badger persists — which, once
 you have ingested email, Slack, or transcripts, is where the sensitive text
-lives.
+lives. Badger encrypts with AES-256 in CTR mode (`y.XORBlock` in
+`badger/v4`), which keeps the contents confidential but does not authenticate
+them: it does not detect tampering with the files on disk.
 
 > **Scope caveat (shipped reality):** only the Badger store and the saved HNSW
 > index (`hnsw.idx`) are encrypted today. The index is sealed with
@@ -242,7 +244,7 @@ passphrase it reveals nothing.
 | Parallelism | 4 | Floor 1 |
 | Salt | 16 random bytes (hex) | Floor 16 bytes |
 | Key length | 32 bytes | Must be exactly 32 (AES-256) |
-| Cipher | `AES-256-GCM` | |
+| Cipher | `AES-256-GCM` | A label in the keyfile. It is the cipher for sealed files (`hnsw.idx`); Badger encrypts the store itself in CTR mode |
 
 The derivation is deterministic: the same passphrase + same keyfile always
 produce the same 32-byte key, so the encrypted store re-opens reliably. A loaded
@@ -489,7 +491,7 @@ status is labelled **shipped** or **planned**.
 
 | Threat | Mitigation | Status |
 |---|---|---|
-| Laptop theft / lost device reading the store off disk | AES-256-GCM store encryption keyed from an Argon2id passphrase | **Shipped** |
+| Laptop theft / lost device reading the store off disk | AES-256 (Badger, CTR mode) store encryption keyed from an Argon2id passphrase | **Shipped** |
 | Backup leakage (`chiton-out/` in cloud/disk backups) | Same store encryption | **Shipped** |
 | Stolen `chiton-out/graph.kuzu/` yields readable data | Same store encryption | **Shipped** |
 | Plaintext sidecars / exports leaking the same data | — | **Not mitigated:** `cluster.json`, `cache.json`, `.chiton/baselines/`, `.chiton/llm-analyzed.json`, and `chiton export` output are plaintext |
