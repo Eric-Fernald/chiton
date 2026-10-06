@@ -198,6 +198,7 @@ dated section.
 
 ### Security
 
+- `diff_findings` baseline/target refs are validated and passed to `git rev-parse --verify --end-of-options`, so an option-like ref such as `--show-toplevel` can no longer leak the repository path.
 - `add_url`'s SSRF guard now checks the IP it actually dials (closing the DNS-rebinding race) and blocks CGNAT, benchmarking, reserved, multicast, NAT64/6to4/Teredo and IPv4-mapped ranges; `add_url` no longer goes through `HTTP(S)_PROXY`.
 - **Indexing no longer follows symlinks.** `build`, `sync`, and `sync watch` index regular files only; a symlink or junction (e.g. `notes.md -> ~/.ssh/id_rsa`) is skipped, so its target never lands in the graph or in `pending_extractions`.
 - MCP `add_url` accepts only http/https URLs (the CLI still reads local files), and `pending_analyses` refuses paths outside the project root and no longer reads through symlinks, so an injected instruction can't make an MCP tool read `~/.aws/credentials`.

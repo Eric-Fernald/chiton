@@ -76,10 +76,10 @@ func firstParent(root string) (string, bool) {
 // RangeChanges returns the files that differ between two refs (e.g. the old and
 // new HEAD a post-checkout hook receives).
 func RangeChanges(root, from, to string) ([]Change, error) {
-	if err := validateRef(from); err != nil {
+	if err := ValidateRef(from); err != nil {
 		return nil, err
 	}
-	if err := validateRef(to); err != nil {
+	if err := ValidateRef(to); err != nil {
 		return nil, err
 	}
 	out, err := run(root, "diff", "--name-status", "--end-of-options", from, to)
@@ -91,7 +91,7 @@ func RangeChanges(root, from, to string) ([]Change, error) {
 
 // ChangedSince returns the files that differ between ref and the current HEAD.
 func ChangedSince(root, ref string) ([]Change, error) {
-	if err := validateRef(ref); err != nil {
+	if err := ValidateRef(ref); err != nil {
 		return nil, err
 	}
 	out, err := run(root, "diff", "--name-status", "--end-of-options", ref, "HEAD")
@@ -101,9 +101,9 @@ func ChangedSince(root, ref string) ([]Change, error) {
 	return parseNameStatus(root, out), nil
 }
 
-// validateRef rejects option-like refs, since one such as "--output=evil" would turn `git diff` into an
+// ValidateRef rejects option-like refs, since one such as "--output=evil" would turn `git diff` into an
 // arbitrary file write. Valid ref names never start with '-', and callers also pass --end-of-options.
-func validateRef(ref string) error {
+func ValidateRef(ref string) error {
 	if ref == "" {
 		return fmt.Errorf("git: empty ref")
 	}

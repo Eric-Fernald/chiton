@@ -15,6 +15,7 @@ import (
 
 	"github.com/Eric-Fernald/chiton/internal/fsutil"
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
+	gitref "github.com/Eric-Fernald/chiton/internal/ingest/git"
 )
 
 // Baseline is the finding set at a commit, saved as .chiton/baselines/<commit>.json. `--diff` compares
@@ -173,10 +174,13 @@ func baselineFile(commit string) string {
 	return safe + ".json"
 }
 
-// GitCommit resolves ref to a full commit SHA in repoDir, or "" when git is unavailable or the
-// ref doesn't resolve, so callers can fall back to a "working" baseline.
+// GitCommit resolves ref to a full commit SHA in repoDir, or "" when git is unavailable or the ref doesn't
+// resolve. ref can come from an MCP caller, so an option-like value must never reach git as a flag.
 func GitCommit(repoDir, ref string) string {
-	out, err := exec.Command("git", "-C", repoDir, "rev-parse", ref).Output()
+	if gitref.ValidateRef(ref) != nil {
+		return ""
+	}
+	out, err := exec.Command("git", "-C", repoDir, "rev-parse", "--verify", "--quiet", "--end-of-options", ref+"^{commit}").Output()
 	if err != nil {
 		return ""
 	}
