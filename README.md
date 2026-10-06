@@ -200,7 +200,7 @@ chiton search "where do we handle auth?"
 | `chiton merge <snap>…` | Merge exported snapshot(s) into the current graph (cross-repo merging; idempotent, dedups shared nodes). Alias: `import`. |
 | `chiton bench [path]` | Benchmark token cost (chiton vs naive vs grep+read); `--synth N` for a synthetic corpus, `--json`. |
 | `chiton version` | Print version + build metadata. |
-| `chiton embed` | Embed nodes for semantic search (`--provider`, `--all`, `--link-similar`). Takes no path — it always covers the whole store. |
+| `chiton embed` | Embed nodes for semantic search (`--provider`, `--all`, `--link-similar`, `--exact`). Takes no path — it always covers the whole store. |
 | `chiton search <query>` | Hybrid semantic + graph search from the CLI. |
 | `chiton extract pending\|submit` | Emit semantic-extraction task specs / ingest the structured results. |
 | `chiton analyze <path>` | Run deterministic rules; persist findings as graph nodes. `--diff` / `--since <ref>`, `--no-llm`. |
@@ -371,6 +371,11 @@ cannot drift onto a different store than `chiton build` wrote.
 | `embed.endpoint` | `http://localhost:11434` | Ollama endpoint. |
 | `embed.dim` | *(unset)* | Embedding dimension. Deliberately has no default: left at 0, each provider applies its native size (Ollama 768, hash 256) instead of the Ollama size being forced onto the hash provider. Set it only to override. |
 | `semantic.confidence_threshold` | `0.5` | Splits `INFERRED` from `AMBIGUOUS`. |
+| `vector.index` | `auto` | Index behind semantic search: `flat` (exact scan), `hnsw` (approximate graph), or `auto`, which uses `hnsw` at or above `vector.hnsw_threshold` vectors. |
+| `vector.hnsw_threshold` | `100000` | Vector count at which `auto` switches to `hnsw`. |
+| `vector.hnsw_m` | `16` | Maximum links per HNSW node (twice that on the bottom layer). Higher raises recall, memory, and build time. |
+| `vector.hnsw_ef_search` | `128` | HNSW candidate list per query. Higher raises recall and query time. |
+| `vector.hnsw_ef_construction` | `200` | HNSW candidate list while building. Higher raises graph quality and build time. |
 
 The committed `.chiton/` files (`hooks.yaml`, `sources.yaml`) are the only shared
 state — `chiton init` writes a `.chiton/.gitignore` that keeps everything else

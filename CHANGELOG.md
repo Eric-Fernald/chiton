@@ -16,6 +16,20 @@ dated section.
 
 ### Added
 
+- **HNSW index for semantic search.** Large stores no longer scan every vector
+  per query. `vector.index = auto` (the default) keeps the exact flat scan below
+  100k embeddings and switches to an HNSW graph at or above it; `flat` and
+  `hnsw` force one. At 100k 768-dimensional vectors a query drops from about
+  30 ms to about 0.2 ms with recall@8 near 1.0 on embedding-like data, for a
+  one-time build of about a minute at `serve` startup. Tune it with
+  `vector.hnsw_threshold`, `vector.hnsw_m`, `vector.hnsw_ef_search`, and
+  `vector.hnsw_ef_construction` (or `CHITON_VECTOR_*`). `serve` logs which
+  index it built and how long it took. The graph is chiton's own pure-Go
+  implementation (`internal/vector/hnswlib`); the default build stays cgo-free.
+- **`chiton embed --link-similar --exact`.** `--link-similar` now uses the
+  configured index, so large stores finish in minutes instead of an O(n²) scan;
+  `--exact` restores the exact pass.
+
 - **Claude Code plugin packaging.** The repository root doubles as a plugin:
   `.claude-plugin/plugin.json` (`chiton`, version `0.1.0`) and
   `.claude-plugin/marketplace.json` (`chiton-marketplace`, single plugin sourced

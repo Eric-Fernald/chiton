@@ -3,6 +3,8 @@ package hnswlib
 import (
 	"math"
 	"testing"
+
+	"github.com/viterin/vek/vek32"
 )
 
 func TestMetricDistance(t *testing.T) {
@@ -21,6 +23,26 @@ func TestMetricDistance(t *testing.T) {
 	} {
 		if d := tc.m.Distance(tc.a, tc.b); math.Abs(float64(d)-tc.want) > 1e-6 {
 			t.Errorf("%v.Distance(%v, %v) = %v, want %v", tc.m, tc.a, tc.b, d, tc.want)
+		}
+	}
+}
+
+// TestMetricDistanceWithoutSIMD runs the pure-Go kernels that non-amd64 targets (arm64 releases) use, and
+// checks they agree with the AVX2 ones on this machine.
+func TestMetricDistanceWithoutSIMD(t *testing.T) {
+	a, b := make([]float32, 768), make([]float32, 768)
+	for i := range a {
+		a[i], b[i] = float32(i%7)-3, float32(i%5)-2
+	}
+	var simd [3]float32
+	for i, m := range []Metric{Cosine, Euclidean, UnitCosine} {
+		simd[i] = m.Distance(a, b)
+	}
+	vek32.SetAcceleration(false)
+	defer vek32.SetAcceleration(true)
+	for i, m := range []Metric{Cosine, Euclidean, UnitCosine} {
+		if d := m.Distance(a, b); math.Abs(float64(d-simd[i])) > 1e-3*math.Max(1, math.Abs(float64(d))) {
+			t.Errorf("%v: pure Go %v, SIMD %v", m, d, simd[i])
 		}
 	}
 }

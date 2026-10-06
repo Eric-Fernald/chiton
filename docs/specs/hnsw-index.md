@@ -1,6 +1,19 @@
 # Spec: HNSW vector index
 
-Status: proposed. Audience: an implementing engineer or model with no prior context. Facts marked "verify" came from web summaries or memory and must be checked before relying on them.
+Status: PR 1 (R1 to R9) implemented on the `hnsw` branch; R10 not started. Audience: an implementing engineer or model with no prior context. Facts marked "verify" came from web summaries or memory and must be checked before relying on them.
+
+## Implementation notes
+
+Where the build departs from this spec, and why:
+
+- **No coder/hnsw.** It does not compile on Windows: `SavedGraph` imports `google/renameio`, whose files are all `!windows`, which breaks this machine and the `windows-amd64` release. A vendored copy measured slower than `Flat` at 5k vectors (map adjacency, a sort and allocation per hop) with recall@8 of 0.81 at ef 64, and its delete left dangling links. `internal/vector/hnswlib` is a new implementation written from the paper. It shares no code with coder/hnsw.
+- **Distance.** R3's custom distance is the built-in `hnswlib.UnitCosine` metric, so there is no function registry.
+- **Extra key.** `vector.hnsw_ef_construction` sets the build-time candidate list, which this spec did not list.
+- **Defaults.** `M` 16, `ef_search` 128, `ef_construction` 200, threshold 100k, from the sweep in `docs/BENCHMARK.md`.
+- **Recall test data.** T2's random-vector test uses clustered "embedding-like" vectors. iid Gaussian vectors in 64 or more dimensions have almost no neighbour structure, so they are kept as a separate worst-case test (recall@8 at least 0.85).
+- **Determinism.** The entry point is the live node with the highest level and lowest id, so identical queries return identical results, not only reproducible builds.
+- **Race test.** T3's `-race` run needs cgo. The development machine has no C toolchain, so only CI runs it.
+- **Mixed dimensions.** `buildIndex` sizes HNSW to the store's most common vector length rather than the embedder's `Dim()`, which reports the configured default until Ollama's first call.
 
 ## Goal
 

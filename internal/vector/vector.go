@@ -1,5 +1,7 @@
 // Package vector provides a nearest-neighbour index over node embeddings behind a swappable Index interface.
-// Flat, the exact pure-Go backend, is O(n·d) per query and fast enough for a few hundred thousand vectors.
+// Flat is exact and O(n·d) per query: about 3 ms at 10k 768-dimensional vectors and 30 ms at 100k. HNSW
+// is approximate and roughly logarithmic, well under a millisecond at 100k, but takes seconds to minutes to
+// build. NewIndex picks between them; see docs/BENCHMARK.md.
 package vector
 
 // Item is one indexed vector keyed by its node ID.
