@@ -128,6 +128,7 @@ in-process whisper.cpp backend exists but requires a `-tags whisper_cgo` build.
 | Path | Contents | Encrypted? |
 |---|---|---|
 | `chiton-out/graph.kuzu/` (default `graph_path`) | The BadgerDB graph: all node text, transcripts, email bodies, embeddings | **Yes**, when a keyfile is present (§2) |
+| `chiton-out/hnsw.idx` | Saved HNSW index: node IDs and graph links, no vectors or text | **Yes**, when the store is encrypted: AES-256-GCM under a key derived from the store's (§2) |
 | `chiton-out/cluster.json`, `chiton-out/cache.json` | Cluster sidecar and content-hash cache | **No — plaintext** |
 | `.chiton/keyfile.json` | Argon2id salt + KDF parameters only (no key, no passphrase) | n/a — no secret in it |
 | `.chiton/hooks.yaml`, `sources.yaml`, `schema_version`, `.gitignore` | Policy files | **No — plaintext**, and `hooks.yaml`/`sources.yaml` are meant to be committed |
@@ -213,11 +214,13 @@ tree, value log, and all node/edge/embedding data Badger persists — which, onc
 you have ingested email, Slack, or transcripts, is where the sensitive text
 lives.
 
-> **Scope caveat (shipped reality):** only the Badger store is encrypted today.
-> The package doc in `internal/crypto/keyfile.go` describes AES-256-GCM wrapping
-> for ad-hoc artifacts (`cache.json`, `cluster.json`, `audit.jsonl`) via
-> `EncryptBytes`/`DecryptBytes` in `internal/crypto/file.go`, but those helpers
-> are **not yet wired into the application** (they are exercised only by tests).
+> **Scope caveat (shipped reality):** only the Badger store and the saved HNSW
+> index (`hnsw.idx`) are encrypted today. The index is sealed with
+> `EncryptBytes` under `FileKey`, an HKDF-SHA256 derivation of the store key, so
+> it never shares a key with the store; without the key it is not loaded and
+> `serve` rebuilds the index instead. The package doc in
+> `internal/crypto/keyfile.go` describes the same wrapping for other artifacts
+> (`cache.json`, `cluster.json`, `audit.jsonl`), but that is **not yet wired in**.
 > Everything in the "No — plaintext" rows of §1.3 stays plaintext: the cluster
 > sidecar, the content cache, `.chiton/baselines/`, `.chiton/llm-analyzed.json`,
 > and `chiton export` snapshots. The design's "export archive is encrypted with

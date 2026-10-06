@@ -9,11 +9,12 @@ import (
 )
 
 // Defaults for HNSWConfig's zero fields, chosen from the recall sweep in docs/BENCHMARK.md: queries stay
-// well under a millisecond at 100k vectors, so they favour recall on hard data over speed.
+// well under a millisecond at 100k vectors, so ef_search favours recall on hard data over speed. Build
+// time grows about linearly with ef_construction, and 100 lost 2.5 recall points to 200 only on hard data.
 const (
 	DefaultHNSWM              = 16
 	DefaultHNSWEfSearch       = 128
-	DefaultHNSWEfConstruction = 200
+	DefaultHNSWEfConstruction = 100
 )
 
 // HNSWConfig tunes an HNSW index. Zero fields take the Default* values.
@@ -45,17 +46,20 @@ func NewHNSW(cfg HNSWConfig) *HNSW {
 	return &HNSW{g: g, dim: cfg.Dim}
 }
 
-// Add inserts or replaces vectors by ID. Vectors that are empty, all-zero, non-finite, or of another
-// dimension are counted in Skipped and never reach the graph, which panics on a dimension mismatch.
+// Add inserts or replaces vectors by ID, linking a large batch on every CPU. Vectors that are empty,
+// all-zero, non-finite, or of another dimension are counted in Skipped and never reach the graph, which
+// panics on a dimension mismatch.
 func (h *HNSW) Add(items []Item) {
+	ids, vecs := make([]string, 0, len(items)), make([][]float32, 0, len(items))
 	for _, it := range items {
 		v, ok := h.prepare(it.Vec)
 		if !ok {
 			h.skipped++
 			continue
 		}
-		h.g.Insert(it.ID, v)
+		ids, vecs = append(ids, it.ID), append(vecs, v)
 	}
+	h.g.InsertBatch(ids, vecs)
 }
 
 // prepare validates vec against the index dimension and returns a unit-length copy.

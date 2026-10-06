@@ -227,6 +227,95 @@ func TestRecall(t *testing.T) {
 	}
 }
 
+// TestInsertBatchParallel builds one graph on many goroutines and checks it is well formed and as
+// accurate as a sequential build. Under `go test -race` it is also the data-race check for the build.
+func TestInsertBatchParallel(t *testing.T) {
+	rng := rand.New(rand.NewSource(2))
+	n := 4000
+	ids, vecs := make([]int, n), make([][]float32, n)
+	for i := range n {
+		ids[i], vecs[i] = i, randVec(rng, 24)
+	}
+	g := New[int]()
+	g.Workers = 8
+	g.InsertBatch(ids[:1], vecs[:1]) // a lone first node takes the entry-point path
+	g.InsertBatch(ids[1:], vecs[1:])
+	if g.Len() != n || g.locks != nil {
+		t.Fatalf("Len = %d, locks left set: %v", g.Len(), g.locks != nil)
+	}
+	checkInvariants(t, g)
+	for id, levels := range g.links {
+		for l, list := range levels {
+			if len(slices.Compact(slices.Sorted(slices.Values(list)))) != len(list) {
+				t.Fatalf("node %d level %d has a duplicate link: %v", id, l, list)
+			}
+		}
+	}
+	var hit int
+	for range 100 {
+		q := randVec(rng, 24)
+		exact := slices.Clone(ids)
+		slices.SortStableFunc(exact, func(a, b int) int { return cmp.Compare(Cosine.Distance(q, vecs[a]), Cosine.Distance(q, vecs[b])) })
+		want := map[int]bool{}
+		for _, k := range exact[:10] {
+			want[k] = true
+		}
+		for _, k := range keys(g.Nearest(q, 10)) {
+			if want[k] {
+				hit++
+			}
+		}
+	}
+	if r := float64(hit) / 1000; r < 0.95 {
+		t.Fatalf("recall@10 = %.3f, want >= 0.95", r)
+	}
+}
+
+func TestInsertBatchOneWorkerMatchesInserts(t *testing.T) {
+	rng := rand.New(rand.NewSource(9))
+	keys, vecs := make([]int, 500), make([][]float32, 500)
+	for i := range keys {
+		keys[i], vecs[i] = i, randVec(rng, 8)
+	}
+	a, b := New[int](), New[int]()
+	for i := range keys {
+		a.Insert(keys[i], vecs[i])
+	}
+	b.Workers = 1
+	b.InsertBatch(keys, vecs)
+	if !reflect.DeepEqual(a.links, b.links) || a.entry != b.entry {
+		t.Fatal("a one-worker batch built a different graph than the same Inserts")
+	}
+}
+
+func TestInsertBatchDuplicateKeysKeepLast(t *testing.T) {
+	g := lineGraph(20)
+	g.Workers = 4
+	batch := []int{3, 50, 3, 51}
+	vecs := [][]float32{{100}, {50}, {300}, {51}}
+	g.InsertBatch(batch, vecs)
+	if v, _ := g.Vector(3); g.Len() != 22 || v[0] != 300 {
+		t.Fatalf("Len = %d, Vector(3) = %v; want 22 and the last vector, 300", g.Len(), v)
+	}
+	if got := keys(g.Nearest([]float32{299}, 1)); !slices.Equal(got, []int{3}) {
+		t.Fatalf("nearest to 299 = %v, want [3]", got)
+	}
+	checkInvariants(t, g)
+}
+
+func TestInsertBatchMismatchPanicsUnchanged(t *testing.T) {
+	g := lineGraph(5)
+	defer func() {
+		if recover() == nil {
+			t.Fatal("a batch with a wrong-dimension vector did not panic")
+		}
+		if g.Len() != 5 {
+			t.Fatalf("Len = %d after a rejected batch, want 5", g.Len())
+		}
+	}()
+	g.InsertBatch([]int{10, 11}, [][]float32{{1}, {1, 2}})
+}
+
 func TestDimensionMismatchPanics(t *testing.T) {
 	g := New[int]()
 	g.Insert(1, []float32{1, 0})

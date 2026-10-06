@@ -372,11 +372,11 @@ cannot drift onto a different store than `chiton build` wrote.
 | `embed.endpoint` | `http://localhost:11434` | Ollama endpoint. |
 | `embed.dim` | *(unset)* | Embedding dimension. Deliberately has no default: left at 0, each provider applies its native size (Ollama 768, hash 256) instead of the Ollama size being forced onto the hash provider. Set it only to override. |
 | `semantic.confidence_threshold` | `0.5` | Splits `INFERRED` from `AMBIGUOUS`. |
-| `vector.index` | `auto` | Index behind semantic search: `flat` (exact scan), `hnsw` (approximate graph), or `auto`, which uses `hnsw` at or above `vector.hnsw_threshold` vectors. `serve` starts on `flat` and builds `hnsw` in the background (about a minute per 100k vectors, on every start), then switches over. A one-shot `chiton search` stays exact unless this is set to `hnsw`. |
+| `vector.index` | `auto` | Index behind semantic search: `flat` (exact scan), `hnsw` (approximate graph), or `auto`, which uses `hnsw` at or above `vector.hnsw_threshold` vectors. `chiton embed` builds the `hnsw` graph and saves it as `hnsw.idx` beside the store, and `serve` loads it at startup. If it is missing or out of date, `serve` starts on `flat` and builds `hnsw` in the background, then switches over; rerun `chiton embed` to save it again. A one-shot `chiton search` stays exact unless this is set to `hnsw`. |
 | `vector.hnsw_threshold` | `100000` | Vector count at which `auto` switches to `hnsw`. 0 or less means the default. |
 | `vector.hnsw_m` | `16` | Maximum links per HNSW node (twice that on the bottom layer). Higher raises recall, memory, and build time. |
 | `vector.hnsw_ef_search` | `128` | HNSW candidate list per query. Higher raises recall and query time. |
-| `vector.hnsw_ef_construction` | `200` | HNSW candidate list while building. Higher raises graph quality and build time. |
+| `vector.hnsw_ef_construction` | `100` | HNSW candidate list while building. Higher raises graph quality and build time. |
 
 The committed `.chiton/` files (`hooks.yaml`, `sources.yaml`) are the only shared
 state — `chiton init` writes a `.chiton/.gitignore` that keeps everything else

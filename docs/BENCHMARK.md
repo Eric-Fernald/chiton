@@ -168,37 +168,53 @@ Semantic search seeds its graph walk from a nearest-neighbour index
   corpus was available offline when this was measured.
 - recall@8 is the share of `flat`'s exact top 8 that `hnsw` also returns.
 - Heap is live heap held by the index after GC; "raw" is n × 768 × 4 bytes.
-- Machine: Intel i9-13900K, Windows 11, Go 1.26, one thread. Its mix of
-  performance and efficiency cores makes repeated runs differ by up to 2×.
+- Saved index is the size of `hnsw.idx`, which holds links but no vectors.
+  Load is the time to rebuild the index from it as `serve` does: fingerprint
+  every vector, read the file, and normalize each vector into the graph. It
+  excludes reading the vectors from the store.
+- Machine: Intel i9-13900K (32 threads), Windows 11, Go 1.26. Queries run on one
+  thread; the HNSW build uses all of them. The mix of performance and
+  efficiency cores makes repeated runs differ by up to 2×.
 
 Reproduce:
 
 ```sh
-CHITON_VECTOR_BENCH=10000,100000 go test ./internal/vector/ -run TestVectorBenchReport -v
+CHITON_VECTOR_BENCH=10000,100000,1000000 go test ./internal/vector/ -run TestVectorBenchReport -v -timeout 60m
 CHITON_VECTOR_BENCH_1M=1 go test ./internal/vector/ -bench BenchmarkSearch -run '^$'
 ```
 
-### Results (defaults: M 16, ef_search 128, ef_construction 200)
+The 1M row needs about 13 GB of RAM: the report holds the source vectors, both
+indexes, and a loaded copy at once.
 
-| Vectors | Backend | Build | Heap | Heap / raw | p50 query | p95 query | recall@8 |
-|---|---|---|---|---|---|---|---|
-| 10k | flat | 0.01 s | 32 MB | 1.03 | 2.77 ms | 5.53 ms | 1.000 |
-| 10k | hnsw | 5.3 s | 34 MB | 1.10 | 0.14 ms | 0.17 ms | 1.000 |
-| 100k | flat | 0.13 s | 315 MB | 1.02 | 29.1 ms | 32.4 ms | 1.000 |
-| 100k | hnsw | 36.4 s | 337 MB | 1.10 | 0.09 ms | 0.11 ms | 1.000 |
+### Results (defaults: M 16, ef_search 128, ef_construction 100)
 
-1M was not run here: the report holds the source vectors and both indexes at
-once, about 10 GB.
+| Vectors | Backend | Build | Heap | Heap / raw | p50 query | p95 query | recall@8 | Saved index | Load |
+|---|---|---|---|---|---|---|---|---|---|
+| 10k | flat | 0.01 s | 32 MB | 1.03 | 2.77 ms | 5.77 ms | 1.000 | — | — |
+| 10k | hnsw | 0.20 s | 34 MB | 1.10 | 0.20 ms | 0.27 ms | 0.999 | 0.5 MB | 0.04 s |
+| 100k | flat | 0.27 s | 315 MB | 1.02 | 58.9 ms | 64.5 ms | 1.000 | — | — |
+| 100k | hnsw | 2.8 s | 336 MB | 1.09 | 0.10 ms | 0.14 ms | 0.998 | 5.8 MB | 0.70 s |
+| 1M | flat | 2.4 s | 3168 MB | 1.03 | 600 ms | 634 ms | 1.000 | — | — |
+| 1M | hnsw | 78 s | 3373 MB | 1.10 | 0.50 ms | 0.64 ms | 0.984 | 68.5 MB | 7.7 s |
+
+Before the build went parallel and `ef_construction` dropped from 200 to 100,
+the same machine built 10k in 5.3 s and 100k in 36.4 s, with recall@8 of 1.000
+at both sizes. The 100k flat query time doubled between runs (29 ms before) with
+no change to `flat`, which is the core-mix noise noted above.
 
 ### Choosing ef_search
 
-recall@8 by `ef_search` (M 16, ef_construction 200). The query time is per
-query at that setting.
+recall@8 by `ef_search` (M 16, ef_construction 100, 200 queries). The query
+time is the mean per query at that setting; at these sub-millisecond times the
+core-mix noise can reorder neighbouring columns.
 
 | Data | ef 16 | ef 32 | ef 64 | ef 128 | ef 256 |
 |---|---|---|---|---|---|
-| 100k embedding-like, 768-d | 0.929 (0.12 ms) | 0.987 (0.13 ms) | 0.998 (0.21 ms) | 0.999 (0.25 ms) | 1.000 (0.36 ms) |
-| 20k iid Gaussian, 64-d | 0.372 (0.01 ms) | 0.551 (0.03 ms) | 0.736 (0.05 ms) | 0.894 (0.10 ms) | 0.976 (0.16 ms) |
+| 100k embedding-like, 768-d | 0.931 (0.14 ms) | 0.983 (0.26 ms) | 0.998 (0.34 ms) | 0.999 (0.41 ms) | 0.999 (0.31 ms) |
+| 20k iid Gaussian, 64-d | 0.358 (0.01 ms) | 0.543 (0.03 ms) | 0.720 (0.05 ms) | 0.869 (0.08 ms) | 0.965 (0.17 ms) |
+
+With ef_construction 200 the same rows read 0.999 and 0.894 at ef 128: halving
+it cost nothing on embedding-like data and 2.5 points on iid data.
 
 iid Gaussian vectors are the worst case for any approximate index: in many
 dimensions every point is about equally far from every other, so there are no
@@ -209,11 +225,14 @@ like the second row.
 
 ### Takeaways
 
-- Below 100k vectors `flat` costs at most about 30 ms a query and needs no
-  build, so `auto` keeps it.
+- Below 100k vectors `flat` costs at most a few tens of milliseconds a query
+  and needs no build, so `auto` keeps it.
 - At 100k and above, `hnsw` answers in well under a millisecond with
-  near-exact recall on embedding-like data. The graph costs 35 s to a minute per
-  100k vectors to build, single-threaded, on every `serve` start; `serve` answers from `flat`
-  meanwhile and switches when the build finishes. Saving the built graph to
-  disk (spec R10) is the follow-up that would remove the rebuild.
-- `hnsw` holds about 10% more heap than the raw vectors. `flat` holds about 2%.
+  near-exact recall on embedding-like data.
+- `chiton embed` builds the graph on every core, about 3 s at 100k vectors and
+  under a minute and a half at 1M, and saves it. `serve` loads the saved index
+  in under a second at 100k and about 8 s at 1M, then answers from HNSW at once.
+  Only when the saved index is missing or out of date does `serve` answer from
+  `flat` while it builds HNSW in the background.
+- `hnsw` holds about 10% more heap than the raw vectors. `flat` holds about 3%.
+  The saved index adds about 2% of the vector data on disk.

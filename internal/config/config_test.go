@@ -41,7 +41,7 @@ func TestVectorDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	want := VectorConfig{Index: "auto", HNSWThreshold: 100000, HNSWM: 16, HNSWEfSearch: 128, HNSWEfConstruction: 200}
+	want := VectorConfig{Index: "auto", HNSWThreshold: 100000, HNSWM: 16, HNSWEfSearch: 128, HNSWEfConstruction: 100}
 	if cfg.Vector != want {
 		t.Errorf("Vector = %+v, want %+v", cfg.Vector, want)
 	}

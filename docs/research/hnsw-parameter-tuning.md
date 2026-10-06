@@ -95,7 +95,7 @@ Latency at ef=128: 0.57 ms (768-d embedding-like), 0.13-0.22 ms (iid 128-d); `Fl
 | same, if sweep on real data gives recall@8 < 0.95 | 32 | 200 | 128-256 | HNSW |
 | `--link-similar` bulk | 16 | 200 | 64 | HNSW; edges are INFERRED, misses are acceptable per spec R9 |
 
-These equal the current constants in `internal/vector/hnsw.go`. Basis: M=16/efC=200 are hnswlib's defaults and inside the paper's range; efSearch=128 is a measured choice here (recall 1.0 on structured data, sub-millisecond), not a sourced one. The comment in `hnsw.go` says the defaults came from "the recall sweep in docs/BENCHMARK.md", but BENCHMARK.md contained no HNSW section when I checked (grep for hnsw/recall found nothing); update one or the other.
+These were the constants in `internal/vector/hnsw.go` when this note was written. `ef_construction` has since been lowered to 100 to halve build time; a rerun of the sweep in docs/BENCHMARK.md measured no recall change on embedding-like data and 2.5 points (0.894 to 0.869 at ef 128) on iid data. The build is also parallel now. Basis: M=16/efC=200 are hnswlib's defaults and inside the paper's range; efSearch=128 is a measured choice here (recall 1.0 on structured data, sub-millisecond), not a sourced one. The comment in `hnsw.go` says the defaults came from "the recall sweep in docs/BENCHMARK.md", but BENCHMARK.md contained no HNSW section when I checked (grep for hnsw/recall found nothing); update one or the other.
 
 ## Conflicts and caveats
 

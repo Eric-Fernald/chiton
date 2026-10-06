@@ -1,9 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"math/rand"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -79,7 +85,7 @@ func TestServeIndexBelowThresholdIsFlat(t *testing.T) {
 		return nil, nil
 	}
 	idx, ready, err := serveIndex(context.Background(), config.VectorConfig{Index: "auto", HNSWThreshold: 10},
-		embsOf(3, 3, 3), reload, logf)
+		embsOf(3, 3, 3), reload, savedIndex{}, logf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +107,7 @@ func TestServeIndexBuildsHNSWInBackground(t *testing.T) {
 		return embsOf(3, 3, 3, 3), nil
 	}
 	idx, ready, err := serveIndex(context.Background(), config.VectorConfig{Index: "auto", HNSWThreshold: 4},
-		embsOf(3, 3, 3, 3), reload, logf)
+		embsOf(3, 3, 3, 3), reload, savedIndex{}, logf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +130,7 @@ func TestServeIndexKeepsFlatWhenReloadFails(t *testing.T) {
 	var logs []string
 	logf := func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }
 	reload := func(context.Context) ([]store.Embedding, error) { return nil, errors.New("store closed") }
-	idx, ready, err := serveIndex(context.Background(), config.VectorConfig{Index: "hnsw"}, embsOf(3, 3), reload, logf)
+	idx, ready, err := serveIndex(context.Background(), config.VectorConfig{Index: "hnsw"}, embsOf(3, 3), reload, savedIndex{}, logf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,10 +144,146 @@ func TestServeIndexKeepsFlatWhenReloadFails(t *testing.T) {
 }
 
 func TestServeIndexRejectsUnknownBackend(t *testing.T) {
-	_, _, err := serveIndex(context.Background(), config.VectorConfig{Index: "x"}, embsOf(2), nil,
+	_, _, err := serveIndex(context.Background(), config.VectorConfig{Index: "x"}, embsOf(2), nil, savedIndex{},
 		func(string, ...any) {})
 	if err == nil {
 		t.Fatal("unknown backend accepted")
+	}
+}
+
+// fakeEmbeddings is an EmbeddingStore whose AllEmbeddings returns a fresh copy each call, as a real store does.
+type fakeEmbeddings struct {
+	embs  []store.Embedding
+	loads int
+}
+
+func (f *fakeEmbeddings) UpsertEmbeddings(context.Context, []store.Embedding) error { return nil }
+
+func (f *fakeEmbeddings) AllEmbeddings(context.Context) ([]store.Embedding, error) {
+	f.loads++
+	out := make([]store.Embedding, len(f.embs))
+	for i, e := range f.embs {
+		out[i] = store.Embedding{NodeID: e.NodeID, Vec: slices.Clone(e.Vec)}
+	}
+	return out, nil
+}
+
+func randomEmbs(n, dim int) []store.Embedding {
+	rng := rand.New(rand.NewSource(21))
+	embs := make([]store.Embedding, n)
+	for i := range embs {
+		v := make([]float32, dim)
+		for j := range v {
+			v[j] = float32(rng.NormFloat64())
+		}
+		embs[i] = store.Embedding{NodeID: fmt.Sprintf("sym:%04d", i), Vec: v}
+	}
+	return embs
+}
+
+func TestSavedIndexServesWithoutBuilding(t *testing.T) {
+	cfg := config.VectorConfig{Index: "auto", HNSWThreshold: 100}
+	es := &fakeEmbeddings{embs: randomEmbs(300, 16)}
+	saved := savedIndex{Path: filepath.Join(t.TempDir(), "hnsw.idx"), Key: bytes.Repeat([]byte{3}, 32)}
+	var logs []string
+	logf := func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }
+
+	built, err := saveIndex(context.Background(), cfg, es, saved, logf)
+	if err != nil || built == nil || vector.BackendName(built) != "hnsw" {
+		t.Fatalf("saveIndex = %v, %v", built, err)
+	}
+	if again, err := saveIndex(context.Background(), cfg, es, saved, logf); err != nil || again == nil ||
+		!strings.Contains(logs[len(logs)-1], "is current") {
+		t.Fatalf("second saveIndex = %v, %v, logs %q; want the saved index reused", again, err, logs)
+	}
+
+	logs = nil
+	reload := func(context.Context) ([]store.Embedding, error) {
+		t.Fatal("serve rebuilt despite a current saved index")
+		return nil, nil
+	}
+	embs, _ := es.AllEmbeddings(context.Background())
+	idx, ready, err := serveIndex(context.Background(), cfg, embs, reload, saved, logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-ready
+	if vector.BackendName(idx) != "hnsw" || idx.Len() != 300 || len(logs) != 1 || !strings.Contains(logs[0], "loaded") {
+		t.Fatalf("backend %s, Len %d, logs %q", vector.BackendName(idx), idx.Len(), logs)
+	}
+	for i, e := range embs {
+		if e.Vec != nil {
+			t.Fatalf("embs[%d].Vec not released after loading", i)
+		}
+	}
+	q := randomEmbs(1, 16)[0].Vec
+	if a, b := built.Search(q, 5), idx.Search(q, 5); !slices.Equal(a, b) {
+		t.Fatalf("loaded index answers differently:\n%v\n%v", a, b)
+	}
+}
+
+func TestStaleSavedIndexFallsBackToBackgroundBuild(t *testing.T) {
+	cfg := config.VectorConfig{Index: "hnsw"}
+	es := &fakeEmbeddings{embs: randomEmbs(50, 8)}
+	saved := savedIndex{Path: filepath.Join(t.TempDir(), "hnsw.idx")}
+	if _, err := saveIndex(context.Background(), cfg, es, saved, func(string, ...any) {}); err != nil {
+		t.Fatal(err)
+	}
+	es.embs[10].Vec[0] += 1 // the store changed after the save
+
+	var mu sync.Mutex
+	var logs []string
+	logf := func(f string, a ...any) { mu.Lock(); logs = append(logs, fmt.Sprintf(f, a...)); mu.Unlock() }
+	embs, _ := es.AllEmbeddings(context.Background())
+	idx, ready, err := serveIndex(context.Background(), cfg, embs, es.AllEmbeddings, saved, logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-ready
+	mu.Lock()
+	defer mu.Unlock()
+	if vector.BackendName(idx) != "hnsw" || idx.Len() != 50 || !strings.Contains(logs[0], "out of date") {
+		t.Fatalf("backend %s, Len %d, logs %q", vector.BackendName(idx), idx.Len(), logs)
+	}
+}
+
+func TestUnreadableSavedIndexReloadsForFlat(t *testing.T) {
+	cfg := config.VectorConfig{Index: "hnsw"}
+	es := &fakeEmbeddings{embs: randomEmbs(40, 8)}
+	saved := savedIndex{Path: filepath.Join(t.TempDir(), "hnsw.idx")}
+	if _, err := saveIndex(context.Background(), cfg, es, saved, func(string, ...any) {}); err != nil {
+		t.Fatal(err)
+	}
+	// Truncate the topology after the header: the fingerprint matches, so the load takes vectors and then fails.
+	data, err := os.ReadFile(saved.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(saved.Path, data[:len(data)-20], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	embs, _ := es.AllEmbeddings(context.Background())
+	loadsBefore := es.loads
+	idx, ready, err := serveIndex(context.Background(), cfg, embs, es.AllEmbeddings, saved, func(string, ...any) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-ready
+	if idx.Len() != 40 || es.loads-loadsBefore != 2 { // one reload for Flat, one for the background build
+		t.Fatalf("Len %d, %d reloads; want 40 and 2", idx.Len(), es.loads-loadsBefore)
+	}
+}
+
+func TestSaveIndexSkipsSmallStores(t *testing.T) {
+	es := &fakeEmbeddings{embs: randomEmbs(10, 4)}
+	saved := savedIndex{Path: filepath.Join(t.TempDir(), "hnsw.idx")}
+	idx, err := saveIndex(context.Background(), config.VectorConfig{Index: "auto", HNSWThreshold: 100}, es, saved,
+		func(string, ...any) {})
+	if err != nil || idx != nil {
+		t.Fatalf("saveIndex = %v, %v; want nothing for a store under the threshold", idx, err)
+	}
+	if _, err := os.Stat(saved.Path); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("index file written for a small store: %v", err)
 	}
 }
 
