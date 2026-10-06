@@ -133,7 +133,7 @@ in-process whisper.cpp backend exists but requires a `-tags whisper_cgo` build.
 | `chiton-out/graph.kuzu/` (default `graph_path`) | The BadgerDB graph: all node text, transcripts, email bodies, embeddings | **Yes**, when a keyfile is present (§2) |
 | `chiton-out/hnsw.idx` | Saved HNSW index: node IDs and graph links, no vectors or text | **Yes**, when the store is encrypted: AES-256-GCM under a key derived from the store's (§2) |
 | `chiton-out/cluster.json`, `chiton-out/cache.json` | Cluster sidecar and content-hash cache | **No — plaintext** |
-| `.chiton/keyfile.json` | Argon2id salt + KDF parameters only (no key, no passphrase) | n/a — no secret in it |
+| `.chiton/keyfile.json` | Argon2id salt, KDF parameters, and a verifier tag (HMAC-SHA256 of the key); no key, no passphrase | n/a — no secret in it |
 | `.chiton/hooks.yaml`, `sources.yaml`, `schema_version`, `.gitignore` | Policy files | **No — plaintext**, and `hooks.yaml`/`sources.yaml` are meant to be committed |
 | `.chiton/baselines/<commit>.json`, `.chiton/llm-analyzed.json` | Finding baselines and LLM-rule state | **No — plaintext** |
 | `chiton export --out <file>` | Full graph snapshot, embeddings inlined | **No — plaintext JSON** |
@@ -249,6 +249,8 @@ passphrase it reveals nothing.
 | Salt | 16 random bytes (hex) | Floor 16 bytes |
 | Key length | 32 bytes | Must be exactly 32 (AES-256) |
 | Cipher | `AES-256-GCM` | A label in the keyfile. It is the cipher for sealed files (`hnsw.idx`); Badger encrypts the store itself in CTR mode |
+
+The keyfile also stores a verifier, an HMAC-SHA256 tag of the derived key over a fixed label, so a mistyped passphrase fails with `wrong passphrase` before any store is opened or created. It gives an attacker nothing new: guessing a passphrase against it costs the same Argon2id run as guessing against the encrypted store. Keyfiles from before this change gain a verifier on the first successful open.
 
 The derivation is deterministic: the same passphrase + same keyfile always
 produce the same 32-byte key, so the encrypted store re-opens reliably. A loaded

@@ -311,13 +311,15 @@ After init, run "chiton build ." to populate the graph.`,
 				if err != nil {
 					return err
 				}
+				// Derive before saving so the keyfile carries a verifier: a later typo then fails clearly instead
+				// of creating the store under the wrong key. Argon2id at 64 MiB takes about a second.
+				key, err := kf.DeriveKey(passphrase)
+				if err != nil {
+					return fmt.Errorf("derive key: %w", err)
+				}
+				kf.SetVerifier(key)
 				if err := kf.Save(keyfilePath, false); err != nil {
 					return err
-				}
-				// Derive once to surface any KDF issues immediately and warm
-				// the password-derivation path (Argon2id at 64 MiB takes ~1s).
-				if _, err := kf.DeriveKey(passphrase); err != nil {
-					return fmt.Errorf("derive key: %w", err)
 				}
 				fmt.Fprintf(out, "init: created %s\n", keyfilePath)
 				fmt.Fprintln(out, "init: passphrase set. Subsequent commands read CHITON_PASSPHRASE from the environment or prompt interactively.")
@@ -338,7 +340,7 @@ After init, run "chiton build ." to populate the graph.`,
 // openGraphStore opens the badger store with encryption if a keyfile is
 // detected next to it. readOnly chooses between Open and OpenReadOnly.
 func openGraphStore(graphPath string, readOnly bool) (*badgerstore.Store, error) {
-	key, _, err := chitoncrypto.ResolveKeyForGraph(graphPath, config.StateDir())
+	key, kf, err := chitoncrypto.ResolveKeyForGraph(graphPath, config.StateDir())
 	if err != nil {
 		return nil, fmt.Errorf("open store: resolve encryption key: %w", err)
 	}
@@ -349,6 +351,12 @@ func openGraphStore(graphPath string, readOnly bool) (*badgerstore.Store, error)
 	gs, err := open(graphPath, badgerstore.Options{EncryptionKey: key})
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w", err)
+	}
+	// Badger rejects a wrong key for an existing store, so a pre-verifier keyfile can now record one.
+	if kf != nil {
+		if err := kf.RecordVerifier(key); err != nil {
+			fmt.Fprintf(os.Stderr, "chiton: warning: could not add a passphrase verifier to the keyfile: %v\n", err)
+		}
 	}
 	return gs, nil
 }

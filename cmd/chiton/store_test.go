@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -40,5 +42,68 @@ func TestServeStateFollowsProjectDir(t *testing.T) {
 	deps := buildSemanticDeps(cmd, cfg, gs, nil)
 	if want := filepath.Join(project, ".chiton", "baselines"); deps.BaselineDir != want {
 		t.Errorf("BaselineDir = %q, want %q", deps.BaselineDir, want)
+	}
+}
+
+// writeKeyfile saves a keyfile with no verifier, as chiton wrote before verifiers, into project/.chiton.
+func writeKeyfile(t *testing.T, project string) string {
+	t.Helper()
+	path := chitoncrypto.ResolveKeyfilePath(filepath.Join(project, config.StateDirName))
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	kf, err := chitoncrypto.DefaultKeyFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := kf.Save(path, false); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// init must record a verifier, so a later typo fails instead of creating a store under the wrong key.
+func TestInitKeyfileRejectsMistypedPassphrase(t *testing.T) {
+	project := testProject(t)
+	t.Setenv(chitoncrypto.EnvVarPassphrase, "correct horse")
+	initc := initCmd()
+	initc.SetArgs([]string{"--dir", project})
+	initc.SetOut(io.Discard)
+	if err := initc.Execute(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	t.Setenv(chitoncrypto.EnvVarPassphrase, "correct hrose")
+	graph := filepath.Join(project, "chiton-out", "graph.kuzu")
+	gs, err := openGraphStore(graph, false)
+	if !errors.Is(err, chitoncrypto.ErrWrongPassphrase) {
+		if gs != nil {
+			gs.Close()
+		}
+		t.Fatalf("openGraphStore with a typo: err = %v, want ErrWrongPassphrase", err)
+	}
+	if _, err := os.Stat(graph); !os.IsNotExist(err) {
+		t.Errorf("a store was created under the mistyped passphrase (stat err %v)", err)
+	}
+}
+
+// A keyfile from before verifiers existed gains one on the first open the store accepts.
+func TestOpenGraphStoreUpgradesLegacyKeyfile(t *testing.T) {
+	project := testProject(t)
+	kfPath := writeKeyfile(t, project)
+	t.Setenv(chitoncrypto.EnvVarPassphrase, "pw")
+
+	gs, err := openGraphStore(filepath.Join(project, "chiton-out", "graph.kuzu"), false)
+	if err != nil {
+		t.Fatalf("openGraphStore: %v", err)
+	}
+	gs.Close()
+
+	kf, err := chitoncrypto.LoadKeyFile(kfPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kf.Verifier == "" {
+		t.Error("legacy keyfile was not upgraded with a verifier after a successful open")
 	}
 }

@@ -154,6 +154,8 @@ dated section.
 
 ### Fixed
 
+- **A mistyped passphrase no longer creates a store you cannot reopen.** `chiton init` now stores a passphrase verifier in `keyfile.json`, and every command checks it. Older keyfiles are upgraded on their next successful open.
+
 - **`.chiton/` state now follows `CHITON_PROJECT_DIR`.** An assistant-launched server started outside the workspace read `diff_findings` baselines and wrote LLM-rule state relative to its own working directory.
 - **A malformed `.chitonrc` is now an error.** It used to be ignored, so a typo silently dropped `graph_path` back to the default and the command opened a different store.
 - **`sync watch` recovers from event overflow.** When fsnotify reports dropped events, the watcher rescans the tree instead of silently missing changes.
