@@ -47,27 +47,75 @@ func openDoc(path string, unmarshal func([]byte, any) error) (doc map[string]any
 	return doc, len(existing) == 0, nil
 }
 
-// saveDoc marshals doc and atomically replaces path with it.
-func saveDoc(path string, doc map[string]any, marshal func(any) ([]byte, error)) error {
+// mcpConfigPerm is the mode a new MCP config gets. These files often hold other servers' API keys in env
+// blocks, so they start owner-only.
+const mcpConfigPerm os.FileMode = 0o600
+
+// saveDoc marshals doc and atomically replaces path's contents with it (see writeKeepingMode).
+func saveDoc(path string, doc map[string]any, marshal func(any) ([]byte, error), newPerm os.FileMode) error {
 	out, err := marshal(doc)
 	if err != nil {
 		return fmt.Errorf("marshal %s: %w", path, err)
 	}
-	if err := fsutil.WriteFileAtomic(path, out, 0o644); err != nil {
+	if err := writeKeepingMode(path, out, newPerm); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 	return nil
 }
 
-// saveOrRemove saves doc to path, or deletes path instead when empty.
-func saveOrRemove(path string, doc map[string]any, empty bool, marshal func(any) ([]byte, error)) error {
-	if !empty {
-		return saveDoc(path, doc, marshal)
+// saveOrRemove saves doc to path, or deletes path instead when empty. A symlink is saved through rather than
+// deleted, so the file it names never keeps a stale chiton entry.
+func saveOrRemove(path string, doc map[string]any, empty bool, marshal func(any) ([]byte, error), newPerm os.FileMode) error {
+	if !empty || isSymlink(path) {
+		return saveDoc(path, doc, marshal, newPerm)
 	}
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove empty %s: %w", path, err)
 	}
 	return nil
+}
+
+// writeKeepingMode atomically replaces the file path names, following a symlink so the link survives. An
+// existing file keeps its exact permissions; a new one gets newPerm minus the umask.
+func writeKeepingMode(path string, data []byte, newPerm os.FileMode) error {
+	target, err := resolveTarget(path)
+	if err != nil {
+		return err
+	}
+	fi, err := os.Stat(target)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	perm := newPerm
+	if fi != nil {
+		perm = fi.Mode().Perm()
+	}
+	if err := fsutil.WriteFileAtomic(target, data, perm); err != nil {
+		return err
+	}
+	if fi == nil {
+		return nil
+	}
+	return os.Chmod(target, perm) // WriteFileAtomic applied the umask; restore the file's own mode
+}
+
+// resolveTarget returns the file path names after following symlinks. A missing path resolves to itself; a
+// dangling symlink is an error rather than a silent replacement.
+func resolveTarget(path string) (string, error) {
+	if !isSymlink(path) {
+		return path, nil
+	}
+	target, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve symlink %s: %w", path, err)
+	}
+	return target, nil
+}
+
+// isSymlink reports whether path itself is a symbolic link.
+func isSymlink(path string) bool {
+	fi, err := os.Lstat(path)
+	return err == nil && fi.Mode()&os.ModeSymlink != 0
 }
 
 // mkdirParent creates path's parent directory.

@@ -198,6 +198,7 @@ anyone running `chiton install` already has a working binary.
 `--assistant` names, the config files written, and per-installer caveats. Paths
 shown as `~/...` are user-global; the rest are relative to `--dir` (your repo
 root). The MCP entry is always registered under the key `chiton`.
+Config writes keep an existing file's permissions and write through a symlink, so the link survives and a dangling link is an error. A newly created MCP config is owner-only (`0600`) because these files often hold other servers' API keys.
 
 | Assistant | install name | MCP config file (project) | MCP config (user-scope) | Rules file | Notes |
 |---|---|---|---|---|---|
