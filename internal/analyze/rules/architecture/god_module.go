@@ -3,6 +3,8 @@ package architecture
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/Eric-Fernald/chiton/internal/analyze"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
@@ -43,7 +45,8 @@ func (GodModule) MatchGraph(_ context.Context, t analyze.GraphTarget) []analyze.
 	}
 
 	var out []analyze.Finding
-	for id, count := range containsOut {
+	for _, id := range slices.Sorted(maps.Keys(containsOut)) { // sorted, so findings come out in a fixed order
+		count := containsOut[id]
 		if count <= GodModuleSymbolThreshold {
 			continue
 		}

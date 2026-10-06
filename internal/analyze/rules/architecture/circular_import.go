@@ -3,6 +3,7 @@ package architecture
 
 import (
 	"context"
+	"maps"
 	"path"
 	"slices"
 	"sort"
@@ -142,7 +143,7 @@ func indexNodesByID(ns []model.Node) map[string]*model.Node {
 }
 
 // findCycles uses Tarjan's algorithm to return the members of each strongly-connected component in adj
-// with more than one node, sorted by ID so the reported cycle is stable across runs.
+// with more than one node. Members and components are sorted by ID, so the output is stable across runs.
 func findCycles(adj map[string][]string) [][]string {
 	index := 0
 	indices := map[string]int{}
@@ -189,11 +190,13 @@ func findCycles(adj map[string][]string) [][]string {
 		}
 	}
 
-	for v := range adj {
+	for _, v := range slices.Sorted(maps.Keys(adj)) {
 		if _, ok := indices[v]; !ok {
 			strongconnect(v)
 		}
 	}
+	// Components are disjoint, so their smallest (first) IDs differ.
+	slices.SortFunc(sccs, func(a, b []string) int { return strings.Compare(a[0], b[0]) })
 	return sccs
 }
 

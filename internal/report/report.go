@@ -56,8 +56,9 @@ func Generate(w io.Writer, results *cluster.Results, edges []model.Edge, opts Op
 	fmt.Fprintln(w)
 
 	byComm := map[int][]cluster.NodeResult{}
-	for _, r := range results.Nodes {
-		byComm[r.CommunityID] = append(byComm[r.CommunityID], r)
+	// all is already in god-node order, so each community's members come out ranked the same way.
+	for _, e := range all {
+		byComm[e.r.CommunityID] = append(byComm[e.r.CommunityID], e.r)
 	}
 	commIDs := make([]int, 0, len(byComm))
 	for id := range byComm {
@@ -68,12 +69,6 @@ func Generate(w io.Writer, results *cluster.Results, edges []model.Edge, opts Op
 	fmt.Fprintf(w, "## Communities\n\n")
 	for _, cid := range commIDs {
 		members := byComm[cid]
-		sort.Slice(members, func(i, j int) bool {
-			if members[i].Betweenness != members[j].Betweenness {
-				return members[i].Betweenness > members[j].Betweenness
-			}
-			return members[i].SourceURI < members[j].SourceURI // stable tie-break
-		})
 		fmt.Fprintf(w, "### Community %d (%d nodes)\n\n", cid, len(members))
 		shown := min(opts.MaxPerCommunity, len(members))
 		for _, m := range members[:shown] {
