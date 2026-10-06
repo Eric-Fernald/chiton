@@ -249,6 +249,7 @@ so the existing 'chiton extract' / pending_extractions flow extracts its concept
 				Kind:        kind,
 				Author:      author,
 				Contributor: contributor,
+				AllowLocal:  true, // the CLI user names the file; only MCP callers are held to http(s)
 			})
 			if err != nil {
 				return err

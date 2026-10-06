@@ -3,6 +3,8 @@ package mcpsrv
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +12,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/extract/meeting"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
+	urlingest "github.com/Eric-Fernald/chiton/internal/ingest/url"
 )
 
 // seedLinkedMeeting ingests a meeting + code symbol and links a decision to it,
@@ -189,5 +192,28 @@ func TestAddURLHandlerNilIngester(t *testing.T) {
 	}
 	if !strings.Contains(resultText(t, res), "unavailable") {
 		t.Errorf("nil ingester should report unavailable, got: %s", resultText(t, res))
+	}
+}
+
+// A prompt-injected add_url("~/.aws/credentials") must not put the file into the graph.
+func TestAddURLHandlerRefusesLocalFiles(t *testing.T) {
+	ctx := context.Background()
+	gs := openStore(t)
+	secret := filepath.Join(t.TempDir(), "credentials")
+	if err := os.WriteFile(secret, []byte("aws_secret_access_key = hunter2"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := addURLHandler(urlingest.New(gs))
+	for _, raw := range []string{secret, model.FileURI(secret)} {
+		res, err := h(ctx, toolReq(map[string]any{"url": raw}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !res.IsError {
+			t.Errorf("add_url(%q) = %s; want a refusal", raw, resultText(t, res))
+		}
+	}
+	if nodes, _ := gs.AllNodes(ctx); len(nodes) != 0 {
+		t.Fatalf("add_url ingested a local file: %d nodes", len(nodes))
 	}
 }

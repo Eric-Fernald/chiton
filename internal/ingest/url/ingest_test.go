@@ -147,3 +147,36 @@ func TestHostAllowedBlocksPrivate(t *testing.T) {
 		t.Errorf("hostAllowed(public IP) = %v; want allowed", err)
 	}
 }
+
+// recordingFetcher records whether fetch ran, so a test can prove a refused input never reached it.
+type recordingFetcher struct{ called bool }
+
+func (f *recordingFetcher) fetch(context.Context, string) (*fetchResult, error) {
+	f.called = true
+	return &fetchResult{contentType: "text/plain", body: []byte("aws_secret_access_key = hunter2")}, nil
+}
+
+func TestAddRefusesLocalInputsUnlessAllowed(t *testing.T) {
+	ctx := context.Background()
+	for _, raw := range []string{
+		"/etc/passwd", `C:\Users\me\.aws\credentials`, "~/.aws/credentials",
+		"file:///etc/passwd", "FILE:///etc/passwd", "ftp://example.com/x", "https:///no-host",
+	} {
+		ing, _ := newIngester(t, nil)
+		rf := &recordingFetcher{}
+		ing.fetcher = rf
+		if _, err := ing.Add(ctx, raw, AddOptions{}); err == nil {
+			t.Errorf("Add(%q) succeeded; want it refused without AllowLocal", raw)
+		}
+		if rf.called {
+			t.Errorf("Add(%q) reached the fetcher", raw)
+		}
+	}
+
+	ing, _ := newIngester(t, nil)
+	rf := &recordingFetcher{}
+	ing.fetcher = rf
+	if _, err := ing.Add(ctx, "/tmp/notes.txt", AddOptions{AllowLocal: true}); err != nil || !rf.called {
+		t.Fatalf("Add with AllowLocal = %v (fetched=%v); want the CLI path to keep reading local files", err, rf.called)
+	}
+}

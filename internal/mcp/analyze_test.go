@@ -3,6 +3,7 @@ package mcpsrv
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -147,11 +148,41 @@ func TestSubmitAnalysisReadOnlyStore(t *testing.T) {
 }
 
 func TestPendingAnalysesNilService(t *testing.T) {
-	res, err := pendingAnalysesHandler(nil)(context.Background(), toolReq(map[string]any{}))
+	res, err := pendingAnalysesHandler(nil, ".")(context.Background(), toolReq(map[string]any{}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(resultText(t, res), "unavailable") {
 		t.Fatalf("expected unavailable message, got %q", resultText(t, res))
+	}
+}
+
+// Task specs carry file contents, so pending_analyses must not walk outside the project root.
+func TestPendingAnalysesStaysInsideProjectRoot(t *testing.T) {
+	ctx := context.Background()
+	root, outside := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "in.go"), []byte("package in\n\nfunc F() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "secret.go"), []byte("package s\n\nconst key = \"hunter2\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := pendingAnalysesHandler(analyze.NewLLMService(openStore(t), nil, 0.5, t.TempDir()), root)
+
+	for _, p := range []string{outside, "..", filepath.Join("..", filepath.Base(outside))} {
+		res, err := h(ctx, toolReq(map[string]any{"path": p}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !res.IsError || strings.Contains(resultText(t, res), "hunter2") {
+			t.Errorf("pending_analyses(path=%q) was not refused: %s", p, resultText(t, res))
+		}
+	}
+	res, err := h(ctx, toolReq(map[string]any{"limit": 1}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError || !strings.Contains(resultText(t, res), "in.go") {
+		t.Errorf("the default path should walk the project root: %s", resultText(t, res))
 	}
 }

@@ -38,6 +38,8 @@ type Deps struct {
 	// BaselineDir is where diff_findings reads saved baselines from
 	// (default: .chiton/baselines).
 	BaselineDir string
+	// ProjectRoot confines pending_analyses' path argument (default "."; serve passes config.ProjectDir()).
+	ProjectRoot string
 }
 
 // New creates an MCPServer exposing chiton's tools over gs. overlay (nil before any cluster pass)
@@ -60,7 +62,7 @@ func New(gs store.GraphStore, overlay *cluster.Results, deps Deps) *mcpsdk.MCPSe
 		baselineDir = analyze.BaselineDir(".chiton")
 	}
 	s.AddTool(diffFindingsTool(), diffFindingsHandler(gs, baselineDir))
-	s.AddTool(pendingAnalysesTool(), pendingAnalysesHandler(deps.LLM))
+	s.AddTool(pendingAnalysesTool(), pendingAnalysesHandler(deps.LLM, cmp.Or(deps.ProjectRoot, ".")))
 	s.AddTool(submitAnalysisTool(), submitAnalysisHandler(deps.LLM))
 	// Phase 4: meetings & external sources.
 	s.AddTool(searchMeetingsTool(), searchMeetingsHandler(gs))

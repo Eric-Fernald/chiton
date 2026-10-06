@@ -134,3 +134,41 @@ func TestWriteFileAtomicRetriesHeldFileOnWindows(t *testing.T) {
 		t.Fatalf("content = %q, want %q", got, "new")
 	}
 }
+
+func TestResolveWithin(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	pkg := filepath.Join(root, "pkg")
+	if err := os.Mkdir(pkg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		in, want string // want "" means p must be refused
+	}{
+		{".", root},
+		{"pkg", pkg},
+		{pkg, pkg},
+		{filepath.Join("pkg", ".."), root},
+		{"..", ""},
+		{filepath.Join("pkg", "..", ".."), ""},
+		{outside, ""},
+		{"missing", ""},
+	} {
+		got, err := ResolveWithin(root, tc.in)
+		if tc.want == "" {
+			if err == nil {
+				t.Errorf("ResolveWithin(%q) = %q, want an error", tc.in, got)
+			}
+			continue
+		}
+		if err != nil || got != tc.want {
+			t.Errorf("ResolveWithin(%q) = %q, %v; want %q", tc.in, got, err, tc.want)
+		}
+	}
+
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if got, err := ResolveWithin(root, "escape"); err == nil {
+		t.Errorf("ResolveWithin followed a symlink out of root to %q", got)
+	}
+}

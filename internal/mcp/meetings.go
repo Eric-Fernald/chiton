@@ -165,10 +165,10 @@ func decisionsAboutHandler(gs store.GraphStore) mcpsdk.ToolHandlerFunc {
 
 func addURLTool() mcplib.Tool {
 	return mcplib.NewTool("add_url",
-		mcplib.WithDescription("Fetch a URL (article, paper PDF, or YouTube transcript) or local file and ingest its readable text as a url node with doc_section children, so its concepts are extracted by the normal pending_extractions flow. Idempotent: re-adding a URL replaces it. Requires a writable store (chiton serve --writable)."),
+		mcplib.WithDescription("Fetch an http(s) URL (article, paper PDF, or YouTube transcript) and ingest its readable text as a url node with doc_section children, so its concepts are extracted by the normal pending_extractions flow. Local paths and file:// URLs are refused here; the 'chiton add-url' CLI ingests local files. Idempotent: re-adding a URL replaces it. Requires a writable store (chiton serve --writable)."),
 		mcplib.WithString("url",
 			mcplib.Required(),
-			mcplib.Description("The URL (http/https/file) or local path to ingest."),
+			mcplib.Description("The http or https URL to ingest."),
 		),
 		mcplib.WithString("kind",
 			mcplib.Description("Optional content hint: paper | article | tweet | video | document."),

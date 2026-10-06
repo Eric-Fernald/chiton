@@ -167,7 +167,8 @@ func (s *LLMService) Pending(_ context.Context, root, ruleFilter string, limit i
 			}
 			return nil
 		}
-		if extast.ForFile(path) == nil {
+		// A symlinked file can point anywhere, and its content would ship verbatim in the task input.
+		if d.Type()&fs.ModeSymlink != 0 || extast.ForFile(path) == nil {
 			return nil
 		}
 		ext := FileExt(path)

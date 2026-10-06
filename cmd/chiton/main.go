@@ -952,6 +952,7 @@ func buildSemanticDeps(cmd *cobra.Command, cfg *config.Config, gs store.GraphSto
 	// store's read-only flag) and URL ingest (add_url; also read-only-guarded).
 	deps.MeetingLinker = meeting.NewLinkService(gs, cfg.Semantic.ConfidenceThreshold)
 	deps.URLIngester = urlingest.New(gs)
+	deps.ProjectRoot = config.ProjectDir()
 
 	emb, err := newEmbedder(cfg, "", "")
 	if err != nil {

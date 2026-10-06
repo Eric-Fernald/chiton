@@ -227,6 +227,15 @@ func isBlockedIP(ip net.IP) bool {
 		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
 }
 
+// requireRemote rejects anything but an absolute http(s) URL, so an assistant-driven add_url can't read local files.
+func requireRemote(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" || (!strings.EqualFold(u.Scheme, "http") && !strings.EqualFold(u.Scheme, "https")) {
+		return fmt.Errorf("add-url: only http/https URLs are accepted here (got %q); use the 'chiton add-url' CLI for local files", rawURL)
+	}
+	return nil
+}
+
 func isYouTube(host string) bool {
 	host = strings.ToLower(host)
 	host = strings.TrimPrefix(host, "www.")

@@ -58,6 +58,8 @@ type AddOptions struct {
 	Author       string
 	Contributor  string
 	MaxTextBytes int // per-section cap; 0 = default
+	// AllowLocal permits bare paths and file:// URLs. The CLI sets it; the MCP add_url tool never does.
+	AllowLocal bool
 }
 
 // Report summarises one Add.
@@ -80,6 +82,11 @@ func (ing *Ingester) Add(ctx context.Context, rawURL string, opts AddOptions) (R
 	}
 	if store.IsReadOnly(ing.store) {
 		return Report{}, fmt.Errorf("add-url: store is read-only — restart 'chiton serve --writable' or use the 'chiton add-url' CLI")
+	}
+	if !opts.AllowLocal {
+		if err := requireRemote(rawURL); err != nil {
+			return Report{}, err
+		}
 	}
 
 	fr, err := ing.fetcher.fetch(ctx, rawURL)

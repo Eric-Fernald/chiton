@@ -464,9 +464,10 @@ context, by any page that can talk to `127.0.0.1`.
 ### 5.3 `add_url` — assistant-driven fetching
 
 On a `--writable` server, `add_url` lets the assistant make chiton fetch **any
-http/https URL**, and also lets it read **an arbitrary local file path or
-`file://` URL** and put the contents in the graph. This is the widest capability
-chiton exposes over MCP.
+http/https URL**. This is the widest capability chiton exposes over MCP. It
+accepts only http/https; bare paths and `file://` URLs are refused, so an
+injected instruction can't make it read a local file. `pending_analyses` is
+likewise confined to the project root and skips symlinked files.
 
 Shipped mitigations (`internal/ingest/url/`):
 
@@ -487,8 +488,8 @@ Acknowledged residual gaps, stated plainly:
   not implemented.
 - **The `yt-dlp` branch bypasses `hostAllowed` entirely.** A YouTube-shaped host
   goes straight to the subprocess without the SSRF check.
-- **Local file reads are not path-restricted.** `add_url` with a bare path or a
-  `file://` URL will read anything the chiton process can read.
+- Over MCP `add_url` accepts only http/https; local reads are CLI-only
+  (`chiton add-url`).
 
 If you run `chiton serve --writable`, you are trusting the assistant with those
 capabilities. The read-only default exists precisely so that you have to opt in.
