@@ -406,17 +406,20 @@ ones — is in the graph as `url` nodes, ungated, retrievable by any read tool.
 
 ## 4. Credentials and secrets
 
-Every secret chiton uses is read **from the environment only**. None is
+Every secret chiton uses is read from the environment, or for the two webhook
+secrets from a file you name with `--signing-secret-file` / `--client-state-file`.
+No secret is accepted as a flag value, where `ps` and shell history would record
+it. None is
 persisted to disk, written to a config file, or logged.
 
 | Variable | Used by | Sent to |
 |---|---|---|
 | `CHITON_PASSPHRASE` | Every command that opens an encrypted store | Nowhere — derived locally into an AES key |
 | `CHITON_SLACK_TOKEN` | `chiton slack fetch`, `slack serve-events` | `slack.com` as `Authorization: Bearer …` |
-| `CHITON_SLACK_SIGNING_SECRET` | `chiton slack serve-events` | Nowhere — used locally to verify inbound request signatures |
+| `CHITON_SLACK_SIGNING_SECRET` | `chiton slack serve-events` (or `--signing-secret-file`) | Nowhere — used locally to verify inbound request signatures |
 | `CHITON_GMAIL_TOKEN` | `chiton email gmail` | `gmail.googleapis.com` as `Authorization: Bearer …` |
 | `CHITON_OUTLOOK_CLIENT_SECRET` (with `_TENANT_ID`, `_CLIENT_ID`, `_USER_ID`) | `chiton email outlook` (`msgraph` builds only) | `login.microsoftonline.com` to mint a token |
-| `CHITON_TEAMS_CLIENT_SECRET` (with `_TENANT_ID`, `_CLIENT_ID`, `_USER_ID`, `_CLIENT_STATE`) | `chiton teams fetch`, `teams serve-webhook` (`msgraph` builds only) | `login.microsoftonline.com` to mint a token; `CLIENT_STATE` stays local and validates inbound notifications |
+| `CHITON_TEAMS_CLIENT_SECRET` (with `_TENANT_ID`, `_CLIENT_ID`, `_USER_ID`, `_CLIENT_STATE`) | `chiton teams fetch`, `teams serve-webhook` (or `--client-state-file`) (`msgraph` builds only) | `login.microsoftonline.com` to mint a token; `CLIENT_STATE` stays local and validates inbound notifications |
 
 Handling properties worth verifying yourself:
 

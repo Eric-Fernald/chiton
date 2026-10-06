@@ -278,7 +278,7 @@ back to the right workspace.
 | Variable | Meaning |
 |---|---|
 | `CHITON_SLACK_TOKEN` | Bot/user OAuth token (`xoxb-…`). Needs `channels:history` / `groups:history`, plus `users:read` to resolve author names. Required by both subcommands. |
-| `CHITON_SLACK_SIGNING_SECRET` | Slack app signing secret, used to verify every Events API request. `chiton slack serve-events` **refuses to start** without it (or `--signing-secret`). |
+| `CHITON_SLACK_SIGNING_SECRET` | Slack app signing secret, used to verify every Events API request. `chiton slack serve-events` **refuses to start** without it (or a file named by `--signing-secret-file`). |
 
 `serve-events` binds `127.0.0.1:8445` by default and warns loudly if `--addr`
 points at a wildcard address; Slack needs a public HTTPS Request URL, so put a
@@ -290,7 +290,7 @@ tunnel or reverse proxy in front rather than binding wide.
 |---|---|
 | `CHITON_TEAMS_TENANT_ID`, `CHITON_TEAMS_CLIENT_ID`, `CHITON_TEAMS_CLIENT_SECRET` | App-only Graph credentials. |
 | `CHITON_TEAMS_USER_ID` | The meeting organizer whose meetings to read (app-only auth has no `/me`). |
-| `CHITON_TEAMS_CLIENT_STATE` | Shared secret validating Graph change notifications. `chiton teams serve-webhook` **refuses to start** without it (or `--client-state`) rather than accepting unauthenticated notifications. |
+| `CHITON_TEAMS_CLIENT_STATE` | Shared secret validating Graph change notifications. `chiton teams serve-webhook` **refuses to start** without it (or a file named by `--client-state-file`) rather than accepting unauthenticated notifications. |
 
 `serve-webhook` binds `127.0.0.1:8444` by default, with the same wildcard
 warning as the Slack receiver.

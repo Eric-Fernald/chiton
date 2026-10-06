@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -69,7 +68,7 @@ func teamsFetchCmd() *cobra.Command {
 }
 
 func teamsWebhookCmd() *cobra.Command {
-	var addr, clientState string
+	var addr, stateFile string
 
 	cmd := &cobra.Command{
 		Use:   "serve-webhook",
@@ -77,18 +76,23 @@ func teamsWebhookCmd() *cobra.Command {
 		Long: `Run an HTTP receiver for Microsoft Graph change notifications. On a
 transcript-created notification it fetches and ingests that meeting's
 transcripts. Register a Graph subscription pointing at this endpoint with a
-clientState matching --client-state (or CHITON_TEAMS_CLIENT_STATE).
+clientState matching CHITON_TEAMS_CLIENT_STATE (or the contents of the file
+named by --client-state-file).
 
 Bind to localhost behind a tunnel/reverse proxy; Graph requires HTTPS and a
 public URL for the subscription itself.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if clientState == "" {
-				clientState = os.Getenv("CHITON_TEAMS_CLIENT_STATE")
+			if err := secretFlagRemoved(cmd, "client-state", "client-state-file", "CHITON_TEAMS_CLIENT_STATE"); err != nil {
+				return err
+			}
+			clientState, err := readSecret(stateFile, "CHITON_TEAMS_CLIENT_STATE")
+			if err != nil {
+				return err
 			}
 			if clientState == "" {
 				// Fail fast rather than starting a receiver that cannot
 				// authenticate anything. Matches `slack serve-events`.
-				return fmt.Errorf("a Graph subscription clientState is required: set CHITON_TEAMS_CLIENT_STATE or pass --client-state")
+				return fmt.Errorf("a Graph subscription clientState is required: set CHITON_TEAMS_CLIENT_STATE or pass --client-state-file <path>")
 			}
 			warnIfNonLoopback(cmd.ErrOrStderr(), addr, "the Teams webhook receiver")
 			src, err := teams.NewGraphSourceFromEnv()
@@ -128,6 +132,8 @@ public URL for the subscription itself.`,
 		},
 	}
 	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8444", "HTTP listen address (loopback by default; put a tunnel or reverse proxy in front)")
-	cmd.Flags().StringVar(&clientState, "client-state", "", "shared secret to validate notifications (or CHITON_TEAMS_CLIENT_STATE)")
+	cmd.Flags().StringVar(&stateFile, "client-state-file", "", "file holding the shared secret that validates notifications (default: CHITON_TEAMS_CLIENT_STATE)")
+	cmd.Flags().String("client-state", "", "removed: use --client-state-file or CHITON_TEAMS_CLIENT_STATE")
+	_ = cmd.Flags().MarkHidden("client-state")
 	return cmd
 }

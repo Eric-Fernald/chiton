@@ -203,6 +203,8 @@ dated section.
 
 ### Security
 
+- **Webhook secrets no longer go on the command line.** `--signing-secret` and `--client-state` are removed and now fail with a pointer to `--signing-secret-file` / `--client-state-file`, which read the secret from a file. The `CHITON_SLACK_SIGNING_SECRET` and `CHITON_TEAMS_CLIENT_STATE` env vars work as before.
+
 - **`chiton serve --unix` creates its socket owner-only (`0600`).** Its mode used to follow the umask, which could let group members or every local user read the graph.
 - **A repository's `.chitonrc` can no longer send your text off-device.** A non-loopback `embed.endpoint` set by the project `.chitonrc` is refused. Set `CHITON_EMBED_ENDPOINT` yourself to use a remote embedder.
 - The graph tools (`get_node`, `query_graph`, `get_node_neighborhood`, `shortest_path`, `semantic_search`, `god_nodes`, `graph_summary`) now redact people's names, email addresses, speakers and assignees by default; `chiton serve --include-pii` restores them.

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -68,7 +67,7 @@ func slackFetchCmd() *cobra.Command {
 }
 
 func slackEventsCmd() *cobra.Command {
-	var addr, signingSecret string
+	var addr, secretFile string
 
 	cmd := &cobra.Command{
 		Use:   "serve-events",
@@ -78,16 +77,21 @@ re-ingests that message's thread (or channel) so the graph stays current.
 Configure the app's Request URL to point at this endpoint; chiton performs the
 url_verification handshake and verifies every request's X-Slack-Signature.
 
-Set CHITON_SLACK_SIGNING_SECRET (or --signing-secret). Bind to localhost behind
-a tunnel/reverse proxy; Slack requires a public HTTPS Request URL.`,
+Set CHITON_SLACK_SIGNING_SECRET, or pass --signing-secret-file with the path of
+a file that holds it. Bind to localhost behind a tunnel/reverse proxy; Slack
+requires a public HTTPS Request URL.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if signingSecret == "" {
-				signingSecret = os.Getenv("CHITON_SLACK_SIGNING_SECRET")
+			if err := secretFlagRemoved(cmd, "signing-secret", "signing-secret-file", "CHITON_SLACK_SIGNING_SECRET"); err != nil {
+				return err
+			}
+			signingSecret, err := readSecret(secretFile, "CHITON_SLACK_SIGNING_SECRET")
+			if err != nil {
+				return err
 			}
 			if signingSecret == "" {
 				// Fail fast with a clear message rather than starting a server
 				// that rejects every (unauthenticatable) request.
-				return fmt.Errorf("a Slack signing secret is required: set CHITON_SLACK_SIGNING_SECRET or pass --signing-secret")
+				return fmt.Errorf("a Slack signing secret is required: set CHITON_SLACK_SIGNING_SECRET or pass --signing-secret-file <path>")
 			}
 			warnIfNonLoopback(cmd.ErrOrStderr(), addr, "the Slack events receiver")
 			src, err := slack.NewWebClientFromEnv()
@@ -127,7 +131,9 @@ a tunnel/reverse proxy; Slack requires a public HTTPS Request URL.`,
 		},
 	}
 	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8445", "HTTP listen address (loopback by default; put a tunnel or reverse proxy in front)")
-	cmd.Flags().StringVar(&signingSecret, "signing-secret", "", "Slack app signing secret (or CHITON_SLACK_SIGNING_SECRET)")
+	cmd.Flags().StringVar(&secretFile, "signing-secret-file", "", "file holding the Slack app signing secret (default: CHITON_SLACK_SIGNING_SECRET)")
+	cmd.Flags().String("signing-secret", "", "removed: use --signing-secret-file or CHITON_SLACK_SIGNING_SECRET")
+	_ = cmd.Flags().MarkHidden("signing-secret")
 	return cmd
 }
 
