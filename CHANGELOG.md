@@ -203,6 +203,7 @@ dated section.
 
 ### Security
 
+- **`chiton serve --unix` creates its socket owner-only (`0600`).** Its mode used to follow the umask, which could let group members or every local user read the graph.
 - **A repository's `.chitonrc` can no longer send your text off-device.** A non-loopback `embed.endpoint` set by the project `.chitonrc` is refused. Set `CHITON_EMBED_ENDPOINT` yourself to use a remote embedder.
 - The graph tools (`get_node`, `query_graph`, `get_node_neighborhood`, `shortest_path`, `semantic_search`, `god_nodes`, `graph_summary`) now redact people's names, email addresses, speakers and assignees by default; `chiton serve --include-pii` restores them.
 - `submit_extraction` rejects a `task_id` that isn't a doc_section or image and no longer overwrites concepts other tasks created, so a forged submit can't mark meetings as linked or rewrite concept descriptions.

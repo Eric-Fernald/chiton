@@ -28,7 +28,7 @@ chiton serve --unix /tmp/chiton.sock    # Unix domain socket, SSE (Linux/macOS)
 | `--stdio` | default transport | Serve over stdio (for MCP assistants); still accepted explicitly. |
 | `--http` | unset (e.g. `127.0.0.1:7474`) | HTTP/SSE listen address. Every request must send `Authorization: Bearer <token>`. The token is generated at each start and written to `<graph dir>/mcp-token` (mode 0600, removed on exit), or pinned with `CHITON_MCP_TOKEN` (at least 16 characters). Requests with a browser `Origin` are refused unless the origin is listed with `--allow-origin`. POSTs must be `Content-Type: application/json`. There is no TLS, and a non-loopback bind prints a warning. |
 | `--allow-origin` | none | Browser origin allowed to call the HTTP transport (repeatable). `*` is rejected. |
-| `--unix` | `""` | Serve over a Unix domain socket at this path (Linux/macOS shared daemon). |
+| `--unix` | `""` | Serve over a Unix domain socket at this path (Linux/macOS shared daemon). The socket is created owner-only (`0600`). |
 | `--writable` | `false` | Open the store read-write so the write tools work over MCP. The server then holds the store exclusively; no other chiton process can open it until it exits. |
 | `--graph` | `""` | Graph store path to serve (default: configured/built-in `graph_path`). |
 | `--include-pii` | `false` | Return people's names and email addresses from the generic graph tools, which redact them by default (see [PII redaction](#pii-redaction)). |

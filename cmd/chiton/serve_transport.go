@@ -33,7 +33,7 @@ func serveUnix(cmd *cobra.Command, sse *mcpsdk.SSEServer, path string) error {
 		}
 	}
 
-	ln, err := net.Listen("unix", path)
+	ln, err := listenUnixPrivate(path)
 	if err != nil {
 		return fmt.Errorf("listen on unix socket %s: %w", path, err)
 	}

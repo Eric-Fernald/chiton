@@ -446,7 +446,7 @@ of them identifies the caller beyond that.
 |---|---|---|
 | `chiton serve --http <addr>` | the given address, HTTP + SSE | Per-start bearer token + Origin allowlist + JSON-only POST (no TLS) |
 | `chiton serve --stdio` | *no socket at all* | n/a |
-| `chiton serve --unix <path>` | filesystem socket (Linux/macOS) | filesystem permissions only |
+| `chiton serve --unix <path>` | filesystem socket (Linux/macOS) | filesystem permissions: the socket is created `0600`, owner-only |
 | `chiton teams serve-webhook` | `127.0.0.1:8444` | Graph `clientState` shared secret |
 | `chiton slack serve-events` | `127.0.0.1:8445` | Slack request-signature verification |
 
