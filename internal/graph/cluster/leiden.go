@@ -101,6 +101,15 @@ func singletonState(g *graph) *pstate {
 	return &pstate{comm: comm, commDeg: slices.Clone(g.deg)}
 }
 
+// seededState starts g's nodes in the communities comm gives, whose IDs must be below g.n.
+func seededState(g *graph, comm []int) *pstate {
+	commDeg := make([]float64, g.n)
+	for v, c := range comm {
+		commDeg[c] += g.deg[v]
+	}
+	return &pstate{comm: comm, commDeg: commDeg}
+}
+
 // commWeights sums edge weight per neighbouring community in reusable buffers, listing communities in
 // first-seen order so tie-breaks between equal gains are deterministic.
 type commWeights struct {
@@ -133,14 +142,13 @@ func (cw *commWeights) clear() {
 
 // ── local moving ──────────────────────────────────────────────────────────────
 
-// moveNodes moves nodes to the neighbouring community with the best modularity gain for up to 20 sweeps and
-// reports whether any moved. A non-nil coarse keeps each move inside the node's coarse community.
-func moveNodes(g *graph, st *pstate, γ float64, rng *rand.Rand, coarse []int) bool {
+// moveNodes moves nodes to the neighbouring community with the best modularity gain for up to 20 sweeps.
+// A non-nil coarse keeps each move inside the node's coarse community.
+func moveNodes(g *graph, st *pstate, γ float64, rng *rand.Rand, coarse []int) {
 	if g.totalW == 0 {
-		return false
+		return
 	}
 	twoM := 2 * g.totalW
-	improved := false
 	order := make([]int, g.n)
 	nc := newCommWeights(len(st.commDeg))
 
@@ -177,13 +185,11 @@ func moveNodes(g *graph, st *pstate, γ float64, rng *rand.Rand, coarse []int) b
 			st.commDeg[bestComm] += kv
 			st.comm[v] = bestComm
 			moved = true
-			improved = true
 		}
 		if !moved {
 			break
 		}
 	}
-	return improved
 }
 
 // ── Leiden refinement ─────────────────────────────────────────────────────────
@@ -201,6 +207,8 @@ func refine(g *graph, coarseComm []int, γ float64, rng *rand.Rand) []int {
 
 // aggregate builds a reduced graph whose super-nodes are the communities in comm, weighting each edge by the
 // summed inter-community edge weight. It also returns comm compacted to 0-based IDs.
+// A super-node's degree is its members' total, so its internal weight counts as a self-loop (twice) and
+// totalW is unchanged; the self-loop stays out of adj because it moves with the node and cancels in every gain.
 func aggregate(g *graph, comm []int) (*graph, []int) {
 	comm = compactComm(comm)
 	numComm := 0
@@ -209,13 +217,13 @@ func aggregate(g *graph, comm []int) (*graph, []int) {
 	}
 
 	members := make([][]int, numComm)
+	aggDeg := make([]float64, numComm)
 	for u, c := range comm {
 		members[c] = append(members[c], u)
+		aggDeg[c] += g.deg[u]
 	}
 
 	aggAdj := make([][]nbr, numComm)
-	aggDeg := make([]float64, numComm)
-	var totalW float64
 	cw := newCommWeights(numComm)
 	for c, us := range members {
 		cw.clear()
@@ -223,54 +231,51 @@ func aggregate(g *graph, comm []int) (*graph, []int) {
 			cw.add(g.adj[u], comm)
 		}
 		for _, d := range cw.list {
-			if d == c {
-				continue
-			}
-			w := cw.w[d]
-			aggAdj[c] = append(aggAdj[c], nbr{d, w})
-			aggDeg[c] += w
-			if c < d {
-				totalW += w
+			if d != c {
+				aggAdj[c] = append(aggAdj[c], nbr{d, cw.w[d]})
 			}
 		}
 	}
-	return &graph{n: numComm, adj: aggAdj, deg: aggDeg, totalW: totalW}, comm
+	return &graph{n: numComm, adj: aggAdj, deg: aggDeg, totalW: g.totalW}, comm
 }
 
 // ── main loop ─────────────────────────────────────────────────────────────────
 
+// runLeiden alternates local moving, refinement, and aggregation until refinement stops merging nodes. Each
+// aggregate level starts from the unrefined partition, as Leiden requires, not from singletons.
 func runLeiden(g0 *graph, γ float64, rng *rand.Rand) []int {
-	n0 := g0.n
-
 	// nodeToSuper[orig] = super-node index in the current-level graph.
-	nodeToSuper := make([]int, n0)
+	nodeToSuper := make([]int, g0.n)
 	for i := range nodeToSuper {
 		nodeToSuper[i] = i
 	}
 
 	g := g0
+	st := singletonState(g)
 	for {
-		st := singletonState(g)
-		if !moveNodes(g, st, γ, rng, nil) {
-			break
-		}
-
+		moveNodes(g, st, γ, rng, nil)
 		refined := refine(g, st.comm, γ, rng)
 		agg, compactedRefined := aggregate(g, refined)
-
-		// Update nodeToSuper: each original node's super-node is now the fine
-		// community it belongs to, which becomes the aggregate node index.
-		for orig := 0; orig < n0; orig++ {
-			nodeToSuper[orig] = compactedRefined[nodeToSuper[orig]]
-		}
-
 		if agg.n >= g.n {
-			break
+			break // refinement merged nothing, so st.comm is final
+		}
+		for orig, s := range nodeToSuper {
+			nodeToSuper[orig] = compactedRefined[s]
+		}
+		// Each refined community sits inside one unrefined community, which seeds its aggregate node.
+		seed := make([]int, agg.n)
+		for u, r := range compactedRefined {
+			seed[r] = st.comm[u]
 		}
 		g = agg
+		st = seededState(g, compactComm(seed))
 	}
 
-	return compactComm(nodeToSuper)
+	out := make([]int, len(nodeToSuper))
+	for orig, s := range nodeToSuper {
+		out[orig] = st.comm[s]
+	}
+	return compactComm(out)
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

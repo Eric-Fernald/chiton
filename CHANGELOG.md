@@ -146,6 +146,12 @@ dated section.
 
 ### Fixed
 
+- **Leiden no longer collapses the graph into a few giant communities.** Aggregation dropped each
+  community's internal weight from the super-node degree and the total, so every merge looked profitable,
+  and each level restarted from singletons instead of the unrefined partition. On this repo's graph the
+  largest community fell from 87.5% of nodes to 15%, and Zachary's karate club now scores Q ≈ 0.42 (was 0).
+  Re-run `chiton cluster` to refresh `cluster.json`.
+
 - **Git hooks no longer block commits on infrastructure errors.** A locked store (a running `sync watch`),
   an encrypted store with no passphrase, a git error, or a malformed `hooks.yaml` used to fail
   `git commit`, and a failing `sync git --stage …` also failed `git checkout`. These now warn and exit 0.
