@@ -123,3 +123,18 @@ func serveHTTP(cmd *cobra.Command, s *mcpsdk.MCPServer, addr, tokenPath string, 
 		return srv.Shutdown(ctx)
 	})
 }
+
+// transportFor picks serve's transport: --stdio wins, then --unix, then an explicitly set --http. The default is
+// stdio, so a bare 'chiton serve' opens no socket.
+func transportFor(stdio bool, unixPath string, httpSet bool) string {
+	switch {
+	case stdio:
+		return "stdio"
+	case unixPath != "":
+		return "unix"
+	case httpSet:
+		return "http"
+	default:
+		return "stdio"
+	}
+}

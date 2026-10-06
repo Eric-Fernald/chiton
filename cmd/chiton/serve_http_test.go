@@ -168,3 +168,21 @@ func TestMCPHTTPAllowsPreflightAndJSONCharset(t *testing.T) {
 		t.Errorf("POST application/json; charset=utf-8 = %d, want 202", got)
 	}
 }
+
+func TestTransportForDefaultsToStdio(t *testing.T) {
+	for _, tc := range []struct {
+		stdio   bool
+		unix    string
+		httpSet bool
+		want    string
+	}{
+		{false, "", false, "stdio"},
+		{true, "/tmp/c.sock", true, "stdio"},
+		{false, "/tmp/c.sock", true, "unix"},
+		{false, "", true, "http"},
+	} {
+		if got := transportFor(tc.stdio, tc.unix, tc.httpSet); got != tc.want {
+			t.Errorf("transportFor(%v, %q, %v) = %q, want %q", tc.stdio, tc.unix, tc.httpSet, got, tc.want)
+		}
+	}
+}

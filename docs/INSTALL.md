@@ -228,8 +228,8 @@ written into any assistant config.
 
 | Transport | Flag | Default | Use |
 |---|---|---|---|
-| stdio | `--stdio` | off | Assistant-launched MCP server. This is what every installer records. |
-| HTTP / SSE | `--http <addr>` | `127.0.0.1:7474` | Shared daemon across sessions / debugging (default transport when neither `--stdio` nor `--unix` is given). Every request needs the bearer token (`Authorization: Bearer <token>`). |
+| stdio | `--stdio` | default | Assistant-launched MCP server; the default when no transport flag is given. This is what every installer records. |
+| HTTP / SSE | `--http <addr>` | unset | Shared daemon across sessions / debugging (only when `--http <addr>` is given). Every request needs the bearer token (`Authorization: Bearer <token>`). |
 | Unix socket | `--unix <path>` | *(empty)* | Low-latency shared daemon over a Unix domain socket (Linux/macOS). |
 
 Other `serve` flags:

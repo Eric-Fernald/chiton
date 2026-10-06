@@ -18,16 +18,15 @@ clients is `chiton`, version `0.1.0`. All three transports expose the **identica
 tool surface**.
 
 ```sh
-chiton serve --stdio                    # stdio transport (assistant-launched)
-chiton serve                            # HTTP/SSE on 127.0.0.1:7474 (default)
-chiton serve --http 127.0.0.1:8080      # HTTP/SSE on a custom address
+chiton serve                            # stdio (default; assistant-launched)
+chiton serve --http 127.0.0.1:7474      # HTTP/SSE daemon
 chiton serve --unix /tmp/chiton.sock    # Unix domain socket, SSE (Linux/macOS)
 ```
 
 | Flag | Default | Description |
 |---|---|---|
-| `--stdio` | `false` | Serve over stdio (for MCP assistants). |
-| `--http` | `127.0.0.1:7474` | HTTP/SSE listen address. Every request must send `Authorization: Bearer <token>`. The token is generated at each start and written to `<graph dir>/mcp-token` (mode 0600, removed on exit), or pinned with `CHITON_MCP_TOKEN` (at least 16 characters). Requests with a browser `Origin` are refused unless the origin is listed with `--allow-origin`. POSTs must be `Content-Type: application/json`. There is no TLS, and a non-loopback bind prints a warning. |
+| `--stdio` | default transport | Serve over stdio (for MCP assistants); still accepted explicitly. |
+| `--http` | unset (e.g. `127.0.0.1:7474`) | HTTP/SSE listen address. Every request must send `Authorization: Bearer <token>`. The token is generated at each start and written to `<graph dir>/mcp-token` (mode 0600, removed on exit), or pinned with `CHITON_MCP_TOKEN` (at least 16 characters). Requests with a browser `Origin` are refused unless the origin is listed with `--allow-origin`. POSTs must be `Content-Type: application/json`. There is no TLS, and a non-loopback bind prints a warning. |
 | `--allow-origin` | none | Browser origin allowed to call the HTTP transport (repeatable). `*` is rejected. |
 | `--unix` | `""` | Serve over a Unix domain socket at this path (Linux/macOS shared daemon). |
 | `--writable` | `false` | Open the store read-write so the write tools work over MCP (disables concurrent `build`/`embed`). |
@@ -41,7 +40,7 @@ Claude Code client config for the SSE transport:
 ```
 
 Transport selection precedence (from `serveCmd`): `--stdio` wins; otherwise
-`--unix` if set; otherwise HTTP/SSE on `--http`.
+`--unix` if set; otherwise HTTP/SSE when `--http` is given; otherwise stdio.
 
 ### Read-only by default vs `--writable`
 

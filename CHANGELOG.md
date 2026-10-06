@@ -88,6 +88,9 @@ dated section.
 
 ### Changed
 
+- `chiton serve` with no transport flag now speaks stdio instead of starting the
+  HTTP/SSE daemon on 127.0.0.1:7474. Pass `--http 127.0.0.1:7474` for the
+  daemon; `--stdio` is still accepted.
 - **Microsoft Graph is now behind the `msgraph` build tag, and the default build
   excludes it.** The Graph SDK links request builders for every top-level Graph
   resource and kiota registers its serialization types through interface tables,

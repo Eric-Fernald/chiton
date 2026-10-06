@@ -415,7 +415,7 @@ of them identifies the caller beyond that.
 
 | Command | Default bind | Auth |
 |---|---|---|
-| `chiton serve` **with no flags** | `127.0.0.1:7474`, HTTP + SSE | Per-start bearer token + Origin allowlist + JSON-only POST (no TLS) |
+| `chiton serve --http <addr>` | the given address, HTTP + SSE | Per-start bearer token + Origin allowlist + JSON-only POST (no TLS) |
 | `chiton serve --stdio` | *no socket at all* | n/a |
 | `chiton serve --unix <path>` | filesystem socket (Linux/macOS) | filesystem permissions only |
 | `chiton teams serve-webhook` | `127.0.0.1:8444` | Graph `clientState` shared secret |
@@ -423,10 +423,8 @@ of them identifies the caller beyond that.
 
 ### 5.1 `chiton serve`
 
-**A bare `chiton serve` with no flags starts the HTTP/SSE transport** — `--http`
-is not opt-in, it is the default, and `--stdio` is what you must ask for. The
-assistant installers and the plugin all pass `--stdio`, so this matters mainly
-when you start a daemon by hand.
+A bare `chiton serve` speaks stdio and opens no socket; HTTP/SSE starts only
+with an explicit `--http <addr>`.
 
 The HTTP/SSE transport has four controls and **no TLS**:
 
