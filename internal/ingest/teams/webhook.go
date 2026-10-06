@@ -7,6 +7,10 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
+
+	"github.com/Eric-Fernald/chiton/internal/jobs"
 )
 
 // ChangeItem is one Microsoft Graph change notification (a transcript created
@@ -24,16 +28,23 @@ type changeNotification struct {
 	Value []ChangeItem `json:"value"`
 }
 
-// WebhookHandler receives Graph change notifications for Teams transcripts. It echoes ?validationToken=…
-// handshakes and dispatches changes whose clientState matches to onChange.
+// notificationDebounce coalesces repeated notifications for one meeting into a single fetch. A var for tests.
+var notificationDebounce = time.Second
+
+// WebhookHandler receives Graph change notifications for Teams transcripts. It echoes ?validationToken=… handshakes
+// and queues changes whose clientState matches for onChange, after acking.
 type WebhookHandler struct {
 	clientState string
 	onChange    func(ctx context.Context, c ChangeItem) error
 	log         func(format string, args ...any)
+
+	queue   *jobs.Queue
+	mu      sync.Mutex
+	pending map[string]ChangeItem // newest change per meeting, taken by the queue worker
 }
 
-// NewWebhookHandler builds a handler. clientState is the shared secret from the Graph subscription, and the
-// handler rejects notifications that don't match it as forged.
+// NewWebhookHandler builds a handler. clientState is the shared secret from the Graph subscription, and the handler
+// rejects notifications that don't match it as forged. onChange runs on one background worker; call Close when done.
 func NewWebhookHandler(clientState string, onChange func(ctx context.Context, c ChangeItem) error, log func(string, ...any)) *WebhookHandler {
 	if log == nil {
 		log = func(string, ...any) {}
@@ -43,7 +54,46 @@ func NewWebhookHandler(clientState string, onChange func(ctx context.Context, c 
 		// to start in that case, and this check is the library's fallback.
 		log("teams webhook: WARNING — clientState is empty; every notification will be rejected")
 	}
-	return &WebhookHandler{clientState: clientState, onChange: onChange, log: log}
+	h := &WebhookHandler{clientState: clientState, onChange: onChange, log: log, pending: map[string]ChangeItem{}}
+	h.queue = jobs.New(h.dispatch, jobs.Options{
+		Workers:  1,
+		Debounce: notificationDebounce,
+		OnError:  func(key string, err error) { log("teams webhook: onChange failed for %s: %v", key, err) },
+	})
+	h.queue.Start(context.Background())
+	return h
+}
+
+// Close stops accepting notifications and finishes every queued ingest. Call it after the server stops.
+func (h *WebhookHandler) Close() { h.queue.Drain() }
+
+// changeKey groups notifications by meeting, since one fetch ingests all of a meeting's transcripts.
+func changeKey(c ChangeItem) string {
+	if meetingID, _, ok := ParseTranscriptResource(c.Resource); ok {
+		return "meeting:" + meetingID
+	}
+	return "resource:" + c.Resource
+}
+
+// enqueue records c as its meeting's newest change and schedules a coalesced dispatch.
+func (h *WebhookHandler) enqueue(c ChangeItem) {
+	key := changeKey(c)
+	h.mu.Lock()
+	h.pending[key] = c
+	h.mu.Unlock()
+	h.queue.Enqueue(key)
+}
+
+// dispatch runs onChange for key's newest pending change. It is the queue's handler.
+func (h *WebhookHandler) dispatch(ctx context.Context, key string) error {
+	h.mu.Lock()
+	c, ok := h.pending[key]
+	delete(h.pending, key)
+	h.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	return h.onChange(ctx, c)
 }
 
 func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -76,16 +126,14 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Drop mismatched clientStates without an error response, so a forged callback can't learn valid states.
-	// The 202 is sent only after every onChange returns, so onChange must fit Graph's 3s ack deadline.
+	// Valid changes only queue here, so the 202 always beats Graph's 3s ack deadline.
 	for _, c := range note.Value {
 		if !h.validState(c.ClientState) {
 			h.log("teams webhook: dropping notification with bad clientState (sub %s)", c.SubscriptionID)
 			continue
 		}
 		if h.onChange != nil {
-			if err := h.onChange(r.Context(), c); err != nil {
-				h.log("teams webhook: onChange failed for %s: %v", c.Resource, err)
-			}
+			h.enqueue(c)
 		}
 	}
 	w.WriteHeader(http.StatusAccepted)

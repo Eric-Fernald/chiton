@@ -283,7 +283,7 @@ back to the right workspace.
 
 `serve-events` binds `127.0.0.1:8445` by default and warns loudly if `--addr`
 points at a wildcard address; Slack needs a public HTTPS Request URL, so put a
-tunnel or reverse proxy in front rather than binding wide.
+tunnel or reverse proxy in front rather than binding wide. The receiver acks each request immediately and ingests on a single background worker, so Slack's and Graph's 3-second ack deadlines are always met; on Ctrl-C it finishes queued ingests before exiting.
 
 **Microsoft Teams** (`chiton teams …` — requires a `-tags msgraph` build)
 
@@ -294,7 +294,7 @@ tunnel or reverse proxy in front rather than binding wide.
 | `CHITON_TEAMS_CLIENT_STATE` | Shared secret validating Graph change notifications. `chiton teams serve-webhook` **refuses to start** without it (or a file named by `--client-state-file`) rather than accepting unauthenticated notifications. |
 
 `serve-webhook` binds `127.0.0.1:8444` by default, with the same wildcard
-warning as the Slack receiver.
+warning as the Slack receiver. The receiver acks each request immediately and ingests on a single background worker, so Slack's and Graph's 3-second ack deadlines are always met; on Ctrl-C it finishes queued ingests before exiting.
 
 **Email**
 

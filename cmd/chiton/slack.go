@@ -107,13 +107,9 @@ requires a public HTTPS Request URL.`,
 			ing := slack.NewIngester(gs, src)
 			out := cmd.OutOrStdout()
 			handler := slack.NewEventsHandler(signingSecret, func(ctx context.Context, ev slack.MessageEvent) error {
-				// A threaded reply re-ingests only its thread, and a top-level message the whole channel.
-				// Re-ingest replaces the conversation by its slack:// URI, so this is idempotent.
-				threadTS := ""
-				if ev.ThreadTS != "" && ev.ThreadTS != ev.TS {
-					threadTS = ev.ThreadTS
-				}
-				rep, err := ing.IngestConversation(ctx, ev.ChannelID, threadTS)
+				// A threaded reply re-ingests only its thread, and a top-level message the whole channel. Re-ingest
+				// replaces the conversation by its slack:// URI, so this is idempotent.
+				rep, err := ing.IngestConversation(ctx, ev.ChannelID, ev.Thread())
 				if err != nil {
 					return err
 				}
@@ -121,6 +117,7 @@ requires a public HTTPS Request URL.`,
 					slackScope(rep), rep.Messages, rep.Turns)
 				return nil
 			}, errLogf(cmd))
+			defer handler.Close() // runs before the deferred gs.Close, so queued re-ingests finish first
 
 			mux := http.NewServeMux()
 			mux.Handle("/slack/events", handler)

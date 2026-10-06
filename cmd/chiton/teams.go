@@ -122,6 +122,7 @@ public URL for the subscription itself.`,
 					meetingID, rep.Transcripts, rep.Turns)
 				return nil
 			}, logf)
+			defer handler.Close() // runs before the deferred gs.Close, so queued ingests finish first
 
 			mux := http.NewServeMux()
 			mux.Handle("/notifications", handler)

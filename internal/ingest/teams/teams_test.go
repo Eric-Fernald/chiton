@@ -84,6 +84,7 @@ func TestIngestMeeting(t *testing.T) {
 
 func TestWebhookValidationHandshake(t *testing.T) {
 	h := NewWebhookHandler("secret", nil, nil)
+	defer h.Close()
 	req := httptest.NewRequest(http.MethodPost, "/hook?validationToken=abc123", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -110,6 +111,7 @@ func TestWebhookWithoutClientStateFailsClosed(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/hook", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
+	h.Close() // runs the queued ingests
 
 	if len(got) != 0 {
 		t.Fatalf("dispatched %d changes with no configured clientState; want 0 (fail closed)", len(got))
@@ -132,6 +134,7 @@ func TestWebhookDispatchesValidNotifications(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/hook", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
+	h.Close() // runs the queued ingests
 
 	if rec.Code != http.StatusAccepted {
 		t.Errorf("code=%d want 202", rec.Code)
@@ -153,4 +156,28 @@ func TestParseTranscriptResource(t *testing.T) {
 	if _, _, ok := ParseTranscriptResource("users('U1')/chats('C1')"); ok {
 		t.Error("non-transcript resource should not parse")
 	}
+}
+
+// TestWebhookAcksBeforeIngest checks the 202 goes out while the ingest is still blocked, inside Graph's deadline.
+func TestWebhookAcksBeforeIngest(t *testing.T) {
+	release := make(chan struct{})
+	h := NewWebhookHandler("s3cr3t", func(context.Context, ChangeItem) error { <-release; return nil }, nil)
+	body := `{"value":[{"subscriptionId":"s","changeType":"created","clientState":"s3cr3t",
+	  "resource":"communications/onlineMeetings('M1')/transcripts('T1')"}]}`
+	done := make(chan int, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/hook", strings.NewReader(body)))
+		done <- rec.Code
+	}()
+	select {
+	case code := <-done:
+		if code != http.StatusAccepted {
+			t.Errorf("code=%d want 202", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ServeHTTP blocked on the ingest; Graph needs the ack within 3s")
+	}
+	close(release)
+	h.Close()
 }

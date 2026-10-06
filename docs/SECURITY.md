@@ -81,8 +81,8 @@ command or tool named in the third column.
 | Destination | Code | Triggered by | Data sent |
 |---|---|---|---|
 | `http://localhost:11434/api/embed` (configurable) | `internal/embed/ollama.go` | `chiton embed`, `chiton search`, `chiton sync … --embed`, and the **`semantic_search` MCP tool** | Node text / the query string to be embedded |
-| `https://slack.com/api/*` | `internal/ingest/slack/web_client.go` | `chiton slack fetch`, and **automatically, per verified inbound event, while `chiton slack serve-events` runs** | Bot/user OAuth token + channel/thread ids; receives message content |
-| `https://gmail.googleapis.com` | `internal/ingest/email/gmail.go` | `chiton email gmail` | OAuth2 access token + your query; receives message bodies |
+| `https://slack.com/api/*` | `internal/ingest/slack/web_client.go` | `chiton slack fetch`, and **automatically, per verified inbound event, while `chiton slack serve-events` runs** | Bot/user OAuth token + channel/thread ids; receives message content; rate-limited calls (HTTP 429) are retried up to 3 times, honouring `Retry-After`, capped at 1 minute per wait |
+| `https://gmail.googleapis.com` | `internal/ingest/email/gmail.go` | `chiton email gmail` | OAuth2 access token + your query; receives message bodies; rate-limited calls (HTTP 429) are retried up to 3 times, honouring `Retry-After`, capped at 1 minute per wait |
 | `https://graph.microsoft.com` | `internal/ingest/email/outlook.go`, `internal/ingest/teams/graph_client.go` | `chiton email outlook`, `chiton teams fetch`, and **automatically, per verified inbound notification, while `chiton teams serve-webhook` runs** | Graph token; receives mail / meeting transcripts |
 | `https://login.microsoftonline.com` | `azidentity` (vendored) | The same three commands, to mint a token | **Your Teams/Outlook tenant id, client id, and client secret** |
 | **Any host you name** | `internal/ingest/url/fetch.go` | `chiton add-url`, and the **`add_url` MCP tool on a `--writable` server** | An HTTP GET with a chiton user-agent; receives the page/PDF |

@@ -157,6 +157,8 @@ dated section.
 
 ### Fixed
 
+- `chiton slack serve-events` and `chiton teams serve-webhook` ack before ingesting, so slow ingests no longer trigger Slack/Graph retries and duplicate re-ingests. Bursts coalesce per conversation or meeting, and Slack redeliveries are dropped by `event_id`. The Slack and Gmail clients retry HTTP 429 using `Retry-After`.
+
 - **A mistyped passphrase no longer creates a store you cannot reopen.** `chiton init` now stores a passphrase verifier in `keyfile.json`, and every command checks it. Older keyfiles are upgraded on their next successful open.
 
 - **`.chiton/` state now follows `CHITON_PROJECT_DIR`.** An assistant-launched server started outside the workspace read `diff_findings` baselines and wrote LLM-rule state relative to its own working directory.
