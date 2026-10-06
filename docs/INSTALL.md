@@ -21,6 +21,9 @@ Every path below needs the `chiton` binary, and none of them ships it — not ev
 the plugin. The repository is private and the license proprietary, so each route
 requires repository access.
 
+Git 2.30 or newer is needed at runtime for `chiton sync git`, the git hooks, and
+`analyze --diff` / `diff_findings` ref resolution (they pass `--end-of-options`).
+
 **Build from source** (needs a Go toolchain):
 
 ```sh

@@ -67,6 +67,8 @@ When sources conflict, prefer `EXTRACTED` facts over `INFERRED` ones.
 
 - **Go 1.25.5 or newer** to build from source (`go.mod` pins `toolchain go1.26.4`, which
   any recent Go downloads automatically).
+- **Git 2.30 or newer** for `sync git`, the git hooks, and `analyze --diff` /
+  `diff_findings` ref resolution, which pass `--end-of-options` to git.
 - **Optional: [Ollama](https://ollama.com)** for local embeddings (default model
   `nomic-embed-text`, served at `http://localhost:11434`). Set
   `CHITON_EMBED_PROVIDER=hash` for a deterministic offline/CI embedder that needs
@@ -192,7 +194,7 @@ chiton search "where do we handle auth?"
 | Command | Purpose |
 |---|---|
 | `chiton init` | Scaffold `.chiton/` (policy files, `.gitignore`, encryption keyfile). `--encrypt=false` for plaintext. |
-| `chiton build <path>` | Walk a tree, extract code/docs/images into the graph (SHA-256 cache skips unchanged files). Skips VCS, `node_modules`, `vendor`, virtualenv, `target`/`dist` and chiton output directories, plus anything in a repo-root `.chitonignore`. Removes symbols and files deleted since the last build (`--prune`, default true) and extracts in parallel. |
+| `chiton build <path>` | Walk a tree, extract code/docs/images into the graph (SHA-256 cache skips unchanged files). Skips VCS, `node_modules`, `vendor`, virtualenv, `target`/`dist` and chiton output directories, plus anything in a repo-root `.chitonignore`. Removes symbols and files deleted since the last build, with their findings (`--prune`, default true), and extracts in parallel. |
 | `chiton query <label>` | Look up a node by label substring and print its neighborhood (`--depth`, `--edge-kinds`, `--json`). |
 | `chiton cluster` | Run Leiden community detection + betweenness; writes `cluster.json` sidecar. |
 | `chiton report` | Generate `GRAPH_REPORT.md` (god nodes, community summaries). Needs a prior `cluster`. |
@@ -264,10 +266,11 @@ their changes). On Windows they fail fast with `in use by another chiton
 process` until the server exits, so submit through `chiton serve --writable`
 there.
 
-The server speaks the same tool surface over three transports: stdio
-(the default; assistant-launched), `--http 127.0.0.1:7474` (SSE; a shared daemon
-across sessions or for debugging, started only when `--http <addr>` is given), and `--unix <path>` (a Unix-domain socket for
-Linux/macOS power users). Full reference: [docs/MCP.md](docs/MCP.md).
+The server speaks the same tool surface over three transports: stdio (the
+default; assistant-launched), `--http 127.0.0.1:7474` (SSE; a shared daemon
+across sessions or for debugging, started only when `--http <addr>` is given),
+and `--unix <path>` (a Unix-domain socket for Linux/macOS power users). Full
+reference: [docs/MCP.md](docs/MCP.md).
 
 ## Assistant support
 
@@ -347,7 +350,8 @@ If the OS drops file events (a bulk checkout can overflow the Windows buffer),
 
 ### Ignoring paths
 
-`sync`, `sync watch` and `bench` skip these directory names at any depth:
+`build`, `sync`, `sync watch`, `bench`, `analyze`, `analyze pending` and the
+git hooks skip these directory names at any depth:
 `.git`, `.hg`, `.svn`, `.chiton`, `chiton-out`, `node_modules`, `vendor`,
 `.venv`, `venv`, `__pycache__`, `target`, `dist`. Symlinks are never followed.
 

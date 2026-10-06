@@ -7,8 +7,8 @@ import (
 
 const fileScheme = "file://"
 
-// FileURI returns the canonical file:// source URI for path: absolute, forward slashes, and on Windows the
-// on-disk case of every existing component (see canonicalPath). If path can't be made absolute, it is used as given.
+// FileURI returns the canonical file:// source URI for path: absolute, forward slashes, and on Windows the on-disk
+// case of every existing component with symlinked or junction directories resolved. A non-absolutable path is kept.
 func FileURI(path string) string {
 	abs, err := filepath.Abs(path)
 	if err != nil {

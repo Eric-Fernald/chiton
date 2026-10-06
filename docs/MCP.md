@@ -556,8 +556,9 @@ answer "what did this change introduce?" without re-reading the whole report.
 | `baseline` | string | default `latest` | Baseline commit SHA to compare against, or `latest` for the most recent baseline. |
 | `target` | string | optional | Target commit SHA whose saved baseline is the "current" side. Omit to diff the baseline against the live findings in the store. |
 
-Git refs (`HEAD`, a branch, a short SHA) are resolved to full SHAs when git is
-available.
+Git refs (`HEAD`, a branch, a short SHA) are resolved to full SHAs in the
+project repo (`CHITON_PROJECT_DIR`, else the working directory) when git 2.30 or
+newer is available.
 
 **Request**
 

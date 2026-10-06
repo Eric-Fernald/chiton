@@ -107,8 +107,9 @@ Notes that materially change the picture:
 - **`AZURE_AUTHORITY_HOST` is read by the vendored Azure SDK, not by chiton.**
   If it is set in your environment, it redirects where the client secret above
   is sent. chiton neither reads nor validates it.
-- `hostAllowed` (§5.3) performs a **DNS lookup** for any host passed to
-  `add-url`, which is itself observable traffic.
+- Fetching a named host passed to `add-url` performs a **DNS lookup** at dial
+  time (where the §5.3 guard vets the resolved address), which is itself
+  observable traffic. `hostAllowed` only checks literal IPs and looks nothing up.
 
 ### 1.2 Subprocesses
 
@@ -118,7 +119,7 @@ external programs:
 | Program | When | Notes |
 |---|---|---|
 | `git` | `chiton sync git`, `chiton analyze --since`, repo detection | Read-only plumbing (`rev-parse`, log/diff) |
-| `yt-dlp` | `chiton add-url` / `add_url` on a YouTube URL | Looked up on `PATH`; downloads subtitles into a temp dir that is removed afterwards. **This branch bypasses the `hostAllowed` SSRF check** (§5.3) |
+| `yt-dlp` | `chiton add-url` / `add_url` on a YouTube URL | Looked up on `PATH`; downloads subtitles into a temp dir that is removed afterwards. **This branch bypasses the SSRF guard** (`hostAllowed` and the dial-time check, §5.3) |
 | A whisper CLI | `chiton meeting transcribe` | **Auto-detected from `PATH`**, trying `whisper`, `whisper-cli`, `whisper-cpp`, `whisper.cpp` in order (`internal/ingest/audio/shellout.go`) |
 
 The whisper auto-detection is the one worth a second look before you trust a
@@ -134,7 +135,7 @@ in-process whisper.cpp backend exists but requires a `-tags whisper_cgo` build.
 | `chiton-out/hnsw.idx` | Saved HNSW index: node IDs and graph links, no vectors or text | **Yes**, when the store is encrypted: AES-256-GCM under a key derived from the store's (§2) |
 | `chiton-out/cluster.json` | Cluster sidecar: every node's label, source URI and community | **Yes**, sealed with AES-256-GCM under a subkey of the store key when a keyfile is present (§2). A sidecar written before encryption was on loads, and is sealed on its next write |
 | `chiton-out/cache.json` | Content-hash cache | **No**: `file://` paths of repository files and their SHA-256, nothing that is not already in the working tree |
-| `.chiton/keyfile.json` | Argon2id salt, KDF parameters, and a verifier tag (HMAC-SHA256 of the key); no key, no passphrase | n/a — no secret in it |
+| `.chiton/keyfile.json` | Argon2id salt, KDF parameters, and a verifier tag (HMAC-SHA256 of the key); no key, no passphrase | n/a, but not harmless: the verifier lets anyone holding this file alone test passphrase guesses offline, at Argon2id cost (§2) |
 | `.chiton/hooks.yaml`, `sources.yaml`, `schema_version`, `.gitignore` | Policy files | **No — plaintext**, and `hooks.yaml`/`sources.yaml` are meant to be committed |
 | `.chiton/baselines/<commit>.json`, `.chiton/llm-analyzed.json` | Finding baselines and LLM-rule state | **No — plaintext**. Plaintext on purpose: rule IDs and messages about repository files. |
 | `chiton export --out <file>` | Full graph snapshot, embeddings inlined | **No — plaintext JSON** |
@@ -237,8 +238,9 @@ them: it does not detect tampering with the files on disk.
 
 Encryption keys are derived from a **user passphrase** via **Argon2id**; the
 passphrase itself is **never written to disk**. The on-disk
-`.chiton/keyfile.json` holds only the salt and KDF parameters — without the
-passphrase it reveals nothing.
+`.chiton/keyfile.json` holds the salt, KDF parameters and a passphrase
+verifier — no key and no passphrase, though the verifier allows offline
+guessing (below).
 
 | Parameter | Default (`DefaultKeyFile`) | Notes |
 |---|---|---|
@@ -250,7 +252,7 @@ passphrase it reveals nothing.
 | Key length | 32 bytes | Must be exactly 32 (AES-256) |
 | Cipher | `AES-256-GCM` | A label in the keyfile. It is the cipher for sealed files (`hnsw.idx`); Badger encrypts the store itself in CTR mode |
 
-The keyfile also stores a verifier, an HMAC-SHA256 tag of the derived key over a fixed label, so a mistyped passphrase fails with `wrong passphrase` before any store is opened or created. It gives an attacker nothing new: guessing a passphrase against it costs the same Argon2id run as guessing against the encrypted store. Keyfiles from before this change gain a verifier on the first successful open.
+The keyfile also stores a verifier, an HMAC-SHA256 tag of the derived key over a fixed label, so a mistyped passphrase fails with `wrong passphrase` before any store is opened or created. The verifier is not secret, though: anyone holding `keyfile.json` alone can now test passphrase guesses offline, where before they also needed the encrypted store. Each guess still costs a full Argon2id run, so passphrase strength is what protects you; keep the keyfile as private as the store. Keyfiles from before this change gain a verifier on the first successful open.
 
 The derivation is deterministic: the same passphrase + same keyfile always
 produce the same 32-byte key, so the encrypted store re-opens reliably. A loaded
@@ -518,19 +520,22 @@ Shipped mitigations (`internal/ingest/url/`):
   to, on the first request and on every redirect. It refuses loopback, RFC 1918,
   link-local (cloud metadata such as `169.254.169.254`), CGNAT `100.64/10`,
   `198.18/15`, `0/8`, `240/4`, `192.0.0/24`, multicast, ULA, and IPv4-embedding
-  IPv6 (NAT64, 6to4, Teredo), and treats IPv4-mapped IPv6 as IPv4. `hostAllowed`
-  additionally fails fast on literal IPs.
-- `CheckRedirect` re-applies `hostAllowed` on **every** hop, with a 10-redirect
-  cap, so a public host cannot redirect into the internal network.
+  IPv6 (NAT64, 6to4, Teredo, IPv4-compatible `::/96`, SIIT `::ffff:0:0:0/96`),
+  and treats IPv4-mapped IPv6 as IPv4. It is what stops a named host, including
+  one whose DNS answer changes between lookup and connect.
+- `hostAllowed` fails fast on a literal non-public IP in the URL, and
+  `CheckRedirect` re-applies it on **every** hop, with a 10-redirect cap; the
+  dial-time guard covers named redirect targets.
 - Responses are capped at 32 MiB and the client has a 30 s timeout.
+- Over MCP `add_url` accepts only http/https, so local reads stay CLI-only
+  (`chiton add-url`).
 
 Acknowledged residual gaps, stated plainly:
 
 - `add_url` connects directly and ignores `HTTP(S)_PROXY`.
-- **The `yt-dlp` branch bypasses `hostAllowed` entirely.** A YouTube-shaped host
-  goes straight to the subprocess without the SSRF check.
-- Over MCP `add_url` accepts only http/https; local reads are CLI-only
-  (`chiton add-url`).
+- **The `yt-dlp` branch bypasses the SSRF guard entirely.** A YouTube-shaped
+  host goes straight to the subprocess without `hostAllowed` or the dial-time
+  check.
 
 If you run `chiton serve --writable`, you are trusting the assistant with those
 capabilities. The read-only default exists precisely so that you have to opt in.
@@ -553,7 +558,7 @@ status is labelled **shipped** or **planned**.
 | Meeting/email PII surfaced by the two meeting tools | `person` nodes tagged `pii=true`, hidden unless `include_pii` | Shipped: redacted by default in every read tool; `--include-pii` opts out |
 | A symlink in an indexed repo pointing outside it (e.g. `notes.md -> ~/.ssh/id_rsa`) pulling its target into the graph and `pending_extractions` | `build`, `sync`, and `sync watch` index regular files only; symlinks and junctions are skipped at the walk and at the read | **Shipped** (`analyze` via Section D) |
 | Accidental upload of secrets to a remote LLM | Subagent mode = no built-in LLM calls; per-source allowlist + secret scrubbing | **Partly:** no built-in LLM egress (shipped); allowlist/scrubbing **planned** |
-| SSRF via assistant-driven `add_url` | Read-only default; `hostAllowed` on the host and on every redirect; 10-redirect cap | **Shipped; the `yt-dlp` branch is a known gap** (§5.3) |
+| SSRF via assistant-driven `add_url` | Read-only default; a dial-time guard on the address actually connected to (first request and every redirect); `hostAllowed` on literal IPs; no proxy; 10-redirect cap | **Shipped; the `yt-dlp` branch is a known gap** (§5.3) |
 | Unauthenticated reader on the MCP HTTP port | Per-start bearer token, Origin allowlist, JSON-only POSTs with an 8 MiB cap, no `Access-Control-Allow-Origin: *`; loopback default + wildcard-bind warning | **Shipped** (no TLS; §5.1) |
 | Unauthenticated Teams/Slack webhook notifications | `clientState` and signing-secret checks now required to start | **Shipped** (previously fail-open for Teams) |
 | Secrets in environment variables | Env-only, header-only, never logged or persisted | **Shipped**; no OS keychain integration |
