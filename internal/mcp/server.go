@@ -13,6 +13,7 @@ import (
 	mcpsdk "github.com/mark3labs/mcp-go/server"
 
 	"github.com/Eric-Fernald/chiton/internal/analyze"
+	"github.com/Eric-Fernald/chiton/internal/config"
 	"github.com/Eric-Fernald/chiton/internal/extract/meeting"
 	"github.com/Eric-Fernald/chiton/internal/extract/subagent"
 	"github.com/Eric-Fernald/chiton/internal/graph/cluster"
@@ -62,7 +63,7 @@ func New(gs store.GraphStore, overlay *cluster.Results, deps Deps) *mcpsdk.MCPSe
 	s.AddTool(submitExtractionTool(), submitExtractionHandler(deps.Extractor))
 	baselineDir := deps.BaselineDir
 	if baselineDir == "" {
-		baselineDir = analyze.BaselineDir(".chiton")
+		baselineDir = analyze.BaselineDir(config.StateDir())
 	}
 	s.AddTool(diffFindingsTool(), diffFindingsHandler(gs, baselineDir))
 	s.AddTool(pendingAnalysesTool(), pendingAnalysesHandler(deps.LLM, cmp.Or(deps.ProjectRoot, ".")))

@@ -391,7 +391,7 @@ chiton reads `.chitonrc` (TOML) from the project directory or `$HOME`, with
 project directory is `$CHITON_PROJECT_DIR` when that is set — the Claude Code
 plugin sets it — and the process working directory otherwise. When it is set, a
 relative `graph_path` resolves against it too, so an assistant-launched server
-cannot drift onto a different store than `chiton build` wrote. A `.chitonrc` that exists but fails to parse is an
+cannot drift onto a different store than `chiton build` wrote. The `.chiton/` state directory (keyfile lookup, `analyze --diff` baselines, LLM-rule state) lives under it too. A `.chitonrc` that exists but fails to parse is an
 error that names the file.
 
 | Key | Default | Notes |

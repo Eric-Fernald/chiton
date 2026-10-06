@@ -257,7 +257,7 @@ func initCmd() *cobra.Command {
 Run this once at the root of each repository you want to index with chiton.
 After init, run "chiton build ." to populate the graph.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			chitonDir := filepath.Join(dir, ".chiton")
+			chitonDir := filepath.Join(dir, config.StateDirName)
 			out := cmd.OutOrStdout()
 
 			created := 0
@@ -338,7 +338,7 @@ After init, run "chiton build ." to populate the graph.`,
 // openGraphStore opens the badger store with encryption if a keyfile is
 // detected next to it. readOnly chooses between Open and OpenReadOnly.
 func openGraphStore(graphPath string, readOnly bool) (*badgerstore.Store, error) {
-	key, _, err := chitoncrypto.ResolveKeyForGraph(graphPath)
+	key, _, err := chitoncrypto.ResolveKeyForGraph(graphPath, config.StateDir())
 	if err != nil {
 		return nil, fmt.Errorf("open store: resolve encryption key: %w", err)
 	}
@@ -908,8 +908,8 @@ func buildSemanticDeps(cmd *cobra.Command, cfg *config.Config, gs store.GraphSto
 
 	// Wire the store-only services first so a misconfigured embedder can't disable them.
 	var deps mcpsrv.Deps
-	deps.LLM = analyze.NewLLMService(gs, nil, cfg.Semantic.ConfidenceThreshold, chitonDir)
-	deps.BaselineDir = analyze.BaselineDir(chitonDir)
+	deps.LLM = analyze.NewLLMService(gs, nil, cfg.Semantic.ConfidenceThreshold, config.StateDir())
+	deps.BaselineDir = analyze.BaselineDir(config.StateDir())
 	// Phase 4: meeting→code linkage (read pending always; submit guarded by the
 	// store's read-only flag) and URL ingest (add_url; also read-only-guarded).
 	deps.MeetingLinker = meeting.NewLinkService(gs, cfg.Semantic.ConfidenceThreshold)
@@ -1157,7 +1157,7 @@ You usually don't invoke it directly.`,
 			errOut := cmd.ErrOrStderr()
 
 			// Load falls back to the default policy on a bad file, so warn and carry on with it.
-			cfg, err := hooks.Load(filepath.Join(dir, ".chiton", "hooks.yaml"))
+			cfg, err := hooks.Load(filepath.Join(dir, config.StateDirName, "hooks.yaml"))
 			if err != nil {
 				fmt.Fprintf(errOut, "chiton %s: warning: %v; using the default policy\n", stage, err)
 			}

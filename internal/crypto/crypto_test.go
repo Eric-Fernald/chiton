@@ -190,7 +190,7 @@ func TestGetPassphrase_NonInteractive(t *testing.T) {
 
 func TestResolveKeyForGraph_NoKeyfile(t *testing.T) {
 	graph := filepath.Join(t.TempDir(), "graph.kuzu")
-	key, kf, err := ResolveKeyForGraph(graph)
+	key, kf, err := ResolveKeyForGraph(graph, filepath.Join(t.TempDir(), ".chiton"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestResolveKeyForGraph_FindsKeyfileNextToGraph(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv(EnvVarPassphrase, "test-passphrase")
-	key, kf, err := ResolveKeyForGraph(graph)
+	key, kf, err := ResolveKeyForGraph(graph, filepath.Join(t.TempDir(), ".chiton"))
 	if err != nil {
 		t.Fatalf("ResolveKeyForGraph: %v", err)
 	}
@@ -238,4 +238,30 @@ func saveTempKeyfile(t *testing.T, kf *KeyFile) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// A keyfile in the project's state dir must be found even when the graph lives elsewhere and the process
+// runs from another directory, as an assistant-launched server does.
+func TestResolveKeyForGraph_FindsKeyfileInStateDir(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), ".chiton")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	kf, err := DefaultKeyFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := kf.Save(ResolveKeyfilePath(stateDir), false); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvVarPassphrase, "test-passphrase")
+
+	graph := filepath.Join(t.TempDir(), "store", "graph.kuzu")
+	key, got, err := ResolveKeyForGraph(graph, stateDir)
+	if err != nil {
+		t.Fatalf("ResolveKeyForGraph: %v", err)
+	}
+	if got == nil || len(key) != 32 {
+		t.Fatalf("keyfile in the state dir was not used: kf=%v keylen=%d", got, len(key))
+	}
 }

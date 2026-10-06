@@ -371,3 +371,15 @@ func TestCheckEndpointFailsClosedOnUnknownOrigin(t *testing.T) {
 		t.Error("CheckEndpoint() = nil for an unknown origin, want a refusal")
 	}
 }
+
+func TestStateDirFollowsProjectDir(t *testing.T) {
+	isolate(t)
+	if got := StateDir(); got != ".chiton" {
+		t.Errorf("StateDir() = %q with no project dir, want %q", got, ".chiton")
+	}
+	project := t.TempDir()
+	t.Setenv(ProjectDirEnv, project)
+	if got, want := StateDir(), filepath.Join(project, ".chiton"); got != want {
+		t.Errorf("StateDir() = %q, want %q", got, want)
+	}
+}

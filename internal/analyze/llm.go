@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Eric-Fernald/chiton/internal/config"
 	"github.com/Eric-Fernald/chiton/internal/fsutil"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
@@ -93,7 +94,7 @@ type LLMService struct {
 }
 
 // NewLLMService builds a Service. reg=nil uses the default registry;
-// threshold<=0 uses 0.5; stateDir="" defaults to ".chiton".
+// threshold<=0 uses 0.5; stateDir="" defaults to config.StateDir().
 func NewLLMService(s store.GraphStore, reg *Registry, threshold float32, stateDir string) *LLMService {
 	if reg == nil {
 		reg = DefaultRegistry()
@@ -102,7 +103,7 @@ func NewLLMService(s store.GraphStore, reg *Registry, threshold float32, stateDi
 		threshold = model.DefaultConfidenceThreshold
 	}
 	if stateDir == "" {
-		stateDir = ".chiton"
+		stateDir = config.StateDir()
 	}
 	return &LLMService{store: s, registry: reg, threshold: threshold, stateDir: stateDir, now: time.Now}
 }

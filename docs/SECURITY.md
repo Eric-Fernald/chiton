@@ -285,7 +285,7 @@ chiton build .
 ```
 
 Key resolution is automatic: when chiton opens a graph it looks for a keyfile
-next to the store, one directory up in `.chiton/`, and finally in `./.chiton/`
+next to the store, one directory up in `.chiton/`, and finally in `$CHITON_PROJECT_DIR/.chiton/` (the working directory's `.chiton/` when unset)
 (`internal/crypto/resolve.go`). If a keyfile is found, it derives the key and
 opens the store encrypted; if none is found, the store opens in plaintext.
 

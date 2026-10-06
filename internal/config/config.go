@@ -28,6 +28,13 @@ func ProjectDir() string {
 	return "."
 }
 
+// StateDirName is the per-project directory for the keyfile, finding baselines and LLM-rule state.
+const StateDirName = ".chiton"
+
+// StateDir returns ProjectDir's .chiton, so a server started in any directory finds the same state as the CLI.
+// It stays the relative ".chiton" when CHITON_PROJECT_DIR is unset.
+func StateDir() string { return filepath.Join(ProjectDir(), StateDirName) }
+
 // Origin names the layer that supplied a config value.
 type Origin string
 

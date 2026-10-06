@@ -154,6 +154,7 @@ dated section.
 
 ### Fixed
 
+- **`.chiton/` state now follows `CHITON_PROJECT_DIR`.** An assistant-launched server started outside the workspace read `diff_findings` baselines and wrote LLM-rule state relative to its own working directory.
 - **A malformed `.chitonrc` is now an error.** It used to be ignored, so a typo silently dropped `graph_path` back to the default and the command opened a different store.
 - **`sync watch` recovers from event overflow.** When fsnotify reports dropped events, the watcher rescans the tree instead of silently missing changes.
 - **`chiton build` runs the sync engine.** It removes symbols renamed or deleted since the last build, prunes files gone from disk (`--prune`, default true), skips ignored directories and `.chitonignore` paths, extracts on `GOMAXPROCS` workers, and batches store writes. The summary line is unchanged; per-file skip messages on stderr now start with `sync: skip`.
