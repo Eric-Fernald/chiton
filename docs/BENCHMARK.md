@@ -180,7 +180,15 @@ CHITON_VECTOR_BENCH_1M=1 go test ./internal/vector/ -bench BenchmarkSearch -run 
 
 ### Results (defaults: M 16, ef_search 128, ef_construction 200)
 
-RESULTS_TABLE
+| Vectors | Backend | Build | Heap | Heap / raw | p50 query | p95 query | recall@8 |
+|---|---|---|---|---|---|---|---|
+| 10k | flat | 0.01 s | 32 MB | 1.03 | 2.77 ms | 5.53 ms | 1.000 |
+| 10k | hnsw | 5.3 s | 34 MB | 1.10 | 0.14 ms | 0.17 ms | 1.000 |
+| 100k | flat | 0.13 s | 315 MB | 1.02 | 29.1 ms | 32.4 ms | 1.000 |
+| 100k | hnsw | 36.4 s | 337 MB | 1.10 | 0.09 ms | 0.11 ms | 1.000 |
+
+1M was not run here: the report holds the source vectors and both indexes at
+once, about 10 GB.
 
 ### Choosing ef_search
 
@@ -204,8 +212,8 @@ like the second row.
 - Below 100k vectors `flat` costs at most about 30 ms a query and needs no
   build, so `auto` keeps it.
 - At 100k and above, `hnsw` answers in well under a millisecond with
-  near-exact recall on embedding-like data. The graph costs about a minute per
-  100k vectors to build on every `serve` start; `serve` answers from `flat`
+  near-exact recall on embedding-like data. The graph costs 35 s to a minute per
+  100k vectors to build, single-threaded, on every `serve` start; `serve` answers from `flat`
   meanwhile and switches when the build finishes. Saving the built graph to
   disk (spec R10) is the follow-up that would remove the rebuild.
 - `hnsw` holds about 10% more heap than the raw vectors. `flat` holds about 2%.
