@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"context"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +13,7 @@ import (
 	"testing"
 
 	mcpsdk "github.com/mark3labs/mcp-go/server"
+	"github.com/spf13/cobra"
 )
 
 const testMCPToken = "test-token-0123456789"
@@ -125,5 +128,43 @@ func TestServeTokenWritesFileOrUsesEnv(t *testing.T) {
 	t.Setenv(mcpTokenEnv, "short")
 	if _, _, err := serveToken(path); err == nil {
 		t.Error("a CHITON_MCP_TOKEN under 16 characters was accepted")
+	}
+}
+
+func TestServeHTTPFailedBindKeepsExistingToken(t *testing.T) {
+	t.Setenv(mcpTokenEnv, "")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	path := filepath.Join(t.TempDir(), "mcp-token")
+	if err := os.WriteFile(path, []byte("running-server-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	if err := serveHTTP(cmd, mcpsdk.NewMCPServer("t", "0"), ln.Addr().String(), path, nil); err == nil {
+		t.Fatal("serveHTTP bound an address already in use")
+	}
+	if b, err := os.ReadFile(path); err != nil || string(b) != "running-server-token\n" {
+		t.Errorf("token file after failed bind = %q, %v; want it untouched", b, err)
+	}
+}
+
+func TestMCPHTTPAllowsPreflightAndJSONCharset(t *testing.T) {
+	const dev = "http://localhost:5173"
+	ts := newGuardedTestServer(t, dev)
+	pre := send(t, http.MethodOptions, ts.URL+"/sse", "", map[string]string{"Origin": dev, "Access-Control-Request-Method": "GET"})
+	if pre.StatusCode >= 400 {
+		t.Errorf("allowlisted preflight = %d, want success", pre.StatusCode)
+	}
+	auth := map[string]string{"Authorization": "Bearer " + testMCPToken}
+	_, endpoint := openSession(t, ts, auth)
+	auth["Content-Type"] = "application/json; charset=utf-8"
+	if got := send(t, http.MethodPost, ts.URL+endpoint, initializeMsg, auth).StatusCode; got != http.StatusAccepted {
+		t.Errorf("POST application/json; charset=utf-8 = %d, want 202", got)
 	}
 }

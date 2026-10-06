@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"fmt"
 	"mime"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -101,8 +102,14 @@ func serveHTTP(cmd *cobra.Command, s *mcpsdk.MCPServer, addr, tokenPath string, 
 	if slices.Contains(allowedOrigins, "*") {
 		return fmt.Errorf("--allow-origin '*' is not supported; list each origin")
 	}
+	// Bind before touching the token file, so a failed bind never clobbers a running server's token.
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", addr, err)
+	}
 	token, written, err := serveToken(tokenPath)
 	if err != nil {
+		ln.Close()
 		return err
 	}
 	if written {
@@ -111,7 +118,7 @@ func serveHTTP(cmd *cobra.Command, s *mcpsdk.MCPServer, addr, tokenPath string, 
 	}
 	srv, sse := newMCPHTTPServer(cmd.Context(), s, addr, token, allowedOrigins)
 	fmt.Fprintf(cmd.OutOrStdout(), "serve: listening on %s (SSE, bearer-token auth)\n", addr)
-	return serveUntilDone(cmd.Context(), srv.ListenAndServe, func(ctx context.Context) error {
+	return serveUntilDone(cmd.Context(), func() error { return srv.Serve(ln) }, func(ctx context.Context) error {
 		sse.CloseSessions() // as SSEServer.Shutdown does, so open SSE streams don't block shutdown
 		return srv.Shutdown(ctx)
 	})

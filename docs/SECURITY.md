@@ -409,8 +409,9 @@ chiton does not use an OS keychain.
 
 ## 5. Network listeners and the MCP surface
 
-Three commands can open a listening socket. None of them authenticates the
-caller by identity.
+Three commands can open a listening socket. `chiton serve --http` checks a
+bearer token, the two receivers verify a shared secret or signature, and none
+of them identifies the caller beyond that.
 
 | Command | Default bind | Auth |
 |---|---|---|
