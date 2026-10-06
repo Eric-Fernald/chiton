@@ -494,52 +494,69 @@ func graphSummaryTool() mcplib.Tool {
 	)
 }
 
+// scopedKindCounts counts nodes and edges by kind among the nodes whose redacted source URI contains scope
+// (case-insensitive), so a person:// scope can't probe for a name. It also returns the in-scope node IDs.
+func scopedKindCounts(ctx context.Context, gs store.GraphStore, r redactor, scope string) (map[model.NodeKind]int, map[model.EdgeKind]int, map[string]bool, error) {
+	allNodes, err := gs.AllNodes(ctx)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("load nodes: %w", err)
+	}
+	allEdges, err := gs.AllEdges(ctx)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("load edges: %w", err)
+	}
+	scopeLower := strings.ToLower(scope)
+	inScope := make(map[string]bool)
+	byNode := make(map[model.NodeKind]int)
+	for _, n := range allNodes {
+		if strings.Contains(strings.ToLower(r.sourceURI(n)), scopeLower) {
+			inScope[n.ID] = true
+			byNode[n.Kind]++
+		}
+	}
+	byEdge := make(map[model.EdgeKind]int)
+	for _, e := range allEdges {
+		if inScope[e.Src] && inScope[e.Dst] {
+			byEdge[e.Kind]++
+		}
+	}
+	return byNode, byEdge, inScope, nil
+}
+
+// sumCounts totals a by-kind count map.
+func sumCounts[K comparable](m map[K]int) int {
+	total := 0
+	for _, c := range m {
+		total += c
+	}
+	return total
+}
+
 func graphSummaryHandler(gs store.GraphStore, overlay *cluster.Results, r redactor) mcpsdk.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		scope := req.GetString("scope", "")
 		maxTokens := req.GetInt("max_tokens", 4000)
 
-		allNodes, err := gs.AllNodes(ctx)
+		var (
+			byNodeKind map[model.NodeKind]int
+			byEdgeKind map[model.EdgeKind]int
+			inScope    map[string]bool // built only when scoped, since every node counts when unscoped
+			err        error
+		)
+		if scope == "" {
+			byNodeKind, byEdgeKind, err = store.CountByKind(ctx, gs)
+		} else {
+			byNodeKind, byEdgeKind, inScope, err = scopedKindCounts(ctx, gs, r, scope)
+		}
 		if err != nil {
-			return mcplib.NewToolResultErrorFromErr("failed to load nodes", err), nil
-		}
-		allEdges, err := gs.AllEdges(ctx)
-		if err != nil {
-			return mcplib.NewToolResultErrorFromErr("failed to load edges", err), nil
-		}
-
-		scopeLower := strings.ToLower(scope)
-		var inScope map[string]bool // built only when scoped, since every node counts when unscoped
-		if scope != "" {
-			inScope = make(map[string]bool)
-		}
-		nodeCount := 0
-		byNodeKind := make(map[model.NodeKind]int)
-		for _, n := range allNodes {
-			if scope != "" {
-				// Match the redacted URI, so a person:// scope can't probe for a name.
-				if !strings.Contains(strings.ToLower(r.sourceURI(n)), scopeLower) {
-					continue
-				}
-				inScope[n.ID] = true
-			}
-			nodeCount++
-			byNodeKind[n.Kind]++
-		}
-
-		edgeCount := 0
-		byEdgeKind := make(map[model.EdgeKind]int)
-		for _, e := range allEdges {
-			if scope == "" || (inScope[e.Src] && inScope[e.Dst]) {
-				byEdgeKind[e.Kind]++
-				edgeCount++
-			}
+			return mcplib.NewToolResultErrorFromErr("graph summary failed", err), nil
 		}
 
 		type commSummary struct {
 			ID        int      `json:"id"`
 			NodeCount int      `json:"node_count"`
 			TopNodes  []string `json:"top_nodes"`
+			topIDs    []string // TopNodes' node IDs, labelled once the trimmed set is known
 		}
 		type godNodeSummary struct {
 			Label       string  `json:"label"`
@@ -554,10 +571,7 @@ func graphSummaryHandler(gs store.GraphStore, overlay *cluster.Results, r redact
 		if overlay != nil {
 			// Rank first so each community's top_nodes are its highest-betweenness members.
 			ids := rankedIDs(overlay, func(id string, _ cluster.NodeResult) bool { return scope == "" || inScope[id] })
-			var stored map[string]string
-			if !r.includePII {
-				stored = r.labels(allNodes)
-			}
+			godIDs := ids[:min(10, len(ids))]
 
 			commIdx := make(map[int]int) // maps a community ID to its index in communities
 			for _, id := range ids {
@@ -570,15 +584,38 @@ func graphSummaryHandler(gs store.GraphStore, overlay *cluster.Results, r redact
 				}
 				c := &communities[i]
 				c.NodeCount++
-				if len(c.TopNodes) < 5 {
-					c.TopNodes = append(c.TopNodes, r.overlayLabel(id, nr, stored))
+				if len(c.topIDs) < 5 {
+					c.topIDs = append(c.topIDs, id)
 				}
 			}
 			slices.SortFunc(communities, func(a, b commSummary) int {
 				return cmp.Or(cmp.Compare(b.NodeCount, a.NodeCount), cmp.Compare(a.ID, b.ID))
 			})
 
-			for _, id := range ids[:min(10, len(ids))] {
+			// Trim communities to stay within token budget (~4 chars/token,
+			// ~100 chars per community entry, 300 chars fixed overhead).
+			charBudget := maxTokens*4 - 300 - len(godIDs)*80
+			maxComms := max(charBudget/100, 0)
+			if len(communities) > maxComms {
+				communities = communities[:maxComms]
+			}
+
+			// Label only the nodes shown, from their stored (redacted) nodes.
+			shown := slices.Clone(godIDs)
+			for _, c := range communities {
+				shown = append(shown, c.topIDs...)
+			}
+			stored, err := r.loadLabels(ctx, gs, shown)
+			if err != nil {
+				return mcplib.NewToolResultErrorFromErr("failed to load nodes", err), nil
+			}
+			for i := range communities {
+				c := &communities[i]
+				for _, id := range c.topIDs {
+					c.TopNodes = append(c.TopNodes, r.overlayLabel(id, overlay.Nodes[id], stored))
+				}
+			}
+			for _, id := range godIDs {
 				nr := overlay.Nodes[id]
 				godNodes = append(godNodes, godNodeSummary{
 					Label:       r.overlayLabel(id, nr, stored),
@@ -586,14 +623,6 @@ func graphSummaryHandler(gs store.GraphStore, overlay *cluster.Results, r redact
 					Betweenness: nr.Betweenness,
 					Degree:      nr.Degree,
 				})
-			}
-
-			// Trim communities to stay within token budget (~4 chars/token,
-			// ~100 chars per community entry, 300 chars fixed overhead).
-			charBudget := maxTokens*4 - 300 - len(godNodes)*80
-			maxComms := max(charBudget/100, 0)
-			if len(communities) > maxComms {
-				communities = communities[:maxComms]
 			}
 		}
 
@@ -608,8 +637,8 @@ func graphSummaryHandler(gs store.GraphStore, overlay *cluster.Results, r redact
 		}
 		return jsonResult(summary{
 			Scope:       scope,
-			NodeCount:   nodeCount,
-			EdgeCount:   edgeCount,
+			NodeCount:   sumCounts(byNodeKind),
+			EdgeCount:   sumCounts(byEdgeKind),
 			ByNodeKind:  byNodeKind,
 			ByEdgeKind:  byEdgeKind,
 			Communities: communities,

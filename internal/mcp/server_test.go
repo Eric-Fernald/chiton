@@ -155,3 +155,41 @@ func TestNeighborhoodSourcePrefixKeepsSeedAndUsesRedactedURI(t *testing.T) {
 		t.Errorf("want only the seed when the prefix matches only a redacted URI, got %s", out)
 	}
 }
+
+// kindCountingStore answers counts from an index and fails any full scan.
+type kindCountingStore struct{ store.GraphStore }
+
+func (kindCountingStore) CountByKind(context.Context) (map[model.NodeKind]int, map[model.EdgeKind]int, error) {
+	return map[model.NodeKind]int{model.KindFile: 1, model.KindSymbol: 3}, map[model.EdgeKind]int{model.EdgeCalls: 2}, nil
+}
+func (kindCountingStore) AllNodes(context.Context) ([]model.Node, error) {
+	return nil, errors.New("AllNodes called")
+}
+func (kindCountingStore) AllEdges(context.Context) ([]model.Edge, error) {
+	return nil, errors.New("AllEdges called")
+}
+
+func TestGraphSummaryUsesKindCounter(t *testing.T) {
+	out := call(t, graphSummaryHandler(kindCountingStore{openStore(t)}, nil, redactor{}), map[string]any{})
+	var got struct {
+		NodeCount int `json:"node_count"`
+		EdgeCount int `json:"edge_count"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, out)
+	}
+	if got.NodeCount != 4 || got.EdgeCount != 2 {
+		t.Errorf("graph_summary counts = %d nodes, %d edges; want 4, 2 from CountByKind", got.NodeCount, got.EdgeCount)
+	}
+}
+
+// With cluster data, graph_summary labels only the nodes it shows, still redacted, without a full scan.
+func TestGraphSummaryLabelsOverlayWithoutFullScan(t *testing.T) {
+	gs := openStore(t)
+	seedLinkedMeeting(t, gs) // turns are labelled "Alice" and "Bob"
+	out := call(t, graphSummaryHandler(kindCountingStore{gs}, overlayOf(t, gs), redactor{}), map[string]any{})
+	if !strings.Contains(out, "fetchAll") {
+		t.Fatalf("graph_summary over a kind index = %s, want the overlay's labels", out)
+	}
+	assertNoPII(t, "graph_summary", out, "Alice", "Bob")
+}

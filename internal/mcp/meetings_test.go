@@ -3,6 +3,7 @@ package mcpsrv
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -215,5 +216,42 @@ func TestAddURLHandlerRefusesLocalFiles(t *testing.T) {
 	}
 	if nodes, _ := gs.AllNodes(ctx); len(nodes) != 0 {
 		t.Fatalf("add_url ingested a local file: %d nodes", len(nodes))
+	}
+}
+
+// countingStore counts full node scans, reports a settable read-only flag, and fails AllEdges.
+type countingStore struct {
+	store.GraphStore
+	readOnly bool
+	scans    int
+}
+
+func (c *countingStore) AllNodes(ctx context.Context) ([]model.Node, error) {
+	c.scans++
+	return c.GraphStore.AllNodes(ctx)
+}
+func (c *countingStore) AllEdges(context.Context) ([]model.Edge, error) {
+	return nil, errors.New("AllEdges called")
+}
+func (c *countingStore) ReadOnly() bool { return c.readOnly }
+
+func TestMeetingViewsSkipEdgeScanAndCacheReadOnly(t *testing.T) {
+	gs := openStore(t)
+	seedLinkedMeeting(t, gs)
+	cs := &countingStore{GraphStore: gs}
+	args := map[string]any{"topic": "fetchAll"}
+
+	if out := call(t, decisionsAboutHandler(cs), args); !strings.Contains(out, "Cap retries") {
+		t.Fatalf("decisions_about without a full edge scan = %s", out)
+	}
+
+	cs.readOnly = true
+	h := decisionsAboutHandler(cs)
+	before := cs.scans
+	for range 3 {
+		call(t, h, args)
+	}
+	if got := cs.scans - before; got != 1 {
+		t.Errorf("3 calls on a read-only store scanned nodes %d times, want 1", got)
 	}
 }

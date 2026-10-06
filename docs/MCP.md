@@ -596,7 +596,9 @@ If no baseline exists the tool returns `no baseline found — run 'chiton analyz
 Find ingested meetings by content and return each meeting with its linked
 decisions and the code symbols they touch. Use this for "what meetings discussed
 X?" / "when did we last talk about the retry policy?". **Participant names are
-PII and hidden unless `include_pii` is set.**
+PII and hidden unless `include_pii` is set.** On a read-only server, meeting
+results are computed once and reflect the store as of startup; restart `chiton
+serve` after ingesting meetings, as for embeddings and cluster data.
 
 A `meeting` here is any ingested conversation, not only a call transcript.
 `chiton slack fetch` ingests a Slack channel or thread as the same subgraph

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
@@ -41,13 +42,14 @@ func searchMeetingsTool() mcplib.Tool {
 }
 
 func searchMeetingsHandler(gs store.GraphStore) mcpsdk.ToolHandlerFunc {
+	cache := &meetingViewCache{gs: gs}
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		query := strings.ToLower(strings.TrimSpace(req.GetString("query", "")))
 		since, sinceOK := parseSince(req.GetString("since", ""))
 		limit := clampInt(req.GetInt("limit", 10), 1, 100)
 		includePII := req.GetBool("include_pii", false)
 
-		views, err := buildMeetingViews(ctx, gs)
+		views, err := cache.get(ctx)
 		if err != nil {
 			return mcplib.NewToolResultErrorFromErr("load graph failed", err), nil
 		}
@@ -98,6 +100,7 @@ func decisionsAboutTool() mcplib.Tool {
 }
 
 func decisionsAboutHandler(gs store.GraphStore) mcpsdk.ToolHandlerFunc {
+	cache := &meetingViewCache{gs: gs}
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		topic, err := req.RequireString("topic")
 		if err != nil {
@@ -108,7 +111,7 @@ func decisionsAboutHandler(gs store.GraphStore) mcpsdk.ToolHandlerFunc {
 		limit := clampInt(req.GetInt("limit", 20), 1, 100)
 		includePII := req.GetBool("include_pii", false)
 
-		views, err := buildMeetingViews(ctx, gs)
+		views, err := cache.get(ctx)
 		if err != nil {
 			return mcplib.NewToolResultErrorFromErr("load graph failed", err), nil
 		}
@@ -378,53 +381,64 @@ func decisionMatchesTopic(d decisionView, topicLower string) bool {
 	return false
 }
 
-// buildMeetingViews assembles one view per meeting node, newest first, with its decisions and the symbols
-// they govern (DECIDED_IN edges to non-meeting nodes). It scans all edges but loads only the nodes it needs.
+// meetingViewCache memoises buildMeetingViews on a read-only store, whose snapshot is fixed for the server's
+// life. A writable store is rebuilt per call, since submit_meeting_links changes it.
+type meetingViewCache struct {
+	gs     store.GraphStore
+	mu     sync.Mutex
+	views  []meetingView
+	loaded bool
+}
+
+func (c *meetingViewCache) get(ctx context.Context) ([]meetingView, error) {
+	if !store.IsReadOnly(c.gs) {
+		return buildMeetingViews(ctx, c.gs)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.loaded {
+		views, err := buildMeetingViews(ctx, c.gs)
+		if err != nil {
+			return nil, err
+		}
+		c.views, c.loaded = views, true
+	}
+	return c.views, nil
+}
+
+// buildMeetingViews assembles one view per meeting node, newest first, with its decisions and the symbols they
+// govern. It reads each decision's DECIDED_IN edges from the adjacency index instead of decoding every edge.
 func buildMeetingViews(ctx context.Context, gs store.GraphStore) ([]meetingView, error) {
 	nodes, err := store.NodesMatching(ctx, gs, store.NodeFilter{Kinds: []model.NodeKind{model.KindMeeting, model.KindDecision}})
 	if err != nil {
 		return nil, err
 	}
-	edges, err := gs.AllEdges(ctx)
-	if err != nil {
-		return nil, err
-	}
 
-	byID := make(map[string]*model.Node, len(nodes))
-	for i := range nodes {
-		byID[nodes[i].ID] = &nodes[i]
-	}
-	// Load the other DECIDED_IN targets (the symbols decisions govern) in one read.
-	var missing []string
-	for _, e := range edges {
-		if _, ok := byID[e.Dst]; !ok && e.Kind == model.EdgeDecidedIn {
-			byID[e.Dst] = nil // nil marks an absent node and keeps missing free of duplicates
-			missing = append(missing, e.Dst)
-		}
-	}
-	targets, err := store.GetNodes(ctx, gs, missing)
-	if err != nil {
-		return nil, err
-	}
-	for i := range targets {
-		byID[targets[i].ID] = &targets[i]
-	}
-
-	// Index decision → (governed symbol labels, meeting id) and meeting → label.
+	// Index decision → (governed symbol labels, meeting id).
 	decGoverns := map[string][]string{}
 	decMeeting := map[string]string{}
-	for _, e := range edges {
-		if e.Kind != model.EdgeDecidedIn {
+	for _, d := range nodes {
+		if d.Kind != model.KindDecision {
 			continue
 		}
-		dst := byID[e.Dst]
-		if dst == nil {
-			continue
+		sub, err := gs.Neighbors(ctx, d.ID, 1, []model.EdgeKind{model.EdgeDecidedIn})
+		if err != nil {
+			return nil, err
 		}
-		if dst.Kind == model.KindMeeting {
-			decMeeting[e.Src] = e.Dst
-		} else {
-			decGoverns[e.Src] = append(decGoverns[e.Src], dst.Label)
+		byID := make(map[string]model.Node, len(sub.Nodes))
+		for _, n := range sub.Nodes {
+			byID[n.ID] = n
+		}
+		for _, e := range sub.Edges {
+			dst, ok := byID[e.Dst]
+			if e.Src != d.ID || !ok {
+				continue
+			}
+			if dst.Kind == model.KindMeeting {
+				decMeeting[d.ID] = dst.ID
+			} else {
+				decGoverns[d.ID] = append(decGoverns[d.ID], dst.Label)
+			}
 		}
 	}
 
