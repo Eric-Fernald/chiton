@@ -320,26 +320,11 @@ func (a *Analyzer) deterministicFindings(ctx context.Context, scanned map[string
 	return out, nil
 }
 
-// deleteFindingNodes removes the nodes and their edges with NodeDeleter when available, else calls
-// DeleteBySourceURI per node. Finding source URIs are unique, so both paths delete exactly these nodes.
+// deleteFindingNodes removes the nodes and their edges via store.DeleteNodes. Finding source URIs are unique, so
+// both of its paths delete exactly these nodes.
 func deleteFindingNodes(ctx context.Context, gs store.GraphStore, nodes []model.Node) error {
-	if len(nodes) == 0 {
-		return nil
-	}
-	if d, ok := gs.(store.NodeDeleter); ok {
-		ids := make([]string, len(nodes))
-		for i, n := range nodes {
-			ids[i] = n.ID
-		}
-		if _, err := d.DeleteByIDs(ctx, ids); err != nil {
-			return fmt.Errorf("prune findings: %w", err)
-		}
-		return nil
-	}
-	for _, n := range nodes {
-		if _, err := gs.DeleteBySourceURI(ctx, n.SourceURI); err != nil {
-			return fmt.Errorf("prune finding %s: %w", n.ID, err)
-		}
+	if _, err := store.DeleteNodes(ctx, gs, nodes); err != nil {
+		return fmt.Errorf("prune findings: %w", err)
 	}
 	return nil
 }

@@ -399,6 +399,8 @@ driver. Cookies, `Login Data`, saved credentials, and form autofill stores are
 **never opened**, and **no page is fetched** — the graph gets the title you saw,
 not the page you saw. Chrome, Edge, and Brave profiles are auto-detected.
 
+By default stored URLs are `scheme://host/path`: userinfo, query string and fragment are removed before anything is written, because they carry OAuth codes, reset and magic-link tokens and presigned-URL signatures. `--keep-query` keeps the query and fragment (userinfo is always dropped). The first ingest after upgrading deletes nodes an older version stored with a query; run `chiton cluster` afterwards so `cluster.json` drops their labels. Tokens embedded in the **path** (for example `/reset/<token>`) are not detected.
+
 That still means your browsing history — every URL and title, including private
 ones — is in the graph as `url` nodes, ungated, retrievable by any read tool.
 

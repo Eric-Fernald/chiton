@@ -205,6 +205,7 @@ dated section.
 
 - **Webhook secrets no longer go on the command line.** `--signing-secret` and `--client-state` are removed and now fail with a pointer to `--signing-secret-file` / `--client-state-file`, which read the secret from a file. The `CHITON_SLACK_SIGNING_SECRET` and `CHITON_TEAMS_CLIENT_STATE` env vars work as before.
 - **`chiton install`/`uninstall` no longer reset MCP config files to 0644 or replace symlinks.** Files such as `~/.codex/config.toml` keep their existing mode, a symlinked config is written through, and new MCP configs are created 0600.
+- **`chiton browser ingest|watch` strips userinfo, query strings and fragments from history URLs** (they carried OAuth codes, reset tokens and presigned signatures into every MCP read tool). Rows that then share a URL merge, and pages stored unredacted by an earlier ingest are deleted on the next run. `--keep-query` restores query and fragment.
 
 - **`chiton serve --unix` creates its socket owner-only (`0600`).** Its mode used to follow the umask, which could let group members or every local user read the graph.
 - **A repository's `.chitonrc` can no longer send your text off-device.** A non-loopback `embed.endpoint` set by the project `.chitonrc` is refused. Set `CHITON_EMBED_ENDPOINT` yourself to use a remote embedder.

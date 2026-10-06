@@ -178,3 +178,27 @@ func CountByKind(ctx context.Context, gs GraphStore) (map[model.NodeKind]int, ma
 	}
 	return nodes, edges, nil
 }
+
+// DeleteNodes removes nodes and their edges by ID via NodeDeleter when gs has it, else by each node's source_uri
+// (which also removes any other node sharing that URI). It returns how many nodes were deleted.
+func DeleteNodes(ctx context.Context, gs GraphStore, nodes []model.Node) (int, error) {
+	if len(nodes) == 0 {
+		return 0, nil
+	}
+	if d, ok := gs.(NodeDeleter); ok {
+		ids := make([]string, len(nodes))
+		for i, n := range nodes {
+			ids[i] = n.ID
+		}
+		return d.DeleteByIDs(ctx, ids)
+	}
+	total := 0
+	for _, n := range nodes {
+		k, err := gs.DeleteBySourceURI(ctx, n.SourceURI)
+		total += k
+		if err != nil {
+			return total, err
+		}
+	}
+	return total, nil
+}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -31,6 +32,7 @@ network I/O. Use 'chiton add-url' to pull a page's content into the graph.`,
 func browserIngestCmd() *cobra.Command {
 	var dbPath, name, since string
 	var limit, minVisits int
+	var keepQuery bool
 
 	cmd := &cobra.Command{
 		Use:   "ingest",
@@ -47,7 +49,7 @@ func browserIngestCmd() *cobra.Command {
 			defer gs.Close()
 
 			ing := browser.New(gs)
-			opts := browser.Options{Limit: limit, Since: sinceT, MinVisits: minVisits}
+			opts := browser.Options{Limit: limit, Since: sinceT, MinVisits: minVisits, KeepQuery: keepQuery}
 			out := cmd.OutOrStdout()
 
 			if dbPath != "" {
@@ -56,6 +58,7 @@ func browserIngestCmd() *cobra.Command {
 					return err
 				}
 				fmt.Fprintf(out, "browser: ingested %d pages from %s\n", rep.NodesUpserted, rep.DB)
+				purgeNote(out, rep.Purged)
 				return nil
 			}
 
@@ -63,12 +66,14 @@ func browserIngestCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			total := 0
+			total, purged := 0, 0
 			for _, r := range reports {
 				fmt.Fprintf(out, "browser: %s — %d pages (%s)\n", r.Browser, r.NodesUpserted, r.DB)
 				total += r.NodesUpserted
+				purged += r.Purged
 			}
 			fmt.Fprintf(out, "browser: ingested %d pages from %d database(s)\n", total, len(reports))
+			purgeNote(out, purged)
 			return nil
 		},
 	}
@@ -77,12 +82,14 @@ func browserIngestCmd() *cobra.Command {
 	cmd.Flags().IntVar(&limit, "limit", 0, "Max most-recent history rows per database (0 = default 1000)")
 	cmd.Flags().StringVar(&since, "since", "", "Only visits at/after this time (YYYY-MM-DD, RFC3339, or a duration like 168h)")
 	cmd.Flags().IntVar(&minVisits, "min-visits", 0, "Skip URLs visited fewer than this many times")
+	cmd.Flags().BoolVar(&keepQuery, "keep-query", false, "Keep URL query strings and #fragments (may store OAuth codes, reset tokens, signed-URL signatures)")
 	return cmd
 }
 
 func browserWatchCmd() *cobra.Command {
 	var dbPath, name string
 	var limit, minVisits, debounceMS int
+	var keepQuery bool
 
 	cmd := &cobra.Command{
 		Use:   "watch",
@@ -107,7 +114,7 @@ func browserWatchCmd() *cobra.Command {
 			// cmd.Context() is cancelled by the root signal handler on Ctrl-C,
 			// so the watcher stops and the store closes cleanly.
 			ing := browser.New(gs)
-			opts := browser.Options{Limit: limit, MinVisits: minVisits}
+			opts := browser.Options{Limit: limit, MinVisits: minVisits, KeepQuery: keepQuery}
 			fmt.Fprintf(cmd.OutOrStdout(), "browser: watching %d history database(s) (Ctrl-C to stop)\n", len(dbs))
 			return ing.Watch(cmd.Context(), dbs, opts, time.Duration(debounceMS)*time.Millisecond, errLogf(cmd))
 		},
@@ -116,6 +123,7 @@ func browserWatchCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "browser", "", "Browser label for --db (e.g. chrome, edge)")
 	cmd.Flags().IntVar(&limit, "limit", 0, "Max most-recent history rows per database per pass (0 = default 1000)")
 	cmd.Flags().IntVar(&minVisits, "min-visits", 0, "Skip URLs visited fewer than this many times")
+	cmd.Flags().BoolVar(&keepQuery, "keep-query", false, "Keep URL query strings and #fragments (may store OAuth codes, reset tokens, signed-URL signatures)")
 	cmd.Flags().IntVar(&debounceMS, "debounce-ms", 5000, "Idle window before re-ingesting after a change")
 	return cmd
 }
@@ -136,4 +144,11 @@ func parseSince(s string) (time.Time, error) {
 		return time.Now().Add(-d).UTC(), nil
 	}
 	return time.Time{}, fmt.Errorf("invalid --since %q: use YYYY-MM-DD, RFC3339, or a duration like 168h", s)
+}
+
+// purgeNote tells the user when an ingest deleted pages an older chiton stored with their query strings.
+func purgeNote(out io.Writer, purged int) {
+	if purged > 0 {
+		fmt.Fprintf(out, "browser: removed %d page(s) an earlier ingest stored with query strings; run 'chiton cluster' to refresh cluster.json\n", purged)
+	}
 }

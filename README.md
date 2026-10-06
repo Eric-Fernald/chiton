@@ -216,7 +216,7 @@ chiton search "where do we handle auth?"
 | `chiton teams fetch\|serve-webhook` | Fetch + ingest all transcripts for one Teams meeting (`--meeting <id>`), or run the Graph change-notification webhook receiver. Needs `CHITON_TEAMS_{TENANT_ID,CLIENT_ID,CLIENT_SECRET,USER_ID}` and a `-tags msgraph` build. The receiver refuses to start without `CHITON_TEAMS_CLIENT_STATE`; `--addr` defaults to `127.0.0.1:8444`. |
 | `chiton slack fetch --channel <id>` | Fetch a Slack channel — or one thread with `--thread <ts>` — and ingest it as a meeting subgraph (`CHITON_SLACK_TOKEN`). |
 | `chiton slack serve-events` | Run the Slack Events API receiver: a new message re-ingests its thread (or channel). Refuses to start without `CHITON_SLACK_SIGNING_SECRET`; `--addr` defaults to `127.0.0.1:8445`. |
-| `chiton browser ingest\|watch` | Ingest local browser history (Chrome/Edge/Brave) as `url` nodes; `watch` re-ingests on change. `--db <History>`, `--browser`, `--since`, `--min-visits`. |
+| `chiton browser ingest\|watch` | Ingest local browser history (Chrome/Edge/Brave) as `url` nodes; `watch` re-ingests on change. `--db <History>`, `--browser`, `--since`, `--min-visits`, `--keep-query`. |
 | `chiton email ingest\|gmail\|outlook` | Ingest email: local `.eml`/`.mbox` files, the Gmail API (`CHITON_GMAIL_TOKEN`, `--query`), or Microsoft Graph (`CHITON_OUTLOOK_*`, `--max`; needs a `-tags msgraph` build). |
 | `chiton serve` | Start the MCP server: stdio by default (`--stdio` still accepted), `--http 127.0.0.1:7474` (SSE / shared daemon; needs an explicit address), or `--unix <path>` (socket). `--writable` for submit tools. `--include-pii` returns people's names and addresses from the graph tools, which redact them by default. HTTP requires the bearer token from `<graph dir>/mcp-token`. |
 
@@ -450,6 +450,7 @@ plaintext. Opt out for CI or synthetic data with `chiton init --encrypt=false`.
 - **Browser history** — Chrome/Edge/Brave (`chiton browser`). Only the local
   History database's page *metadata* is read (title, visit count, last visit),
   as `url` nodes; chiton never fetches the pages, so this does no network I/O.
+  URLs are stored without userinfo, query or fragment unless you pass `--keep-query`.
 
 Encryption at rest, secrets, and meeting PII are covered in
 [docs/SECURITY.md](docs/SECURITY.md).

@@ -227,3 +227,23 @@ func TestReplaceSourcesBatch(t *testing.T) {
 		})
 	}
 }
+
+func TestDeleteNodesFallbackAgrees(t *testing.T) {
+	ctx := context.Background()
+	for name, wrap := range map[string]func(*badger.Store) store.GraphStore{
+		"deleter":  func(s *badger.Store) store.GraphStore { return s },
+		"fallback": func(s *badger.Store) store.GraphStore { return plain{s} },
+	} {
+		gs := openStore(t)
+		nodes := []model.Node{{ID: "1", SourceURI: "u://1"}, {ID: "2", SourceURI: "u://2"}, {ID: "3", SourceURI: "u://3"}}
+		if err := gs.UpsertNodes(ctx, nodes); err != nil {
+			t.Fatal(err)
+		}
+		if n, err := store.DeleteNodes(ctx, wrap(gs), nodes[:2]); err != nil || n != 2 {
+			t.Errorf("%s DeleteNodes = %d, %v; want 2, nil", name, n, err)
+		}
+		if left, _ := gs.AllNodes(ctx); len(left) != 1 || left[0].ID != "3" {
+			t.Errorf("%s left %v, want only node 3", name, left)
+		}
+	}
+}
