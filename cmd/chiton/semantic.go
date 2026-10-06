@@ -357,7 +357,10 @@ func extractSubmitCmd() *cobra.Command {
 			// construction errors so submit still works offline.
 			var emb embed.Embedder
 			if !noEmbed {
-				emb, _ = newEmbedder(cfg, provider, modelName)
+				var embErr error
+				if emb, embErr = newEmbedder(cfg, provider, modelName); embErr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "extract submit: warning: embeddings disabled: %v\n", embErr)
+				}
 			}
 			svc := subagent.New(gs, emb, cfg.Semantic.ConfidenceThreshold)
 

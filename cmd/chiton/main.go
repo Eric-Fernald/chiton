@@ -82,8 +82,8 @@ func newEmbedder(cfg *config.Config, providerOverride, modelOverride string) (em
 	if modelOverride != "" {
 		model = modelOverride
 	}
-	// Only the Ollama provider sends text to Endpoint; the hash provider stays usable offline.
-	if p := strings.ToLower(strings.TrimSpace(provider)); p == "" || p == "ollama" {
+	// Only the hash provider never contacts Endpoint, so every other provider is checked.
+	if strings.ToLower(strings.TrimSpace(provider)) != "hash" {
 		if err := cfg.Embed.CheckEndpoint(); err != nil {
 			return nil, err
 		}
@@ -918,7 +918,9 @@ func buildSemanticDeps(cmd *cobra.Command, cfg *config.Config, gs store.GraphSto
 
 	emb, err := newEmbedder(cfg, "", "")
 	if err != nil {
+		// Extraction needs no embedder, so a refused endpoint disables only embeddings.
 		fmt.Fprintf(errOut, "serve: warning: embeddings disabled: %v\n", err)
+		deps.Extractor = subagent.New(gs, nil, cfg.Semantic.ConfidenceThreshold)
 		return deps
 	}
 	deps.Extractor = subagent.New(gs, emb, cfg.Semantic.ConfidenceThreshold)

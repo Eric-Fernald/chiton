@@ -176,7 +176,11 @@ func sameDir(a, b string) bool {
 // CheckEndpoint refuses a non-loopback endpoint set by the project's .chitonrc, since a cloned repository must
 // not choose where chiton sends document text and queries. The environment and $HOME/.chitonrc may point anywhere.
 func (e EmbedConfig) CheckEndpoint() error {
-	if e.EndpointOrigin != OriginProjectRC || isLoopbackURL(e.Endpoint) {
+	switch e.EndpointOrigin {
+	case OriginEnv, OriginUserRC, OriginDefault:
+		return nil
+	}
+	if isLoopbackURL(e.Endpoint) {
 		return nil
 	}
 	return fmt.Errorf("embed.endpoint %q comes from the project's .chitonrc and is not a loopback address; "+

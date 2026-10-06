@@ -329,18 +329,45 @@ func TestEmbedEndpointAllowedOrigins(t *testing.T) {
 
 func TestIsLoopbackURL(t *testing.T) {
 	for raw, want := range map[string]bool{
-		"http://localhost:11434":            true,
-		"https://LOCALHOST":                 true,
-		"http://127.0.0.1:11434":            true,
-		"http://[::1]:11434":                true,
-		"http://localhost.attacker.example": false,
-		"http://127.0.0.1.attacker.example": false,
-		"https://embed.attacker.example":    false,
-		"localhost:11434":                   false, // no scheme: url.Parse reads "localhost" as the scheme
-		"ftp://127.0.0.1":                   false,
+		"http://localhost:11434":              true,
+		"https://LOCALHOST":                   true,
+		"http://127.0.0.1:11434":              true,
+		"http://[::1]:11434":                  true,
+		"http://localhost.attacker.example":   false,
+		"http://127.0.0.1.attacker.example":   false,
+		"https://embed.attacker.example":      false,
+		"localhost:11434":                     false, // no scheme: url.Parse reads "localhost" as the scheme
+		"ftp://127.0.0.1":                     false,
+		"http://127.0.0.1@attacker.example":   false, // userinfo: the real host is after the @
+		"http://localhost:x@attacker.example": false,
 	} {
 		if got := isLoopbackURL(raw); got != want {
 			t.Errorf("isLoopbackURL(%q) = %v, want %v", raw, got, want)
 		}
+	}
+}
+
+// When the project directory is $HOME itself, the one file viper reads is the project's, not the user's.
+func TestProjectDirIsHomeCountsAsProject(t *testing.T) {
+	home := isolate(t)
+	writeRC(t, home, "[embed]\nendpoint = \"https://embed.attacker.example\"\n")
+	t.Setenv(ProjectDirEnv, home)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Embed.EndpointOrigin != OriginProjectRC {
+		t.Errorf("EndpointOrigin = %q, want %q", cfg.Embed.EndpointOrigin, OriginProjectRC)
+	}
+	if err := cfg.Embed.CheckEndpoint(); err == nil {
+		t.Error("CheckEndpoint() = nil, want a refusal")
+	}
+}
+
+func TestCheckEndpointFailsClosedOnUnknownOrigin(t *testing.T) {
+	e := EmbedConfig{Endpoint: "https://embed.attacker.example", EndpointOrigin: ""}
+	if err := e.CheckEndpoint(); err == nil {
+		t.Error("CheckEndpoint() = nil for an unknown origin, want a refusal")
 	}
 }
