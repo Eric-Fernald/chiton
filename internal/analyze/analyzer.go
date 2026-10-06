@@ -2,11 +2,10 @@ package analyze
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"io/fs"
 	"maps"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -50,11 +49,32 @@ type Result struct {
 	RulesRun     int
 	Findings     []Finding
 	Duration     time.Duration
+	Skipped      []string // paths the walk or extractor could not read; the scan went on without them
+
+	rules     []Rule          // rule nodes Record upserts
+	scanned   map[string]bool // file URIs whose resolved findings Record prunes
+	ruleScope map[string]bool // rule IDs Record may prune; nil means every rule
+	prior     *PriorFindings  // prune candidates read before a re-sync; nil queries the store
 }
 
 // Analyze runs FileScope rules over each supported file under root, then GraphScope rules over
 // the whole extracted set, and upserts every finding plus the rules they violated.
 func (a *Analyzer) Analyze(ctx context.Context, root string) (*Result, error) {
+	start := a.now()
+	res, err := a.Scan(ctx, root)
+	if err != nil {
+		return nil, err
+	}
+	if err := a.Record(ctx, res); err != nil {
+		return nil, err
+	}
+	res.Duration = a.now().Sub(start)
+	return res, nil
+}
+
+// Scan is Analyze without the store: it runs every FileScope and GraphScope rule over the supported files
+// under root, stopping once ctx is done, and returns findings that Record can persist.
+func (a *Analyzer) Scan(ctx context.Context, root string) (*Result, error) {
 	start := a.now()
 	rules := a.registry.All()
 
@@ -73,26 +93,64 @@ func (a *Analyzer) Analyze(ctx context.Context, root string) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	findings := append(w.findings, a.matchGraphRules(ctx, graphRules, w.nodes, w.edges)...)
-
-	ids, err := a.persist(ctx, rules, findings)
+	graphFindings, err := a.matchGraphRules(ctx, graphRules, w.nodes, w.edges)
 	if err != nil {
 		return nil, err
 	}
-	// A full Analyze runs every rule, so all deterministic findings for the
-	// scanned files are in scope to prune (ruleScope nil = no restriction).
-	if err := a.pruneResolved(ctx, w.scannedURIs, ids, nil, nil); err != nil {
-		return nil, err
-	}
-
 	return &Result{
 		FilesScanned: w.filesScanned,
 		// Count only rules actually executed here; LLM rules are dispatched
 		// separately via LLMService and are neither FileRule nor GraphRule.
 		RulesRun: len(fileRules) + len(graphRules),
-		Findings: findings,
+		Findings: append(w.findings, graphFindings...),
 		Duration: a.now().Sub(start),
+		Skipped:  w.skipped,
+		rules:    rules,
+		scanned:  w.scannedURIs, // every rule ran, so ruleScope stays nil
 	}, nil
+}
+
+// SourceFile is one file's path and content for ScanSources, such as a blob staged in the git index.
+type SourceFile struct {
+	Path    string
+	Content []byte
+}
+
+// ScanSources runs the FileScope rules over in-memory files without touching the store. GraphScope rules
+// need the whole corpus (a partial one reports live symbols as dead), so they are skipped.
+func (a *Analyzer) ScanSources(ctx context.Context, files []SourceFile) (*Result, error) {
+	start := a.now()
+	res := newFileResult()
+	for _, sf := range files {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		ex := extast.ForFile(sf.Path)
+		if ex == nil {
+			continue
+		}
+		nodes, edges, err := ex.ExtractSource(ctx, sf.Path, sf.Content)
+		if err != nil {
+			res.Skipped = append(res.Skipped, sf.Path)
+			continue
+		}
+		a.matchFile(ctx, newFileTarget(sf.Path, sf.Content, nodes, edges), res)
+	}
+	res.Duration = a.now().Sub(start)
+	return res, nil
+}
+
+// Record upserts res's rule nodes and findings, then deletes the findings of res's files, from the rules
+// res ran, that res no longer holds. The Analyzer needs a store.
+func (a *Analyzer) Record(ctx context.Context, res *Result) error {
+	if a.store == nil {
+		return errors.New("analyze: Record needs an Analyzer with a store")
+	}
+	ids, err := a.persist(ctx, res.rules, res.Findings)
+	if err != nil {
+		return err
+	}
+	return a.pruneResolved(ctx, res.scanned, ids, res.ruleScope, res.prior)
 }
 
 // walkResult accumulates the per-file outputs of walkAndMatch.
@@ -104,6 +162,7 @@ type walkResult struct {
 	// findings for other files alone.
 	scannedURIs  map[string]bool
 	filesScanned int
+	skipped      []string
 }
 
 // walkAndMatch walks root, extracts each supported source file, and runs the
@@ -114,17 +173,7 @@ func (a *Analyzer) walkAndMatch(ctx context.Context, root string, fileRules []Fi
 	for i, fr := range fileRules {
 		langs[i] = fr.Meta().Languages
 	}
-	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			// Skip common noise directories
-			if skipDir(d.Name()) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
+	skipped, walkErr := walkSources(ctx, root, func(path string) error {
 		ft, nodes, ok := loadFileTarget(ctx, path)
 		if !ok {
 			return nil
@@ -148,17 +197,21 @@ func (a *Analyzer) walkAndMatch(ctx context.Context, root string, fileRules []Fi
 	if walkErr != nil {
 		return nil, fmt.Errorf("walk: %w", walkErr)
 	}
+	w.skipped = skipped
 	return w, nil
 }
 
-// matchGraphRules runs the GraphScope rules over the full extracted set.
-func (a *Analyzer) matchGraphRules(ctx context.Context, graphRules []GraphRule, nodes []model.Node, edges []model.Edge) []Finding {
+// matchGraphRules runs the GraphScope rules over the full extracted set, stopping once ctx is done.
+func (a *Analyzer) matchGraphRules(ctx context.Context, graphRules []GraphRule, nodes []model.Node, edges []model.Edge) ([]Finding, error) {
 	gt := GraphTarget{Nodes: nodes, Edges: edges}
 	var findings []Finding
 	for _, gr := range graphRules {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		findings = append(findings, gr.MatchGraph(ctx, gt)...)
 	}
-	return findings
+	return findings, nil
 }
 
 // persist upserts rule nodes (so VIOLATES edges resolve), finding nodes, and VIOLATES and AFFECTS edges.

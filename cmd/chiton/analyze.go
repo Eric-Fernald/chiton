@@ -77,6 +77,9 @@ this command only reports how many LLM-rule tasks are pending (unless --no-llm).
 
 			fmt.Fprintf(out, "analyze: %d files scanned, %d rules run, %d findings [%s]\n",
 				res.FilesScanned, res.RulesRun, len(filtered), res.Duration.Round(time.Millisecond))
+			if len(res.Skipped) > 0 {
+				fmt.Fprintf(cmd.ErrOrStderr(), "analyze: skipped %d unreadable path(s), e.g. %s\n", len(res.Skipped), res.Skipped[0])
+			}
 			for _, f := range filtered {
 				loc := f.TargetURI
 				if f.Span != nil {

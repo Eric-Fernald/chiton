@@ -311,7 +311,11 @@ same subagent path as semantic extraction, land as `INFERRED`/`AMBIGUOUS`
 findings, and never block the pre-commit gate.
 
 Wire findings into git with `chiton hooks install`; the per-repo
-`.chiton/hooks.yaml` sets the block-on severity threshold per stage.
+`.chiton/hooks.yaml` sets the block-on severity threshold per stage. The
+pre-commit gate checks the staged content of the files in the commit (file
+rules only), pre-push scans the whole tree, and both run in memory. A locked or
+passphrase-protected store, a git error, or a run past `timeout-seconds` prints
+a warning instead of blocking, and a bad policy file falls back to the defaults.
 
 ## Live sync
 

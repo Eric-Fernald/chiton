@@ -90,7 +90,12 @@ dated section.
 
 ### Changed
 
-- **One ignore list for every walk.** `sync`, `sync watch`, and `bench` skip `.git`, `.hg`, `.svn`, `.chiton`, `chiton-out`, `node_modules`, `vendor`, `.venv`, `venv`, `__pycache__`, `target`, and `dist` at any depth; `bench` previously skipped nothing.
+- **The pre-commit hook now gates the commit, not the working tree.** It analyzes the staged blobs of the
+  committed files in memory, with file rules only, since graph rules need the whole corpus; pre-push still
+  scans the tree. Neither needs the graph store any more, and findings are recorded only when the store
+  opens without prompting.
+
+- **One ignore list for every walk.** `sync`, `sync watch`, `bench`, `analyze`, `analyze pending`, and the git hooks skip `.git`, `.hg`, `.svn`, `.chiton`, `chiton-out`, `node_modules`, `vendor`, `.venv`, `venv`, `__pycache__`, `target`, and `dist` at any depth, plus the entries in `.chitonignore`; `bench` previously skipped nothing. `analyze` also no longer follows symlinks.
 
 - **Live sync with `--analyze` is linear again.** Re-analyzing a file used to load and decode every
   deterministic finding in the store to prune that file's; it now reads the file's findings through their
@@ -140,6 +145,12 @@ dated section.
   `msgraph` tag, so the default test binary no longer links the Graph SDK.
 
 ### Fixed
+
+- **Git hooks no longer block commits on infrastructure errors.** A locked store (a running `sync watch`),
+  an encrypted store with no passphrase, a git error, or a malformed `hooks.yaml` used to fail
+  `git commit`, and a failing `sync git --stage …` also failed `git checkout`. These now warn and exit 0.
+  `timeout-seconds` is enforced (the analyzer checks its context per file and per graph rule), and an
+  unreadable directory is skipped and counted instead of aborting `chiton analyze` or `analyze pending`.
 
 - **An assistant-launched MCP server no longer risks reading a different store
   than `chiton build` wrote.** MCP servers are not reliably started in the

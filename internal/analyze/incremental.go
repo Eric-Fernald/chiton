@@ -57,39 +57,41 @@ func (a *Analyzer) ReanalyzeExtracted(ctx context.Context, path string, content 
 
 // analyzeTarget runs the FileRules applicable to ft and replaces ft's findings from those rules.
 func (a *Analyzer) analyzeTarget(ctx context.Context, ft FileTarget, start time.Time, prior *PriorFindings) (*Result, error) {
+	res := newFileResult()
+	res.prior = prior
+	a.matchFile(ctx, ft, res)
+	if err := a.Record(ctx, res); err != nil {
+		return nil, err
+	}
+	res.Duration = a.now().Sub(start)
+	return res, nil
+}
+
+// newFileResult starts a Result for FileRule-only passes. Its prune covers only the rules that ran, so a
+// file's GraphScope findings survive a single-file re-analyze.
+func newFileResult() *Result {
+	return &Result{scanned: map[string]bool{}, ruleScope: map[string]bool{}}
+}
+
+// matchFile runs the FileRules applicable to ft and adds ft, the rules, and their findings to res.
+func (a *Analyzer) matchFile(ctx context.Context, ft FileTarget, res *Result) {
 	ext := FileExt(ft.Path)
 	rs := a.fileRuleSet()
-	var findings []Finding
-	var usedRules []Rule
-	ruleScope := map[string]bool{}
 	for i, fr := range rs.rules {
 		if !ruleApplies(rs.langs[i], ext) {
 			continue
 		}
-		usedRules = append(usedRules, fr)
-		ruleScope[rs.ids[i]] = true
-		findings = append(findings, fr.MatchFile(ctx, ft)...)
+		if !res.ruleScope[rs.ids[i]] {
+			res.ruleScope[rs.ids[i]] = true
+			res.rules = append(res.rules, fr)
+		}
+		res.Findings = append(res.Findings, fr.MatchFile(ctx, ft)...)
 	}
-
-	ids, err := a.persist(ctx, usedRules, findings)
-	if err != nil {
-		return nil, err
-	}
-	scanned := map[string]bool{}
+	res.RulesRun = len(res.rules)
+	res.FilesScanned++
 	if ft.URI != "" {
-		scanned[ft.URI] = true
+		res.scanned[ft.URI] = true
 	}
-	// Limit the prune to the rules that ran, because this file's GraphScope findings must survive the edit.
-	if err := a.pruneResolved(ctx, scanned, ids, ruleScope, prior); err != nil {
-		return nil, err
-	}
-
-	return &Result{
-		FilesScanned: 1,
-		RulesRun:     len(usedRules),
-		Findings:     findings,
-		Duration:     a.now().Sub(start),
-	}, nil
 }
 
 // fileRuleSet is the registry's FileRules in ID order, with each rule's Meta ID and languages.

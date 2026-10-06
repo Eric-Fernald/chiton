@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	extast "github.com/Eric-Fernald/chiton/internal/extract/ast"
 	"github.com/Eric-Fernald/chiton/internal/fsutil"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
@@ -141,7 +139,7 @@ func (s *LLMService) LLMRules(filter string) []LLMRule {
 
 // Pending returns task specs for every (LLM rule, file) pair under root not yet recorded in the
 // state sidecar. ruleFilter matches rule IDs by substring, and limit<=0 means no cap.
-func (s *LLMService) Pending(_ context.Context, root, ruleFilter string, limit int) ([]LLMTaskSpec, error) {
+func (s *LLMService) Pending(ctx context.Context, root, ruleFilter string, limit int) ([]LLMTaskSpec, error) {
 	llmRules := s.LLMRules(ruleFilter)
 	if len(llmRules) == 0 {
 		return nil, nil
@@ -157,20 +155,8 @@ func (s *LLMService) Pending(_ context.Context, root, ruleFilter string, limit i
 	state := s.loadState()
 
 	var specs []LLMTaskSpec
-	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if skipDir(d.Name()) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		// A symlinked file can point anywhere, and its content would ship verbatim in the task input.
-		if d.Type()&fs.ModeSymlink != 0 || extast.ForFile(path) == nil {
-			return nil
-		}
+	// walkSources yields regular files only: a symlink can point anywhere, and its content would ship verbatim.
+	_, walkErr := walkSources(ctx, root, func(path string) error {
 		ext := FileExt(path)
 		// LLM rules target source code, so skip doc and image files even though they have extractors.
 		if !isCodeFile(ext) {
@@ -435,13 +421,4 @@ func isCodeFile(ext string) bool {
 		return false
 	}
 	return true
-}
-
-// skipDir reports whether the deterministic and LLM walks should skip a directory.
-func skipDir(name string) bool {
-	switch name {
-	case ".git", "node_modules", "vendor", ".chiton", "chiton-out":
-		return true
-	}
-	return false
 }

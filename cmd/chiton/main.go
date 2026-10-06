@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -1176,8 +1177,12 @@ func hooksRunCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Run one hook stage (invoked by the installed git hook script)",
-		Long: `Read .chiton/hooks.yaml, run the analyzer over the workspace, and exit
-non-zero if any finding crosses the stage's block-on threshold.
+		Long: `Read .chiton/hooks.yaml and gate one stage in memory: pre-commit checks the
+content staged for the commit (file rules only), pre-push scans the whole tree.
+It exits non-zero only when a finding crosses the stage's block-on threshold. A
+bad policy file falls back to the defaults, and a timeout (timeout-seconds), a
+git error, or an unusable graph store prints a warning and lets the commit or
+push through. Findings are recorded when the store opens without prompting.
 
 This is what the installed .git/hooks/pre-commit and pre-push scripts call.
 You usually don't invoke it directly.`,
@@ -1186,19 +1191,14 @@ You usually don't invoke it directly.`,
 			if !slices.Contains(hooks.Stages(), stage) {
 				return fmt.Errorf("unknown stage %q - supported: pre-commit, pre-push", stageRaw)
 			}
+			errOut := cmd.ErrOrStderr()
 
-			hooksYaml := filepath.Join(dir, ".chiton", "hooks.yaml")
-			cfg, err := hooks.Load(hooksYaml)
+			// Load falls back to the default policy on a bad file, so warn and carry on with it.
+			cfg, err := hooks.Load(filepath.Join(dir, ".chiton", "hooks.yaml"))
 			if err != nil {
-				return err
+				fmt.Fprintf(errOut, "chiton %s: warning: %v; using the default policy\n", stage, err)
 			}
 			stageCfg := cfg.For(stage)
-
-			_, gs, err := loadStore(false)
-			if err != nil {
-				return err
-			}
-			defer gs.Close()
 
 			ctx := cmd.Context()
 			if stageCfg.TimeoutSeconds > 0 {
@@ -1207,15 +1207,17 @@ You usually don't invoke it directly.`,
 				defer cancel()
 			}
 
-			res, err := hooks.Run(ctx, gs, hooks.RunOptions{
-				Stage:  stage,
-				Config: stageCfg,
-				Root:   dir,
-			})
+			res, err := hooks.Run(ctx, hooks.RunOptions{Stage: stage, Config: stageCfg, Root: dir})
 			if err != nil {
-				return err
+				// Only a finding may block a commit or push; a broken or slow analysis warns and lets it through.
+				if errors.Is(err, context.DeadlineExceeded) {
+					err = fmt.Errorf("analysis exceeded timeout-seconds (%d)", stageCfg.TimeoutSeconds)
+				}
+				fmt.Fprintf(errOut, "chiton %s: warning: %v; not blocking\n", stage, err)
+				return nil
 			}
 			hooks.FormatResult(cmd.OutOrStdout(), res)
+			recordHookScan(ctx, errOut, stage, res.Scan)
 			if res.Blocks() {
 				return fmt.Errorf("chiton %s: blocked by %d finding(s) at or above %q",
 					res.Stage, res.BlockingCount, res.BlockingMin)
@@ -1226,6 +1228,26 @@ You usually don't invoke it directly.`,
 	cmd.Flags().StringVar(&dir, "dir", ".", "Repository root")
 	cmd.Flags().StringVar(&stageRaw, "stage", "pre-commit", "Hook stage to execute")
 	return cmd
+}
+
+// recordHookScan persists a hook's findings when the store opens without creating it or prompting. A missing,
+// locked, or passphrase-protected store only prints a note, since the gate already ran in memory.
+func recordHookScan(ctx context.Context, w io.Writer, stage hooks.Stage, scan *analyze.Result) {
+	cfg, err := config.Load()
+	if err != nil {
+		return
+	}
+	if _, err := os.Stat(cfg.GraphPath); err != nil {
+		return // no graph yet, and a hook must not create one
+	}
+	gs, err := openGraphStore(cfg.GraphPath, false)
+	if err == nil {
+		defer gs.Close()
+		err = analyze.New(gs, nil).Record(ctx, scan)
+	}
+	if err != nil {
+		fmt.Fprintf(w, "chiton %s: note: findings not recorded (%v)\n", stage, err)
+	}
 }
 
 func parseStages(raw []string) ([]hooks.Stage, error) {
