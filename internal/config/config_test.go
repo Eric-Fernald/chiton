@@ -35,6 +35,52 @@ func TestLoadDefaultsStayRelative(t *testing.T) {
 	}
 }
 
+func TestVectorDefaults(t *testing.T) {
+	isolate(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := VectorConfig{Index: "auto", HNSWThreshold: 100000, HNSWM: 16, HNSWEfSearch: 128, HNSWEfConstruction: 200}
+	if cfg.Vector != want {
+		t.Errorf("Vector = %+v, want %+v", cfg.Vector, want)
+	}
+}
+
+func TestVectorEnvOverrides(t *testing.T) {
+	isolate(t)
+	t.Setenv("CHITON_VECTOR_INDEX", "flat")
+	t.Setenv("CHITON_VECTOR_HNSW_THRESHOLD", "5000")
+	t.Setenv("CHITON_VECTOR_HNSW_M", "24")
+	t.Setenv("CHITON_VECTOR_HNSW_EF_SEARCH", "64")
+	t.Setenv("CHITON_VECTOR_HNSW_EF_CONSTRUCTION", "300")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := VectorConfig{Index: "flat", HNSWThreshold: 5000, HNSWM: 24, HNSWEfSearch: 64, HNSWEfConstruction: 300}
+	if cfg.Vector != want {
+		t.Errorf("Vector = %+v, want %+v", cfg.Vector, want)
+	}
+}
+
+func TestVectorFromChitonrc(t *testing.T) {
+	isolate(t)
+	project := t.TempDir()
+	rc := "[vector]\nindex = \"hnsw\"\nhnsw_ef_search = 256\n"
+	if err := os.WriteFile(filepath.Join(project, ".chitonrc"), []byte(rc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(ProjectDirEnv, project)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Vector.Index != "hnsw" || cfg.Vector.HNSWEfSearch != 256 || cfg.Vector.HNSWM != 16 {
+		t.Errorf("Vector = %+v, want index hnsw, ef_search 256, default M", cfg.Vector)
+	}
+}
+
 func TestProjectDirAnchorsRelativeGraphPath(t *testing.T) {
 	isolate(t)
 	project := t.TempDir()

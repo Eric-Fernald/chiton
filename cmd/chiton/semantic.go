@@ -16,7 +16,6 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 	"github.com/Eric-Fernald/chiton/internal/graph/retrieve"
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
-	"github.com/Eric-Fernald/chiton/internal/vector"
 )
 
 const embedBatchSize = 64
@@ -25,7 +24,7 @@ const embedBatchSize = 64
 // concepts) and persists the vectors into the store's encrypted keyspace.
 func embedCmd() *cobra.Command {
 	var provider, modelName string
-	var all, linkSimilar bool
+	var all, linkSimilar, exact bool
 	var similarThreshold float64
 
 	cmd := &cobra.Command{
@@ -115,7 +114,7 @@ for CI and demos). Restart 'chiton serve' afterwards to load the new vectors.`,
 			fmt.Fprintf(out, "embed: done — %d embeddings written (dim %d)\n", written, emb.Dim())
 
 			if linkSimilar {
-				n, err := linkSimilarNodes(ctx, gs, es, float32(similarThreshold))
+				n, err := linkSimilarNodes(ctx, gs, es, float32(similarThreshold), cfg.Vector, exact)
 				if err != nil {
 					return fmt.Errorf("link-similar: %w", err)
 				}
@@ -132,17 +131,24 @@ for CI and demos). Restart 'chiton serve' afterwards to load the new vectors.`,
 	cmd.Flags().BoolVar(&all, "all", false, "Re-embed every embeddable node, not just those missing a vector")
 	cmd.Flags().BoolVar(&linkSimilar, "link-similar", false, "Also add SIMILAR_TO edges between highly-similar nodes")
 	cmd.Flags().Float64Var(&similarThreshold, "similar-threshold", 0.85, "Cosine threshold for --link-similar edges")
+	cmd.Flags().BoolVar(&exact, "exact", false,
+		"Use exact search for --link-similar; large stores otherwise use HNSW, which can miss a few pairs")
 	return cmd
 }
 
-// linkSimilarNodes builds a flat index over all embeddings and adds a
-// SIMILAR_TO edge (INFERRED, confidence=score) for each pair above threshold.
-func linkSimilarNodes(ctx context.Context, gs store.GraphStore, es store.EmbeddingStore, threshold float32) (int, error) {
+// linkSimilarNodes indexes all embeddings and adds a SIMILAR_TO edge (INFERRED, confidence=score) for each
+// pair above threshold. Large stores get an approximate index, which can miss a few pairs; exact forces Flat.
+func linkSimilarNodes(ctx context.Context, gs store.GraphStore, es store.EmbeddingStore, threshold float32,
+	vcfg config.VectorConfig, exact bool) (int, error) {
 	embs, err := es.AllEmbeddings(ctx)
 	if err != nil {
 		return 0, err
 	}
-	idx := consumeIntoFlatIndex(slices.Clone(embs)) // clone so embs keeps raw vectors for the loop below
+	// Clone so embs keeps raw vectors for the loop below.
+	idx, _, err := buildIndex(vcfg, slices.Clone(embs), exact)
+	if err != nil {
+		return 0, err
+	}
 
 	seen := map[[2]string]bool{}
 	var edges []model.Edge
@@ -180,19 +186,6 @@ func linkSimilarNodes(ctx context.Context, gs store.GraphStore, es store.Embeddi
 	return len(edges), nil
 }
 
-// consumeIntoFlatIndex indexes embs and clears each embs[i].Vec, since the index keeps a normalized copy.
-// That way raw and normalized vectors are never both fully live. Pass a clone to keep the raw vectors.
-func consumeIntoFlatIndex(embs []store.Embedding) *vector.Flat {
-	idx := vector.NewFlatSized(len(embs))
-	item := make([]vector.Item, 1)
-	for i := range embs {
-		item[0] = vector.Item{ID: embs[i].NodeID, Vec: embs[i].Vec}
-		idx.Add(item)
-		embs[i].Vec = nil
-	}
-	return idx
-}
-
 // searchCmd runs hybrid retrieval from the command line.
 func searchCmd() *cobra.Command {
 	var k, hops, maxTokens int
@@ -228,7 +221,11 @@ func searchCmd() *cobra.Command {
 				return err
 			}
 			clusterResults, _ := cluster.LoadSidecar(cluster.SidecarPath(cfg.GraphPath))
-			eng := retrieve.New(gs, consumeIntoFlatIndex(embs), emb, clusterResults)
+			idx, _, err := buildIndex(cfg.Vector, embs, false)
+			if err != nil {
+				return err
+			}
+			eng := retrieve.New(gs, idx, emb, clusterResults)
 
 			query := strings.Join(args, " ")
 			res, err := eng.Query(cmd.Context(), query, retrieve.Options{

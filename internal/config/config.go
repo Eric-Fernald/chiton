@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/spf13/viper"
+
+	"github.com/Eric-Fernald/chiton/internal/vector"
 )
 
 // ProjectDirEnv anchors chiton to a workspace, since assistant-launched MCP servers may start elsewhere
@@ -37,11 +39,21 @@ type SemanticConfig struct {
 	ConfidenceThreshold float32 `mapstructure:"confidence_threshold"`
 }
 
+// VectorConfig selects and tunes the nearest-neighbour index behind semantic search.
+type VectorConfig struct {
+	Index              string `mapstructure:"index"`          // auto | flat | hnsw
+	HNSWThreshold      int    `mapstructure:"hnsw_threshold"` // auto switches to HNSW at this many vectors
+	HNSWM              int    `mapstructure:"hnsw_m"`
+	HNSWEfSearch       int    `mapstructure:"hnsw_ef_search"`
+	HNSWEfConstruction int    `mapstructure:"hnsw_ef_construction"`
+}
+
 type Config struct {
 	GraphPath string         `mapstructure:"graph_path"`
 	LogLevel  string         `mapstructure:"log_level"`
 	Embed     EmbedConfig    `mapstructure:"embed"`
 	Semantic  SemanticConfig `mapstructure:"semantic"`
+	Vector    VectorConfig   `mapstructure:"vector"`
 }
 
 // Load reads .chitonrc (TOML) from ProjectDir, merges CHITON_* environment overrides, and returns a
@@ -77,6 +89,11 @@ func LoadFrom(dir string) (*Config, error) {
 		return nil, err
 	}
 	v.SetDefault("semantic.confidence_threshold", 0.5)
+	v.SetDefault("vector.index", "auto")
+	v.SetDefault("vector.hnsw_threshold", vector.DefaultHNSWThreshold)
+	v.SetDefault("vector.hnsw_m", vector.DefaultHNSWM)
+	v.SetDefault("vector.hnsw_ef_search", vector.DefaultHNSWEfSearch)
+	v.SetDefault("vector.hnsw_ef_construction", vector.DefaultHNSWEfConstruction)
 
 	// The replacer maps nested keys to flat env vars, e.g. embed.provider to CHITON_EMBED_PROVIDER.
 	v.SetEnvPrefix("CHITON")
