@@ -332,7 +332,8 @@ chiton sync git --since <ref>  # re-index files changed since a git ref
 chiton hooks install --stage post-commit,post-checkout   # auto-sync on git ops
 ```
 
-Each changed file is re-extracted (stale nodes/edges replaced), its deterministic
+Each changed file is re-extracted (stale nodes/edges replaced; edges meetings
+and concepts attached to surviving symbols are kept), its deterministic
 findings refreshed (`--analyze`, on by default), and — with `--embed` — its
 embeddings refreshed. Re-embedding makes the saved HNSW index stale; run
 `chiton embed` afterwards to save a current one.

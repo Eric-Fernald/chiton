@@ -528,3 +528,47 @@ func TestSyncDirHonoursIgnorePolicy(t *testing.T) {
 		}
 	}
 }
+
+// TestResyncKeepsForeignEdges reproduces the lost-linkage bug: an edit keeps a meeting's edges on a surviving
+// symbol, and renaming the symbol drops them with it.
+func TestResyncKeepsForeignEdges(t *testing.T) {
+	h := newHarness(t, false, false)
+	ctx := context.Background()
+	p := h.write(t, "foo.go", "package src\nfunc Hello() {}\n")
+	helloID := model.NewNodeID(model.FileURI(p), "Hello")
+	if _, err := h.eng.SyncFile(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	const decID, mtgID = "dec", "mtg"
+	if err := h.gs.UpsertNodes(ctx, []model.Node{
+		{ID: decID, Kind: model.KindDecision, Label: "keep Hello", SourceURI: "decision://meeting://standup"},
+		{ID: mtgID, Kind: model.KindMeeting, Label: "standup", SourceURI: "meeting://standup"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.gs.UpsertEdges(ctx, []model.Edge{
+		{ID: "d", Src: decID, Dst: helloID, Kind: model.EdgeDecidedIn, Provenance: model.ProvInferred},
+		{ID: "m", Src: helloID, Dst: mtgID, Kind: model.EdgeDiscussedIn, Provenance: model.ProvInferred},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	h.write(t, "foo.go", "package src\nfunc Hello() {}\nfunc World() {}\n")
+	if _, err := h.eng.SyncFile(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if !h.hasEdge(t, decID, helloID, model.EdgeDecidedIn) || !h.hasEdge(t, helloID, mtgID, model.EdgeDiscussedIn) {
+		t.Fatal("editing foo.go deleted the meeting edges on the surviving Hello symbol")
+	}
+
+	h.write(t, "foo.go", "package src\nfunc Greet() {}\n")
+	if _, err := h.eng.SyncFile(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if h.edgeTouches(t, helloID) {
+		t.Error("edges still reference the renamed-away Hello symbol")
+	}
+	if n, _ := h.gs.GetNode(ctx, decID); n == nil {
+		t.Error("the decision node itself must survive")
+	}
+}

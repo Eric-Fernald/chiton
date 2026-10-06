@@ -866,7 +866,9 @@ Ingest the result of one meeting-linkage task (from `pending_meeting_links`):
 creates decision/rationale nodes and `DECIDED_IN` / `DISCUSSED_IN` /
 `ACTION_FOR` / `RATIONALE_FOR` / `MENTIONED` edges tagged `INFERRED` (or
 `AMBIGUOUS` below the confidence threshold). Re-submitting supersedes the
-meeting's prior decisions. **Requires a writable store.**
+meeting's prior decisions. Decision and rationale nodes are stored under
+`decision://<meeting source_uri>`, so re-ingesting the transcript or Slack
+conversation keeps them and their edges. **Requires a writable store.**
 
 | Parameter | Type | Required / default | Description |
 |---|---|---|---|

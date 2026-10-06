@@ -280,3 +280,79 @@ func TestIdentifierTokens(t *testing.T) {
 		t.Errorf("identifierTokens(do_work)=%v want [do work]", got)
 	}
 }
+
+// TestReingestKeepsLinkage checks re-ingesting a conversation keeps its decisions and code links, re-offers
+// linkage only when the transcript changed, and files decisions under DecisionURI.
+func TestReingestKeepsLinkage(t *testing.T) {
+	gs := newStore(t)
+	ctx := context.Background()
+	tr := &Transcript{Title: "Retry Policy Sync", SourceURI: "slack://C1",
+		Turns: []Turn{{Speaker: "Alice", Text: "Cap retries in fetchAll."}}}
+	if _, err := Upsert(ctx, gs, tr, time.Now(), "conversation"); err != nil {
+		t.Fatal(err)
+	}
+	if err := gs.UpsertNodes(ctx, []model.Node{symbolNode("fetchAll", "file://client.go")}); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewLinkService(gs, 0.5)
+	meetingID := model.NewNodeID("slack://C1", tr.Title)
+	if _, err := svc.Submit(ctx, LinkResult{TaskID: meetingID, Decisions: []DecisionResult{
+		{Summary: "Cap retries at 3", Confidence: 0.9, References: []string{"fetchAll"}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Upsert(ctx, gs, tr, time.Now(), "conversation"); err != nil {
+		t.Fatal(err)
+	}
+	if specs, _ := svc.Pending(ctx, 0); len(specs) != 0 {
+		t.Errorf("unchanged re-ingest re-offered %d linkage task(s)", len(specs))
+	}
+
+	tr.Turns = append(tr.Turns, Turn{Speaker: "Bob", Text: "Agreed."})
+	if _, err := Upsert(ctx, gs, tr, time.Now(), "conversation"); err != nil {
+		t.Fatal(err)
+	}
+	nodes, _ := gs.AllNodes(ctx)
+	var decisions []model.Node
+	for _, n := range nodes {
+		if n.Kind == model.KindDecision {
+			decisions = append(decisions, n)
+		}
+	}
+	if len(decisions) != 1 || decisions[0].SourceURI != DecisionURI("slack://C1") {
+		t.Fatalf("decisions after re-ingest = %+v, want one under %s", decisions, DecisionURI("slack://C1"))
+	}
+	edges, _ := gs.AllEdges(ctx)
+	ek := map[model.EdgeKind]int{}
+	for _, e := range edges {
+		ek[e.Kind]++
+	}
+	if ek[model.EdgeDecidedIn] != 2 || ek[model.EdgeDiscussedIn] != 1 {
+		t.Errorf("DECIDED_IN=%d DISCUSSED_IN=%d after re-ingest, want 2 and 1", ek[model.EdgeDecidedIn], ek[model.EdgeDiscussedIn])
+	}
+	if specs, _ := svc.Pending(ctx, 0); len(specs) != 1 {
+		t.Errorf("changed transcript should be re-offered once, got %d", len(specs))
+	}
+}
+
+// TestUpsertRehomesLegacyDecisions checks a decision stored under the meeting's own URI survives re-ingest.
+func TestUpsertRehomesLegacyDecisions(t *testing.T) {
+	gs := newStore(t)
+	ctx := context.Background()
+	tr := &Transcript{Title: "Sync", SourceURI: "meeting://sync", Turns: []Turn{{Speaker: "A", Text: "hi"}}}
+	if _, err := Upsert(ctx, gs, tr, time.Now(), "meeting"); err != nil {
+		t.Fatal(err)
+	}
+	legacy := model.Node{ID: "old-dec", Kind: model.KindDecision, Label: "legacy", SourceURI: "meeting://sync"}
+	if err := gs.UpsertNodes(ctx, []model.Node{legacy}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Upsert(ctx, gs, tr, time.Now(), "meeting"); err != nil {
+		t.Fatal(err)
+	}
+	n, _ := gs.GetNode(ctx, "old-dec")
+	if n == nil || n.SourceURI != DecisionURI("meeting://sync") {
+		t.Fatalf("legacy decision after re-ingest = %+v, want it moved to %s", n, DecisionURI("meeting://sync"))
+	}
+}

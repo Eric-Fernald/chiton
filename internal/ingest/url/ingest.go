@@ -111,11 +111,6 @@ func (ing *Ingester) Add(ctx context.Context, rawURL string, opts AddOptions) (R
 		uri = rawURL
 	}
 
-	// Replace any prior version of this URL.
-	if _, err := ing.store.DeleteBySourceURI(ctx, uri); err != nil {
-		return Report{}, fmt.Errorf("replace prior %s: %w", uri, err)
-	}
-
 	now := ing.now()
 	contentSHA := model.ContentSHA([]byte(text))
 	kind := opts.Kind
@@ -189,13 +184,9 @@ func (ing *Ingester) Add(ctx context.Context, rawURL string, opts AddOptions) (R
 		})
 	}
 
-	if err := ing.store.UpsertNodes(ctx, nodes); err != nil {
-		return Report{}, fmt.Errorf("upsert url nodes: %w", err)
-	}
-	if len(edges) > 0 {
-		if err := ing.store.UpsertEdges(ctx, edges); err != nil {
-			return Report{}, fmt.Errorf("upsert url edges: %w", err)
-		}
+	// Replace any prior version of this URL, keeping concept edges on sections that survive.
+	if _, err := store.ReplaceSources(ctx, ing.store, store.SourceUpdate{URI: uri, Nodes: nodes, Edges: edges}); err != nil {
+		return Report{}, fmt.Errorf("replace %s: %w", uri, err)
 	}
 
 	return Report{

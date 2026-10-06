@@ -112,3 +112,19 @@ type GraphStore interface {
 	// Close flushes and releases all resources held by the store.
 	Close() error
 }
+
+// SourceUpdate is one source's complete new extraction for ReplaceSources. Nodes may include other sources'
+// nodes (pkg:// stubs, persons), which are only upserted.
+type SourceUpdate struct {
+	URI   string
+	Nodes []model.Node
+	Edges []model.Edge
+	Fresh bool // the caller knows no stored node has source_uri URI, so the prior-node lookup is skipped
+}
+
+// SourceReplacer is an optional capability replacing whole sources in one write batch while keeping edges other
+// sources attached to surviving nodes. Callers use the ReplaceSources helper.
+type SourceReplacer interface {
+	// ReplaceSources applies updates and returns, per update, how many stale nodes it deleted.
+	ReplaceSources(ctx context.Context, updates []SourceUpdate) ([]int, error)
+}

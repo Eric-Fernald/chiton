@@ -127,19 +127,10 @@ func (i *Ingester) Ingest(ctx context.Context, src Source, opts Query) (Report, 
 	for _, m := range msgs {
 		m.Source = srcName
 		uri := MessageURI(m)
-		// Replace any prior version of this message (email + its doc_sections
-		// share uri; person nodes have their own person:// uri and survive).
-		if _, err := i.store.DeleteBySourceURI(ctx, uri); err != nil {
-			return rep, fmt.Errorf("replace prior %s: %w", uri, err)
-		}
 		nodes, edges, emailID, persons := buildGraph(m, uri, now)
-		if err := i.store.UpsertNodes(ctx, nodes); err != nil {
-			return rep, fmt.Errorf("upsert email nodes: %w", err)
-		}
-		if len(edges) > 0 {
-			if err := i.store.UpsertEdges(ctx, edges); err != nil {
-				return rep, fmt.Errorf("upsert email edges: %w", err)
-			}
+		// Replace any prior version of this message; person nodes have their own person:// uri and survive.
+		if _, err := store.ReplaceSources(ctx, i.store, store.SourceUpdate{URI: uri, Nodes: nodes, Edges: edges}); err != nil {
+			return rep, fmt.Errorf("replace %s: %w", uri, err)
 		}
 		rep.Messages++
 		rep.NodesUpserted += len(nodes)

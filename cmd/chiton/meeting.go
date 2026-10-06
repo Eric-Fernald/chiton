@@ -44,12 +44,9 @@ func meetingFileURI(path string) string {
 	return meeting.MeetingURI("file/" + abs)
 }
 
-// ingestTranscript replaces any prior version of the transcript and upserts its
-// meeting subgraph. Returns the number of nodes written.
+// ingestTranscript replaces any prior version of the transcript with its meeting subgraph, keeping linkage
+// edges on surviving nodes. Returns the number of nodes written.
 func ingestTranscript(ctx context.Context, gs store.GraphStore, tr *meeting.Transcript) (int, error) {
-	if _, err := gs.DeleteBySourceURI(ctx, tr.SourceURI); err != nil {
-		return 0, fmt.Errorf("replace prior meeting: %w", err)
-	}
 	return meeting.Upsert(ctx, gs, tr, time.Now(), "meeting")
 }
 

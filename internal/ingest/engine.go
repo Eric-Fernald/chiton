@@ -1,5 +1,5 @@
-// Package ingest is chiton's live-sync engine. It re-extracts changed files and replaces their nodes in place
-// (DeleteBySourceURI is safe because no cross-file structural edges point into a file's symbols).
+// Package ingest is chiton's live-sync engine. It re-extracts changed files and replaces their nodes by diff
+// (store.ReplaceSources), so edges other sources attached to surviving symbols stay.
 package ingest
 
 import (
@@ -153,22 +153,17 @@ func (e *Engine) SyncFile(ctx context.Context, path string) (Outcome, error) {
 		return Outcome{Path: path, Op: OpUpsert, Skipped: true, Reason: "extract: " + err.Error()}, nil
 	}
 
-	// Read the file's findings while the AFFECTS edges into its nodes still exist; the delete drops them.
+	// Read the file's findings while the AFFECTS edges into its nodes still exist; the replace drops those on
+	// nodes the new extraction lacks.
 	var prior *analyze.PriorFindings
 	if e.cfg.Reanalyze && e.analyzer != nil {
 		if prior, err = e.analyzer.ReadPriorFindings(ctx, uri); err != nil {
 			e.log("sync: %s: %v", path, err) // a nil prior makes the re-analyze query the store instead
 		}
 	}
-	deleted, err := e.store.DeleteBySourceURI(ctx, uri)
+	deleted, err := store.ReplaceSources(ctx, e.store, store.SourceUpdate{URI: uri, Nodes: nodes, Edges: edges})
 	if err != nil {
-		return Outcome{}, fmt.Errorf("delete stale nodes for %s: %w", uri, err)
-	}
-	if err := e.store.UpsertNodes(ctx, nodes); err != nil {
-		return Outcome{}, fmt.Errorf("upsert nodes for %s: %w", uri, err)
-	}
-	if err := e.store.UpsertEdges(ctx, edges); err != nil {
-		return Outcome{}, fmt.Errorf("upsert edges for %s: %w", uri, err)
+		return Outcome{}, fmt.Errorf("replace %s: %w", uri, err)
 	}
 	e.cache.Mark(uri, hexSum)
 
@@ -182,7 +177,7 @@ func (e *Engine) SyncFile(ctx context.Context, path string) (Outcome, error) {
 		Op:            OpUpsert,
 		NodesUpserted: len(nodes),
 		EdgesUpserted: len(edges),
-		NodesDeleted:  deleted,
+		NodesDeleted:  deleted[0],
 		TouchedIDs:    ids,
 	}
 

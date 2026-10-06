@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"os"
 	"slices"
@@ -50,6 +51,7 @@ var (
 	_ store.NodeScanner       = (*Store)(nil)
 	_ store.NodeGetter        = (*Store)(nil)
 	_ store.EmbeddingIDLister = (*Store)(nil)
+	_ store.SourceReplacer    = (*Store)(nil)
 )
 
 // ReadOnly reports whether the store was opened read-only, so callers can fail writes early
@@ -332,19 +334,74 @@ func adjacentEdges(txn *badgerdb.Txn, nodeID string, kinds map[model.EdgeKind]bo
 	return appendLoaded[model.Edge](nil, txn, pfxEdge, ids)
 }
 
+// deleteEdge queues deletion of edge e's record and both adjacency keys.
+func deleteEdge(wb *badgerdb.WriteBatch, e *model.Edge) error {
+	for _, k := range [][]byte{edgeKey(e.ID), srcKey(e), dstKey(e)} {
+		if err := wb.Delete(k); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // deleteNode queues deletion of node id, its embedding, and every adjacent edge with its adjacency keys.
 func deleteNode(txn *badgerdb.Txn, wb *badgerdb.WriteBatch, id string) error {
 	adj, err := adjacentEdgeKeys(txn, id, nil)
 	if err != nil {
 		return err
 	}
-	keys := make([][]byte, 0, 2+3*len(adj))
-	keys = append(keys, nodeKey(id), embKey(id))
-	for i := range adj {
-		keys = append(keys, edgeKey(adj[i].ID), srcKey(&adj[i]), dstKey(&adj[i]))
-	}
-	for _, k := range keys {
+	for _, k := range [][]byte{nodeKey(id), embKey(id)} {
 		if err := wb.Delete(k); err != nil {
+			return err
+		}
+	}
+	for i := range adj {
+		if err := deleteEdge(wb, &adj[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// putNodes queues nodes into wb, stamping CreatedAt when unset and UpdatedAt always. txn is the batch's read
+// view, which still shows the records the nodes replace.
+func putNodes(txn *badgerdb.Txn, wb *badgerdb.WriteBatch, nodes []model.Node, now time.Time) error {
+	for i := range nodes {
+		n := nodes[i]
+		if n.CreatedAt.IsZero() {
+			n.CreatedAt = now
+		}
+		n.UpdatedAt = now
+		data, err := json.Marshal(n)
+		if err != nil {
+			return fmt.Errorf("marshal node %s: %w", n.ID, err)
+		}
+		if err := wb.Set(nodeKey(n.ID), data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// putEdges queues edges and their adjacency keys into wb, stamping CreatedAt when unset.
+func putEdges(wb *badgerdb.WriteBatch, edges []model.Edge, now time.Time) error {
+	for i := range edges {
+		e := edges[i]
+		if e.CreatedAt.IsZero() {
+			e.CreatedAt = now
+		}
+		data, err := json.Marshal(e)
+		if err != nil {
+			return fmt.Errorf("marshal edge %s: %w", e.ID, err)
+		}
+		eid := []byte(e.ID)
+		if err := wb.Set(edgeKey(e.ID), data); err != nil {
+			return err
+		}
+		if err := wb.Set(srcKey(&e), eid); err != nil {
+			return err
+		}
+		if err := wb.Set(dstKey(&e), eid); err != nil {
 			return err
 		}
 	}
@@ -366,49 +423,13 @@ func (s *Store) batch(fill func(wb *badgerdb.WriteBatch) error) error {
 func (s *Store) UpsertNodes(_ context.Context, nodes []model.Node) error {
 	now := time.Now()
 	return s.batch(func(wb *badgerdb.WriteBatch) error {
-		for i := range nodes {
-			n := nodes[i]
-			if n.CreatedAt.IsZero() {
-				n.CreatedAt = now
-			}
-			n.UpdatedAt = now
-			data, err := json.Marshal(n)
-			if err != nil {
-				return fmt.Errorf("marshal node %s: %w", n.ID, err)
-			}
-			if err := wb.Set(nodeKey(n.ID), data); err != nil {
-				return err
-			}
-		}
-		return nil
+		return s.db.View(func(txn *badgerdb.Txn) error { return putNodes(txn, wb, nodes, now) })
 	})
 }
 
 func (s *Store) UpsertEdges(_ context.Context, edges []model.Edge) error {
 	now := time.Now()
-	return s.batch(func(wb *badgerdb.WriteBatch) error {
-		for i := range edges {
-			e := edges[i]
-			if e.CreatedAt.IsZero() {
-				e.CreatedAt = now
-			}
-			data, err := json.Marshal(e)
-			if err != nil {
-				return fmt.Errorf("marshal edge %s: %w", e.ID, err)
-			}
-			eid := []byte(e.ID)
-			if err := wb.Set(edgeKey(e.ID), data); err != nil {
-				return err
-			}
-			if err := wb.Set(srcKey(&e), eid); err != nil {
-				return err
-			}
-			if err := wb.Set(dstKey(&e), eid); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	return s.batch(func(wb *badgerdb.WriteBatch) error { return putEdges(wb, edges, now) })
 }
 
 func (s *Store) GetNode(_ context.Context, id string) (*model.Node, error) {
@@ -639,42 +660,204 @@ func (s *Store) NodesMatching(_ context.Context, f store.NodeFilter) ([]model.No
 	return nodes, err
 }
 
+// sourceIDs returns the IDs of stored nodes whose source_uri is in uris, keyed by URI. One URI gets a raw-bytes
+// probe scan; several share one scan decoding each record's source_uri.
+func sourceIDs(txn *badgerdb.Txn, uris []string) (map[string][]string, error) {
+	out := make(map[string][]string, len(uris))
+	if len(uris) == 0 {
+		return out, nil
+	}
+	want := make(map[string]bool, len(uris))
+	for _, u := range uris {
+		want[u] = true
+	}
+	var probe []byte
+	if len(want) == 1 {
+		probe = stringProbe(uris[0])
+	}
+	err := scan(txn, pfxNode, func(_, v []byte) error {
+		if probe != nil && !bytes.Contains(v, probe) {
+			return nil
+		}
+		var n struct {
+			ID        string `json:"id"`
+			SourceURI string `json:"source_uri"`
+		}
+		if err := json.Unmarshal(v, &n); err != nil {
+			return err
+		}
+		if want[n.SourceURI] {
+			out[n.SourceURI] = append(out[n.SourceURI], n.ID)
+		}
+		return nil
+	})
+	return out, err
+}
+
 // DeleteBySourceURI removes all nodes whose source_uri matches uri and
 // all edges adjacent to those nodes. Returns the number of nodes deleted.
 func (s *Store) DeleteBySourceURI(_ context.Context, uri string) (int, error) {
-	probe := stringProbe(uri)
 	deleted := 0
 	err := s.batch(func(wb *badgerdb.WriteBatch) error {
 		return s.db.View(func(txn *badgerdb.Txn) error {
-			var ids []string
-			if err := scan(txn, pfxNode, func(_, v []byte) error {
-				if probe != nil && !bytes.Contains(v, probe) {
-					return nil
-				}
-				var n struct {
-					ID        string `json:"id"`
-					SourceURI string `json:"source_uri"`
-				}
-				if err := json.Unmarshal(v, &n); err != nil {
-					return err
-				}
-				if n.SourceURI == uri {
-					ids = append(ids, n.ID)
-				}
-				return nil
-			}); err != nil {
+			byURI, err := sourceIDs(txn, []string{uri})
+			if err != nil {
 				return err
 			}
-			for _, id := range ids {
+			for _, id := range byURI[uri] {
 				if err := deleteNode(txn, wb, id); err != nil {
 					return err
 				}
+				deleted++
 			}
-			deleted = len(ids)
 			return nil
 		})
 	})
 	return deleted, err
+}
+
+// ReplaceSources applies each update as its source's complete new extraction in one write batch. Implements
+// store.SourceReplacer; see replaceSource for what survives.
+func (s *Store) ReplaceSources(_ context.Context, updates []store.SourceUpdate) ([]int, error) {
+	deleted := make([]int, len(updates))
+	now := time.Now()
+	err := s.batch(func(wb *badgerdb.WriteBatch) error {
+		return s.db.View(func(txn *badgerdb.Txn) error {
+			var uris []string
+			for _, u := range updates {
+				if !u.Fresh {
+					uris = append(uris, u.URI)
+				}
+			}
+			prior, err := sourceIDs(txn, uris)
+			if err != nil {
+				return err
+			}
+			var nodes []model.Node
+			var edges []model.Edge
+			for i, u := range updates {
+				n, kept, err := replaceSource(txn, wb, u, prior[u.URI])
+				if err != nil {
+					return err
+				}
+				deleted[i] = n
+				nodes = append(nodes, kept...)
+				edges = append(edges, u.Edges...)
+			}
+			// Every delete is queued before any write, so a later Set for the same key wins.
+			if err := putNodes(txn, wb, nodes, now); err != nil {
+				return err
+			}
+			return putEdges(wb, edges, now)
+		})
+	})
+	return deleted, err
+}
+
+// replaceSource queues deletion of prior nodes u drops (with every edge) and of owned edges u no longer emits,
+// and returns u.Nodes with unchanged nodes' extraction_status carried over. Changed nodes lose their vector.
+func replaceSource(txn *badgerdb.Txn, wb *badgerdb.WriteBatch, u store.SourceUpdate, prior []string) (int, []model.Node, error) {
+	nodes := u.Nodes
+	if len(prior) == 0 {
+		return 0, nodes, nil
+	}
+	index := make(map[string]int, len(nodes))
+	for i := range nodes {
+		index[nodes[i].ID] = i
+	}
+	keepEdge := make(map[string]bool, len(u.Edges))
+	for i := range u.Edges {
+		keepEdge[u.Edges[i].ID] = true
+	}
+	deleted, cloned := 0, false
+	for _, id := range prior {
+		old, err := loadNode(txn, id)
+		if err != nil {
+			return 0, nil, err
+		}
+		if old == nil {
+			continue
+		}
+		i, ok := index[id]
+		if !ok {
+			if err := deleteNode(txn, wb, id); err != nil {
+				return 0, nil, err
+			}
+			deleted++
+			continue
+		}
+		if err := dropDisownedEdges(txn, wb, id, keepEdge); err != nil {
+			return 0, nil, err
+		}
+		if !sameContent(old, &nodes[i]) {
+			// Its embedded text may have changed, so drop the vector for `chiton embed` to redo.
+			if err := wb.Delete(embKey(id)); err != nil {
+				return 0, nil, err
+			}
+			continue
+		}
+		st := model.AttrString(old.Attrs, statusAttr)
+		if st == "" || model.AttrString(nodes[i].Attrs, statusAttr) != "" {
+			continue
+		}
+		if !cloned {
+			nodes, cloned = slices.Clone(nodes), true
+		}
+		attrs := maps.Clone(nodes[i].Attrs)
+		if attrs == nil {
+			attrs = map[string]any{}
+		}
+		attrs[statusAttr] = st
+		nodes[i].Attrs = attrs
+	}
+	return deleted, nodes, nil
+}
+
+// dropDisownedEdges queues deletion of edges leaving node id that keep omits and that id's source owns. A source
+// owns its nodes' outgoing EXTRACTED edges; linkage, concept, and finding edges are INFERRED or start elsewhere.
+func dropDisownedEdges(txn *badgerdb.Txn, wb *badgerdb.WriteBatch, id string, keep map[string]bool) error {
+	adj, err := adjacentEdgeKeys(txn, id, nil)
+	if err != nil {
+		return err
+	}
+	for i := range adj {
+		if adj[i].Src != id || keep[adj[i].ID] {
+			continue
+		}
+		e, err := loadJSON[model.Edge](txn, edgeKey(adj[i].ID))
+		if err != nil {
+			return err
+		}
+		if e != nil && e.Provenance != model.ProvExtracted {
+			continue
+		}
+		if err := deleteEdge(wb, &adj[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// statusAttr is the attr the subagent flows set once they have processed a node. It is state, not content.
+const statusAttr = "extraction_status"
+
+// sameContent reports whether a and b agree on kind, label, and every attr but statusAttr: the inputs to a
+// node's embedded text and to its subagent task.
+func sameContent(a, b *model.Node) bool {
+	return a.Kind == b.Kind && a.Label == b.Label && bytes.Equal(contentAttrs(a.Attrs), contentAttrs(b.Attrs))
+}
+
+// contentAttrs encodes attrs minus statusAttr as JSON. Sorted keys and uniform number encoding make a decoded
+// stored map compare equal to a fresh one.
+func contentAttrs(attrs map[string]any) []byte {
+	m := make(map[string]any, len(attrs))
+	for k, v := range attrs {
+		if k != statusAttr {
+			m[k] = v
+		}
+	}
+	b, _ := json.Marshal(m)
+	return b
 }
 
 // DeleteByIDs deletes nodes by ID plus their embeddings and adjacent edges, skipping missing IDs.

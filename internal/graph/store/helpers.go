@@ -128,3 +128,28 @@ func EmbeddingIDs(ctx context.Context, es EmbeddingStore) ([]string, error) {
 	}
 	return ids, nil
 }
+
+// ReplaceSources makes each update its source's stored content via SourceReplacer, else by DeleteBySourceURI
+// plus upserts, which also drops edges other sources attached. It returns stale-node counts per update.
+func ReplaceSources(ctx context.Context, gs GraphStore, updates ...SourceUpdate) ([]int, error) {
+	if r, ok := gs.(SourceReplacer); ok {
+		return r.ReplaceSources(ctx, updates)
+	}
+	deleted := make([]int, len(updates))
+	for i, u := range updates {
+		if !u.Fresh {
+			n, err := gs.DeleteBySourceURI(ctx, u.URI)
+			if err != nil {
+				return deleted, err
+			}
+			deleted[i] = n
+		}
+		if err := gs.UpsertNodes(ctx, u.Nodes); err != nil {
+			return deleted, err
+		}
+		if err := gs.UpsertEdges(ctx, u.Edges); err != nil {
+			return deleted, err
+		}
+	}
+	return deleted, nil
+}

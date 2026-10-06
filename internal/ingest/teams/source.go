@@ -101,9 +101,6 @@ func (i *Ingester) ingestOne(ctx context.Context, m TranscriptMeta, content []by
 	tr.Title = transcriptTitle(m)
 	tr.Date = m.CreatedAt
 
-	if _, err := i.store.DeleteBySourceURI(ctx, uri); err != nil {
-		return 0, 0, fmt.Errorf("replace prior transcript %s: %w", uri, err)
-	}
 	n, err := meeting.Upsert(ctx, i.store, tr, i.now(), "meeting")
 	if err != nil {
 		return 0, 0, err

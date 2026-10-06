@@ -56,7 +56,8 @@ chiton analyze submit results.json        # ingest findings
   menu); `submit_meeting_links` writes `decision`/`rationale` nodes and
   `DECIDED_IN` (decision→meeting and decision→symbol), `DISCUSSED_IN`
   (symbol→meeting), `ACTION_FOR`, `RATIONALE_FOR`, and `MENTIONED` edges — all
-  `INFERRED`, or `AMBIGUOUS` below the confidence threshold.
+  `INFERRED`, or `AMBIGUOUS` below the confidence threshold. Decisions live under
+  `decision://<meeting-uri>` and survive re-ingest and code edits.
 
 CLI equivalents:
 
