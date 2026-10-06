@@ -400,7 +400,7 @@ error that names the file.
 | `log_level` | `info` | |
 | `embed.provider` | `ollama` | `ollama` or `hash` (offline/CI). |
 | `embed.model` | `nomic-embed-text` | |
-| `embed.endpoint` | `http://localhost:11434` | Ollama endpoint. |
+| `embed.endpoint` | `http://localhost:11434` | Ollama endpoint. A non-loopback value in the project's `.chitonrc` is refused; set `CHITON_EMBED_ENDPOINT` (or `$HOME/.chitonrc`, read only when the project has none) to use a remote server. |
 | `embed.dim` | *(unset)* | Embedding dimension. Deliberately has no default: left at 0, each provider applies its native size (Ollama 768, hash 256) instead of the Ollama size being forced onto the hash provider. Set it only to override. |
 | `semantic.confidence_threshold` | `0.5` | Splits `INFERRED` from `AMBIGUOUS`. |
 | `vector.index` | `auto` | Index behind semantic search: `flat` (exact scan), `hnsw` (approximate graph), or `auto`, which uses `hnsw` at or above `vector.hnsw_threshold` vectors. `chiton embed` builds the `hnsw` graph and saves it as `hnsw.idx` beside the store, and `serve` loads it at startup. If it is missing or out of date, `serve` starts on `flat` and builds `hnsw` in the background, then switches over; rerun `chiton embed` to save it again. A one-shot `chiton search` stays exact unless this is set to `hnsw`. |

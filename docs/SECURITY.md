@@ -94,7 +94,10 @@ Notes that materially change the picture:
   without an explicit user command.** It is loopback by default, and
   `CHITON_EMBED_PROVIDER=hash` removes it entirely — but
   `embed.endpoint` / `CHITON_EMBED_ENDPOINT` can redirect it off-device, at
-  which point node text and queries go wherever you pointed it.
+  which point node text and queries go wherever you pointed it. A non-loopback
+  `embed.endpoint` from the project's `.chitonrc` is refused, so a cloned
+  repository cannot redirect it; only `CHITON_EMBED_ENDPOINT` or
+  `$HOME/.chitonrc` can.
 - **Microsoft Graph is behind the `msgraph` build tag and is absent from default
   and release binaries.** `chiton teams fetch`, `chiton teams serve-webhook`,
   and `chiton email outlook` still appear in `--help`, but fail with a
@@ -153,7 +156,8 @@ install` for Claude Code additionally writes `.claude/skills/chiton/SKILL.md`
 and `.claude/skills/chiton-subagent-tasks/SKILL.md` inside the project.
 
 `.chitonrc` is read from `$CHITON_PROJECT_DIR` (or the working directory) **and
-from `$HOME`**, so a home-directory config can influence any project.
+from `$HOME`**, so a home-directory config can influence any project. A project `.chitonrc`
+cannot point `embed.endpoint` off-device (§1.1).
 
 ### 1.4 Telemetry
 

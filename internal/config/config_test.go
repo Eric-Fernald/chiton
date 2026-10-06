@@ -18,6 +18,7 @@ func isolate(t *testing.T) string {
 	t.Setenv("HOMEPATH", "")
 	t.Setenv(ProjectDirEnv, "")
 	t.Setenv("CHITON_GRAPH_PATH", "")
+	t.Setenv("CHITON_EMBED_ENDPOINT", "")
 	return home
 }
 
@@ -258,5 +259,88 @@ func TestEmbedDimDefaultsToZero(t *testing.T) {
 	}
 	if cfg.Embed.Dim != 0 {
 		t.Errorf("Embed.Dim = %d with no override, want 0", cfg.Embed.Dim)
+	}
+}
+
+func writeRC(t *testing.T, dir, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, ".chitonrc"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write .chitonrc: %v", err)
+	}
+}
+
+// A cloned repository's .chitonrc must not be able to send embedded text and queries to its own server.
+func TestProjectRCRemoteEmbedEndpointRefused(t *testing.T) {
+	isolate(t)
+	project := t.TempDir()
+	writeRC(t, project, "[embed]\nendpoint = \"https://embed.attacker.example\"\n")
+	t.Setenv(ProjectDirEnv, project)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Embed.EndpointOrigin != OriginProjectRC {
+		t.Errorf("EndpointOrigin = %q, want %q", cfg.Embed.EndpointOrigin, OriginProjectRC)
+	}
+	if err := cfg.Embed.CheckEndpoint(); err == nil || !strings.Contains(err.Error(), "CHITON_EMBED_ENDPOINT") {
+		t.Errorf("CheckEndpoint() = %v, want a refusal naming CHITON_EMBED_ENDPOINT", err)
+	}
+}
+
+func TestEmbedEndpointAllowedOrigins(t *testing.T) {
+	remote := "[embed]\nendpoint = \"https://embed.attacker.example\"\n"
+	cases := []struct {
+		name, projectRC, homeRC, env string
+		want                         Origin
+	}{
+		{name: "project loopback IP", projectRC: "[embed]\nendpoint = \"http://127.0.0.1:11434\"\n", want: OriginProjectRC},
+		{name: "project localhost", projectRC: "[embed]\nendpoint = \"http://localhost:9999\"\n", want: OriginProjectRC},
+		{name: "env overrides project", projectRC: remote, env: "https://embed.corp.example", want: OriginEnv},
+		{name: "home config", homeRC: "[embed]\nendpoint = \"https://embed.corp.example\"\n", want: OriginUserRC},
+		{name: "built-in default", want: OriginDefault},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := isolate(t)
+			project := t.TempDir()
+			if tc.projectRC != "" {
+				writeRC(t, project, tc.projectRC)
+			}
+			if tc.homeRC != "" {
+				writeRC(t, home, tc.homeRC)
+			}
+			t.Setenv(ProjectDirEnv, project)
+			t.Setenv("CHITON_EMBED_ENDPOINT", tc.env)
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.Embed.EndpointOrigin != tc.want {
+				t.Errorf("EndpointOrigin = %q, want %q", cfg.Embed.EndpointOrigin, tc.want)
+			}
+			if err := cfg.Embed.CheckEndpoint(); err != nil {
+				t.Errorf("CheckEndpoint() = %v, want nil", err)
+			}
+		})
+	}
+}
+
+func TestIsLoopbackURL(t *testing.T) {
+	for raw, want := range map[string]bool{
+		"http://localhost:11434":            true,
+		"https://LOCALHOST":                 true,
+		"http://127.0.0.1:11434":            true,
+		"http://[::1]:11434":                true,
+		"http://localhost.attacker.example": false,
+		"http://127.0.0.1.attacker.example": false,
+		"https://embed.attacker.example":    false,
+		"localhost:11434":                   false, // no scheme: url.Parse reads "localhost" as the scheme
+		"ftp://127.0.0.1":                   false,
+	} {
+		if got := isLoopbackURL(raw); got != want {
+			t.Errorf("isLoopbackURL(%q) = %v, want %v", raw, got, want)
+		}
 	}
 }

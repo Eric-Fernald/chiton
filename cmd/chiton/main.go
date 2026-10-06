@@ -71,8 +71,8 @@ so they spend fewer tokens navigating architecture, docs, and prior tool calls.`
 	return root
 }
 
-// newEmbedder constructs the configured embedding provider, with optional
-// provider/model overrides from CLI flags (empty = use config).
+// newEmbedder constructs the configured embedding provider, with optional provider/model overrides from CLI flags
+// (empty = use config). It refuses an Ollama endpoint that the project's .chitonrc points off-device.
 func newEmbedder(cfg *config.Config, providerOverride, modelOverride string) (embed.Embedder, error) {
 	provider := cfg.Embed.Provider
 	if providerOverride != "" {
@@ -81,6 +81,12 @@ func newEmbedder(cfg *config.Config, providerOverride, modelOverride string) (em
 	model := cfg.Embed.Model
 	if modelOverride != "" {
 		model = modelOverride
+	}
+	// Only the Ollama provider sends text to Endpoint; the hash provider stays usable offline.
+	if p := strings.ToLower(strings.TrimSpace(provider)); p == "" || p == "ollama" {
+		if err := cfg.Embed.CheckEndpoint(); err != nil {
+			return nil, err
+		}
 	}
 	return embed.New(embed.Config{
 		Provider: provider,
