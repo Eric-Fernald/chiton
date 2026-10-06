@@ -248,8 +248,8 @@ func syncOnceCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "sync once: %d upserted, %d deleted, %d skipped, %d re-embedded%s\n",
-				sum.Upserted, sum.Deleted, sum.Skipped, sum.Reembedded, reclusterNote(sum.Reclustered))
+			fmt.Fprintf(cmd.OutOrStdout(), "sync once: %d upserted, %d deleted, %d skipped, %d re-embedded%s%s\n",
+				sum.Upserted, sum.Deleted, sum.Skipped, sum.Reembedded, unreadableNote(sum.Unreadable), reclusterNote(sum.Reclustered))
 			return nil
 		},
 	}
@@ -263,4 +263,12 @@ func reclusterNote(reclustered bool) string {
 		return " (re-clustered)"
 	}
 	return ""
+}
+
+// unreadableNote reports walk entries skipped as unreadable, or "" when there were none.
+func unreadableNote(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf(", %d unreadable", n)
 }

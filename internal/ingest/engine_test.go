@@ -2,9 +2,11 @@ package ingest
 
 import (
 	"context"
+	"errors"
 	"math/rand"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -570,5 +572,52 @@ func TestResyncKeepsForeignEdges(t *testing.T) {
 	}
 	if n, _ := h.gs.GetNode(ctx, decID); n == nil {
 		t.Error("the decision node itself must survive")
+	}
+}
+
+// TestSyncChangesStopsOnCancel checks a cancelled context stops a batch before it writes anything.
+func TestSyncChangesStopsOnCancel(t *testing.T) {
+	h := newHarness(t, false, false)
+	p := h.write(t, "a.go", "package src\nfunc A() {}\n")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := h.eng.SyncChanges(ctx, []Change{{Path: p, Op: OpUpsert}}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("SyncChanges err = %v, want context.Canceled", err)
+	}
+	if n := len(h.nodesForURI(t, model.FileURI(p))); n != 0 {
+		t.Errorf("cancelled batch wrote %d node(s)", n)
+	}
+}
+
+// TestSyncDirCountsUnreadable checks one unreadable directory is counted and skipped, not fatal.
+func TestSyncDirCountsUnreadable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod cannot make a directory unreadable on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root can read any directory")
+	}
+	h := newHarness(t, false, false)
+	ctx := context.Background()
+	locked := filepath.Join(h.dir, "locked")
+	if err := os.MkdirAll(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h.write(t, filepath.Join("locked", "x.go"), "package locked\nfunc X() {}\n")
+	ok := h.write(t, "a.go", "package src\nfunc A() {}\n")
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+	sum, err := h.eng.SyncDir(ctx, h.dir, true)
+	if err != nil {
+		t.Fatalf("SyncDir aborted on an unreadable dir: %v", err)
+	}
+	if sum.Unreadable != 1 {
+		t.Errorf("Unreadable = %d, want 1", sum.Unreadable)
+	}
+	if len(h.nodesForURI(t, model.FileURI(ok))) == 0 {
+		t.Error("a.go should still be indexed")
 	}
 }

@@ -122,6 +122,7 @@ type BatchSummary struct {
 	Upserted    int
 	Deleted     int
 	Skipped     int
+	Unreadable  int // walk entries that could not be read, logged and skipped (SyncDir only)
 	Reembedded  int
 	Reclustered bool
 }
@@ -220,6 +221,9 @@ func (e *Engine) SyncChanges(ctx context.Context, changes []Change) (*BatchSumma
 	defer e.saveCache()
 	sum := &BatchSummary{}
 	for _, ch := range changes {
+		if err := ctx.Err(); err != nil {
+			return sum, err
+		}
 		out, err := e.SyncChange(ctx, ch)
 		if err != nil {
 			return sum, err
@@ -241,7 +245,7 @@ func (e *Engine) SyncDir(ctx context.Context, root string, prune bool) (*BatchSu
 		return sum, err
 	}
 
-	_, walkErr := walk.Files(ctx, root, policy, func(path string) error {
+	stats, walkErr := walk.Files(ctx, root, policy, func(path string) error {
 		if extast.ForFile(path) == nil {
 			return nil
 		}
@@ -253,6 +257,7 @@ func (e *Engine) SyncDir(ctx context.Context, root string, prune bool) (*BatchSu
 		e.tally(sum, out)
 		return nil
 	}, func(path string, err error) { e.log("sync: skip %s: %v", path, err) })
+	sum.Unreadable = stats.Unreadable
 	if walkErr != nil {
 		return sum, walkErr
 	}
@@ -260,6 +265,9 @@ func (e *Engine) SyncDir(ctx context.Context, root string, prune bool) (*BatchSu
 	if prune {
 		rootURI := model.FileURI(root)
 		for _, uri := range e.cache.URIs() {
+			if err := ctx.Err(); err != nil {
+				return sum, err
+			}
 			if uri != rootURI && !strings.HasPrefix(uri, rootURI+"/") {
 				continue
 			}
