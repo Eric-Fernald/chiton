@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Eric-Fernald/chiton/internal/graph/cluster"
+	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
 func TestPendingAndSubmitErrorText(t *testing.T) {
@@ -30,8 +31,16 @@ func TestGraphSummaryTopNodesByBetweenness(t *testing.T) {
 		overlay.Nodes[label] = cluster.NodeResult{Label: label, CommunityID: 1, Betweenness: float64(i)}
 	}
 	overlay.Nodes["solo"] = cluster.NodeResult{Label: "solo", CommunityID: 2}
+	gs := openStore(t) // redaction labels overlay entries from their stored nodes
+	var nodes []model.Node
+	for id, nr := range overlay.Nodes {
+		nodes = append(nodes, model.Node{ID: id, Kind: model.KindSymbol, Label: nr.Label, Provenance: model.ProvExtracted, Confidence: 1})
+	}
+	if err := gs.UpsertNodes(context.Background(), nodes); err != nil {
+		t.Fatal(err)
+	}
 
-	res, err := graphSummaryHandler(openStore(t), overlay, redactor{})(context.Background(), toolReq(map[string]any{}))
+	res, err := graphSummaryHandler(gs, overlay, redactor{})(context.Background(), toolReq(map[string]any{}))
 	if err != nil {
 		t.Fatal(err)
 	}

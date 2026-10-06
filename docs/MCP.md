@@ -156,7 +156,8 @@ Names of meeting speakers, Slack authors, and email participants all land on
 - Speaker prefixes in transcript text and speaker names in turn labels become
   `[redacted]`.
 - `god_nodes` and `graph_summary` label each cluster entry from its stored
-  node, so people and speaker-named turns are redacted there too.
+  node, so people and speaker-named turns are redacted there too. An entry
+  whose node has since been deleted shows as `[redacted]`.
 - Label lookups never match a node whose label names a person. `get_node`,
   `get_node_neighborhood`, `query_graph` and `shortest_path` report no match,
   and `semantic_search` leaves such nodes (and their edges) out of both the

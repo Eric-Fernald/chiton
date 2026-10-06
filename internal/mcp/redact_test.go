@@ -121,6 +121,23 @@ func TestClusterToolsRedactSpeakerNamedTurns(t *testing.T) {
 	}
 }
 
+// A cluster entry for a node deleted since the last cluster pass fails closed rather than showing its stale label.
+func TestClusterToolsRedactStaleEntries(t *testing.T) {
+	gs := openStore(t)
+	overlay := &cluster.Results{Nodes: map[string]cluster.NodeResult{
+		"gone-turn": {Label: "Carol @0:05", SourceURI: "meeting://deleted-sync", CommunityID: 1, Betweenness: 1},
+	}}
+	for tool, out := range map[string]string{
+		"god_nodes":     call(t, godNodesHandler(gs, overlay, redactor{}), map[string]any{}),
+		"graph_summary": call(t, graphSummaryHandler(gs, overlay, redactor{}), map[string]any{}),
+	} {
+		assertNoPII(t, tool, out, "Carol")
+		if !strings.Contains(out, `"[redacted]"`) {
+			t.Errorf("%s = %s, want the stale entry labelled [redacted]", tool, out)
+		}
+	}
+}
+
 func TestGraphSummaryScopeCannotProbeForPeople(t *testing.T) {
 	gs := openStore(t)
 	seedLinkedMeeting(t, gs) // Alice's identity URI is person://alice

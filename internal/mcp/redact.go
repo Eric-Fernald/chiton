@@ -91,19 +91,8 @@ func (r redactor) labels(nodes []model.Node) map[string]string {
 	return m
 }
 
-// redactedLabels maps the ID of each node whose label names a person to its redacted label.
-func (r redactor) redactedLabels(nodes []model.Node) map[string]string {
-	m := make(map[string]string)
-	for _, n := range nodes {
-		if r.hidden(n) {
-			m[n.ID] = r.label(n)
-		}
-	}
-	return m
-}
-
-// loadRedactedLabels is redactedLabels over the stored nodes with these IDs. It loads nothing when redaction is off.
-func (r redactor) loadRedactedLabels(ctx context.Context, gs store.GraphStore, ids []string) (map[string]string, error) {
+// loadLabels is labels over the stored nodes with these IDs. It loads nothing when redaction is off.
+func (r redactor) loadLabels(ctx context.Context, gs store.GraphStore, ids []string) (map[string]string, error) {
 	if r.includePII {
 		return nil, nil
 	}
@@ -111,22 +100,19 @@ func (r redactor) loadRedactedLabels(ctx context.Context, gs store.GraphStore, i
 	if err != nil {
 		return nil, err
 	}
-	return r.redactedLabels(nodes), nil
+	return r.labels(nodes), nil
 }
 
-// overlayLabel names cluster result nr (node id): its stored node's redacted label from redacted, else nr's own
-// label, hidden when its person:// source URI marks a person no longer stored.
-func (r redactor) overlayLabel(id string, nr cluster.NodeResult, redacted map[string]string) string {
+// overlayLabel names cluster result nr (node id) by its stored node's redacted label in stored. A result whose
+// node is gone fails closed as [redacted], since its stale cluster label may name a person.
+func (r redactor) overlayLabel(id string, nr cluster.NodeResult, stored map[string]string) string {
 	if r.includePII {
 		return nr.Label
 	}
-	if l, ok := redacted[id]; ok {
+	if l, ok := stored[id]; ok {
 		return l
 	}
-	if strings.HasPrefix(nr.SourceURI, meeting.PersonURIScheme) {
-		return redactedPerson
-	}
-	return nr.Label
+	return redactedName
 }
 
 // redactAttrs returns attrs without person identifiers, cloning only when there is something to drop.

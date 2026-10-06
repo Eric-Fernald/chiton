@@ -410,7 +410,7 @@ func godNodesHandler(gs store.GraphStore, overlay *cluster.Results, r redactor) 
 		if limit > 0 && len(ids) > limit {
 			ids = ids[:limit]
 		}
-		redacted, err := r.loadRedactedLabels(ctx, gs, ids)
+		stored, err := r.loadLabels(ctx, gs, ids)
 		if err != nil {
 			return mcplib.NewToolResultErrorFromErr("failed to load nodes", err), nil
 		}
@@ -419,7 +419,7 @@ func godNodesHandler(gs store.GraphStore, overlay *cluster.Results, r redactor) 
 		for i, id := range ids {
 			nr := overlay.Nodes[id]
 			out[i] = godNode{
-				Label:       r.overlayLabel(id, nr, redacted),
+				Label:       r.overlayLabel(id, nr, stored),
 				Community:   nr.CommunityID,
 				Betweenness: nr.Betweenness,
 				Degree:      nr.Degree,
@@ -505,7 +505,10 @@ func graphSummaryHandler(gs store.GraphStore, overlay *cluster.Results, r redact
 		if overlay != nil {
 			// Rank first so each community's top_nodes are its highest-betweenness members.
 			ids := rankedIDs(overlay, func(id string, _ cluster.NodeResult) bool { return scope == "" || inScope[id] })
-			redacted := r.redactedLabels(allNodes)
+			var stored map[string]string
+			if !r.includePII {
+				stored = r.labels(allNodes)
+			}
 
 			commIdx := make(map[int]int) // maps a community ID to its index in communities
 			for _, id := range ids {
@@ -519,7 +522,7 @@ func graphSummaryHandler(gs store.GraphStore, overlay *cluster.Results, r redact
 				c := &communities[i]
 				c.NodeCount++
 				if len(c.TopNodes) < 5 {
-					c.TopNodes = append(c.TopNodes, r.overlayLabel(id, nr, redacted))
+					c.TopNodes = append(c.TopNodes, r.overlayLabel(id, nr, stored))
 				}
 			}
 			slices.SortFunc(communities, func(a, b commSummary) int {
@@ -529,7 +532,7 @@ func graphSummaryHandler(gs store.GraphStore, overlay *cluster.Results, r redact
 			for _, id := range ids[:min(10, len(ids))] {
 				nr := overlay.Nodes[id]
 				godNodes = append(godNodes, godNodeSummary{
-					Label:       r.overlayLabel(id, nr, redacted),
+					Label:       r.overlayLabel(id, nr, stored),
 					CommunityID: nr.CommunityID,
 					Betweenness: nr.Betweenness,
 					Degree:      nr.Degree,

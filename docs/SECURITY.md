@@ -346,8 +346,8 @@ Redaction happens at two levels.
   `[redacted]`.
 - `god_nodes` and `graph_summary` take each cluster entry's label from its
   stored node and redact it the same way. An entry whose node is no longer
-  stored keeps its cluster label, except that a `person://` entry is still
-  hidden; re-run `chiton cluster` after deleting meetings.
+  stored (deleted since the last `chiton cluster`) fails closed as
+  `[redacted]`, because its stale cluster label may name a person.
 - Label lookups skip a node whose label names a person, so `query_graph "alice"`
   reports no match rather than confirming that Alice is in the graph.
   `semantic_search` drops such nodes and recounts its summary.
