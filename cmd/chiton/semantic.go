@@ -13,7 +13,6 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/config"
 	"github.com/Eric-Fernald/chiton/internal/embed"
 	"github.com/Eric-Fernald/chiton/internal/extract/subagent"
-	"github.com/Eric-Fernald/chiton/internal/graph/cluster"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 	"github.com/Eric-Fernald/chiton/internal/graph/retrieve"
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
@@ -241,7 +240,7 @@ func searchCmd() *cobra.Command {
 				fmt.Fprintln(out, "search: no embeddings for the configured model — run 'chiton embed' first")
 				return nil
 			}
-			clusterResults, _ := cluster.LoadSidecar(cluster.SidecarPath(cfg.GraphPath))
+			clusterResults, _ := loadClusterSidecar(cfg.GraphPath)
 			idx, _, err := buildIndex(cfg.Vector, embs, oneShotExact(cfg.Vector))
 			if err != nil {
 				return err

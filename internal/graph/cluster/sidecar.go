@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	chitoncrypto "github.com/Eric-Fernald/chiton/internal/crypto"
 	"github.com/Eric-Fernald/chiton/internal/fsutil"
 )
 
@@ -42,11 +43,15 @@ func SidecarPath(graphPath string) string {
 	return filepath.Join(filepath.Dir(graphPath), "cluster.json")
 }
 
-// WriteSidecar atomically writes r to path as compact JSON, so a concurrent reader never sees a partial file.
-func WriteSidecar(path string, r *Results) error {
+// WriteSidecar atomically writes r to path as compact JSON, sealed with key when the store is encrypted (nil key
+// = plaintext), so a concurrent reader never sees a partial file.
+func WriteSidecar(path string, r *Results, key []byte) error {
 	b, err := marshalSidecar(r)
 	if err != nil {
 		return err
+	}
+	if b, err = chitoncrypto.Seal(key, b); err != nil {
+		return fmt.Errorf("seal cluster sidecar %s: %w", path, err)
 	}
 	if err := fsutil.WriteFileAtomic(path, b, 0o644); err != nil {
 		return fmt.Errorf("write cluster sidecar %s: %w", path, err)
@@ -54,15 +59,19 @@ func WriteSidecar(path string, r *Results) error {
 	return nil
 }
 
-// LoadSidecar reads the cluster sidecar at path. Returns (nil, nil) when the
-// file does not exist so callers can treat a missing sidecar as "not yet run".
-func LoadSidecar(path string) (*Results, error) {
+// LoadSidecar reads the cluster sidecar at path, unsealing it with key. A sidecar written before encryption was
+// on still loads. Returns (nil, nil) when the file does not exist so callers can treat a missing sidecar as
+// "not yet run".
+func LoadSidecar(path string, key []byte) (*Results, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read cluster sidecar %s: %w", path, err)
+	}
+	if data, err = chitoncrypto.Unseal(key, data); err != nil {
+		return nil, fmt.Errorf("cluster sidecar %s: %w", path, err)
 	}
 	r, err := unmarshalSidecar(data)
 	if err != nil {

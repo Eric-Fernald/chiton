@@ -415,8 +415,8 @@ The committed `.chiton/` files (`hooks.yaml`, `sources.yaml`) are the only share
 state — `chiton init` writes a `.chiton/.gitignore` that keeps everything else
 under `.chiton/` (including the encryption keyfile) out of git. The graph store,
 cache, cluster sidecar, and saved HNSW index (`hnsw.idx`) live under
-`chiton-out/`, which is **not** auto-ignored — add `chiton-out/` to your repo's
-`.gitignore`.
+`chiton-out/`; chiton writes `chiton-out/.gitignore` (`*`) the first time it
+opens the store for writing.
 
 ## Encryption at rest
 
@@ -424,9 +424,11 @@ The graph is encrypted by default with BadgerDB's native AES-256 encryption
 (CTR mode), under a key derived from a passphrase with argon2id. The salt and KDF
 parameters live in `.chiton/keyfile.json`; the passphrase and key are never
 written to disk. The passphrase is read from `CHITON_PASSPHRASE` or prompted
-interactively. An assistant-launched `chiton serve --stdio` cannot prompt, so export `CHITON_PASSPHRASE` in the environment that starts the assistant. The saved HNSW index is sealed too (AES-256-GCM, under a key
-derived from the store's); the other files in `chiton-out/` and `.chiton/` stay
-plaintext. Opt out for CI or synthetic data with `chiton init --encrypt=false`.
+interactively. An assistant-launched `chiton serve --stdio` cannot prompt, so export `CHITON_PASSPHRASE` in the environment that starts the assistant. The saved HNSW index and the cluster sidecar are sealed too
+(AES-256-GCM, under a key derived from the store's); the other files in
+`chiton-out/` and `.chiton/` stay plaintext. Opt out for CI or synthetic data
+with `chiton init --encrypt=false`. Opening a store with no keyfile prints a
+one-line notice on stderr; set `CHITON_PLAINTEXT_OK=1` to hide it.
 
 ## Supported sources
 

@@ -49,6 +49,7 @@ type Logger func(format string, args ...any)
 // Config tunes the engine. Zero values get sane defaults via withDefaults.
 type Config struct {
 	GraphPath       string        // for locating the cluster sidecar
+	SidecarKey      []byte        // seals cluster.json for an encrypted store; nil writes plaintext
 	Resolution      float64       // Leiden resolution for incremental re-cluster
 	Reembed         bool          // re-embed a changed file's embeddable nodes
 	Reanalyze       bool          // re-run deterministic FileRules on change
@@ -688,7 +689,7 @@ func (e *Engine) recluster(ctx context.Context) (haveSidecar bool, err error) {
 		return statErr == nil, nil
 	}
 
-	prev, err := cluster.LoadSidecar(sidecarPath)
+	prev, err := cluster.LoadSidecar(sidecarPath, e.cfg.SidecarKey)
 	if err != nil {
 		return false, fmt.Errorf("load cluster sidecar: %w", err)
 	}
@@ -711,7 +712,7 @@ func (e *Engine) recluster(ctx context.Context) (haveSidecar bool, err error) {
 
 	rng := rand.New(rand.NewSource(42))
 	res := cluster.ApplyRegion(prev, region, e.cfg.Resolution, rng)
-	if err := cluster.WriteSidecar(sidecarPath, res); err != nil {
+	if err := cluster.WriteSidecar(sidecarPath, res, e.cfg.SidecarKey); err != nil {
 		return false, err
 	}
 	e.log("sync: re-clustered %d node(s) around %d touched → %d communities over %d nodes",

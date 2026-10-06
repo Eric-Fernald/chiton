@@ -67,6 +67,12 @@ func openSyncEngine(cmd *cobra.Command, f *syncEngineFlags) (*ingest.Engine, fun
 	if err != nil {
 		return nil, nil, err
 	}
+	// loadStore already resolved the key, so this is a cache hit and never prompts again.
+	keys, err := resolveStoreKey(cfg.GraphPath)
+	if err != nil {
+		gs.Close()
+		return nil, nil, err
+	}
 	ch, err := loadBuildCache(cfg.GraphPath, gs.Epoch(), cmd.ErrOrStderr())
 	if err != nil {
 		gs.Close()
@@ -89,6 +95,7 @@ func openSyncEngine(cmd *cobra.Command, f *syncEngineFlags) (*ingest.Engine, fun
 
 	eng := ingest.New(gs, ch, ingest.Config{
 		GraphPath:       cfg.GraphPath,
+		SidecarKey:      keys.fileKey,
 		Resolution:      f.resolution,
 		Reembed:         embedder != nil,
 		Reanalyze:       analyzer != nil,

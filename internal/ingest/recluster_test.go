@@ -28,7 +28,7 @@ func seedSidecar(t *testing.T, h *harness) {
 	ctx := context.Background()
 	nodes, _ := h.gs.AllNodes(ctx)
 	edges, _ := h.gs.AllEdges(ctx)
-	if err := cluster.WriteSidecar(cluster.SidecarPath(h.eng.cfg.GraphPath), cluster.Full(nodes, edges, 1.0, nil)); err != nil {
+	if err := cluster.WriteSidecar(cluster.SidecarPath(h.eng.cfg.GraphPath), cluster.Full(nodes, edges, 1.0, nil), nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -56,7 +56,7 @@ func TestReclusterReadsOnlyRegion(t *testing.T) {
 	if err != nil || !sum.Reclustered {
 		t.Fatalf("SyncChanges = %+v, %v; want a re-cluster without whole-graph reads", sum, err)
 	}
-	res, err := cluster.LoadSidecar(cluster.SidecarPath(h.eng.cfg.GraphPath))
+	res, err := cluster.LoadSidecar(cluster.SidecarPath(h.eng.cfg.GraphPath), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

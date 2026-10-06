@@ -132,10 +132,11 @@ in-process whisper.cpp backend exists but requires a `-tags whisper_cgo` build.
 |---|---|---|
 | `chiton-out/graph.kuzu/` (default `graph_path`) | The BadgerDB graph: all node text, transcripts, email bodies, embeddings | **Yes**, when a keyfile is present (§2) |
 | `chiton-out/hnsw.idx` | Saved HNSW index: node IDs and graph links, no vectors or text | **Yes**, when the store is encrypted: AES-256-GCM under a key derived from the store's (§2) |
-| `chiton-out/cluster.json`, `chiton-out/cache.json` | Cluster sidecar and content-hash cache | **No — plaintext** |
+| `chiton-out/cluster.json` | Cluster sidecar: every node's label, source URI and community | **Yes**, sealed with AES-256-GCM under a subkey of the store key when a keyfile is present (§2). A sidecar written before encryption was on loads, and is sealed on its next write |
+| `chiton-out/cache.json` | Content-hash cache | **No**: `file://` paths of repository files and their SHA-256, nothing that is not already in the working tree |
 | `.chiton/keyfile.json` | Argon2id salt, KDF parameters, and a verifier tag (HMAC-SHA256 of the key); no key, no passphrase | n/a — no secret in it |
 | `.chiton/hooks.yaml`, `sources.yaml`, `schema_version`, `.gitignore` | Policy files | **No — plaintext**, and `hooks.yaml`/`sources.yaml` are meant to be committed |
-| `.chiton/baselines/<commit>.json`, `.chiton/llm-analyzed.json` | Finding baselines and LLM-rule state | **No — plaintext** |
+| `.chiton/baselines/<commit>.json`, `.chiton/llm-analyzed.json` | Finding baselines and LLM-rule state | **No — plaintext**. Plaintext on purpose: rule IDs and messages about repository files. |
 | `chiton export --out <file>` | Full graph snapshot, embeddings inlined | **No — plaintext JSON** |
 | OS temp dir | A copy of the browser History DB (`chiton-hist-*`), yt-dlp scratch (`chiton-yt-*`) | **No** — removed after use |
 
@@ -143,8 +144,9 @@ in-process whisper.cpp backend exists but requires a `-tags whisper_cgo` build.
 protect `.chiton/`; that was wrong. The encrypted data lives under
 `chiton-out/`, and `.chiton/` holds plaintext policy plus the (secret-free)
 keyfile. `chiton init` writes a `.chiton/.gitignore` that keeps everything but
-`hooks.yaml` and `sources.yaml` out of git; **`chiton-out/` is not
-auto-ignored** — add it to your repo's `.gitignore` yourself.
+`hooks.yaml` and `sources.yaml` out of git. A writable open writes
+`chiton-out/.gitignore` (`*`), so the store is never committed. A custom
+`graph_path` directory is left alone.
 
 **Outside the project directory:** `chiton install` and `chiton uninstall` write
 assistant configuration into your **home directory**, not just the repo —
@@ -220,18 +222,16 @@ lives. Badger encrypts with AES-256 in CTR mode (`y.XORBlock` in
 `badger/v4`), which keeps the contents confidential but does not authenticate
 them: it does not detect tampering with the files on disk.
 
-> **Scope caveat (shipped reality):** only the Badger store and the saved HNSW
-> index (`hnsw.idx`) are encrypted today. The index is sealed with
-> `EncryptBytes` under `FileKey`, an HKDF-SHA256 derivation of the store key, so
-> it never shares a key with the store; without the key it is not loaded and
-> `serve` rebuilds the index instead. The package doc in
-> `internal/crypto/keyfile.go` describes the same wrapping for other artifacts
-> (`cache.json`, `cluster.json`, `audit.jsonl`), but that is **not yet wired in**.
-> Everything in the "No — plaintext" rows of §1.3 stays plaintext: the cluster
-> sidecar, the content cache, `.chiton/baselines/`, `.chiton/llm-analyzed.json`,
-> and `chiton export` snapshots. The design's "export archive is encrypted with
+> **Scope caveat (shipped reality):** the Badger store and, for an encrypted
+> store, the saved HNSW index (`hnsw.idx`) and the cluster sidecar
+> (`cluster.json`) are encrypted. Both files are sealed with AES-256-GCM under
+> `FileKey`, an HKDF-SHA256 derivation of the store key, so they never share a
+> key with the store; without the key `serve` rebuilds the index and runs
+> without cluster data. `cache.json`, `.chiton/baselines/`, `.chiton/llm-analyzed.json` and
+> `chiton export` snapshots stay plaintext; the first three hold only data
+> derived from repository files. The design's "export archive is encrypted with
 > the same passphrase" is **planned, not shipped.** Protect exported snapshots
-> and sidecars yourself.
+> yourself.
 
 ### Key derivation and handling
 
@@ -290,6 +290,13 @@ Key resolution is automatic: when chiton opens a graph it looks for a keyfile
 next to the store, one directory up in `.chiton/`, and finally in `$CHITON_PROJECT_DIR/.chiton/` (the working directory's `.chiton/` when unset)
 (`internal/crypto/resolve.go`). If a keyfile is found, it derives the key and
 opens the store encrypted; if none is found, the store opens in plaintext.
+
+Opening a store with no keyfile prints a one-line notice on stderr;
+`CHITON_PLAINTEXT_OK=1` hides it. To encrypt an existing plaintext store, run
+`chiton export --out snapshot.json`, move `chiton-out/` aside, run
+`chiton init`, then `chiton merge snapshot.json` and `chiton cluster`, and
+delete the snapshot and the old store. Export before `init`: once a keyfile
+exists, chiton opens the old store with a key and Badger rejects it.
 
 ### Threats this addresses
 
@@ -542,7 +549,7 @@ status is labelled **shipped** or **planned**.
 | Laptop theft / lost device reading the store off disk | AES-256 (Badger, CTR mode) store encryption keyed from an Argon2id passphrase | **Shipped** |
 | Backup leakage (`chiton-out/` in cloud/disk backups) | Same store encryption | **Shipped** |
 | Stolen `chiton-out/graph.kuzu/` yields readable data | Same store encryption | **Shipped** |
-| Plaintext sidecars / exports leaking the same data | — | **Not mitigated:** `cluster.json`, `cache.json`, `.chiton/baselines/`, `.chiton/llm-analyzed.json`, and `chiton export` output are plaintext |
+| Plaintext sidecars / exports leaking the same data | Sealed under a key derived from the store key (§2) | **Partly mitigated:** `cluster.json` and `hnsw.idx` are sealed for encrypted stores; `cache.json`, baselines, `llm-analyzed.json` and `chiton export` output are plaintext |
 | Meeting/email PII surfaced by the two meeting tools | `person` nodes tagged `pii=true`, hidden unless `include_pii` | Shipped: redacted by default in every read tool; `--include-pii` opts out |
 | A symlink in an indexed repo pointing outside it (e.g. `notes.md -> ~/.ssh/id_rsa`) pulling its target into the graph and `pending_extractions` | `build`, `sync`, and `sync watch` index regular files only; symlinks and junctions are skipped at the walk and at the read | **Shipped** (`analyze` via Section D) |
 | Accidental upload of secrets to a remote LLM | Subagent mode = no built-in LLM calls; per-source allowlist + secret scrubbing | **Partly:** no built-in LLM egress (shipped); allowlist/scrubbing **planned** |

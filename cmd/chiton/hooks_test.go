@@ -55,6 +55,7 @@ func unavailableStore(t *testing.T, kind string) {
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("CHITON_PROJECT_DIR", "")
 	t.Setenv(chitoncrypto.EnvVarPassphrase, "")
+	t.Setenv(plaintextOKEnv, "1")
 	graph := filepath.Join(t.TempDir(), "graph")
 	t.Setenv("CHITON_GRAPH_PATH", graph)
 	switch kind {

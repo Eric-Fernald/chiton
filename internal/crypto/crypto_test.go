@@ -330,3 +330,27 @@ func TestKeyFile_RecordVerifierUpgradesInPlace(t *testing.T) {
 		t.Errorf("after the upgrade, a wrong passphrase gave %v, want ErrWrongPassphrase", err)
 	}
 }
+
+func TestSealUnseal(t *testing.T) {
+	key := bytes.Repeat([]byte{0x42}, 32)
+	plain := []byte(`{"label":"Initech acquisition sync"}`)
+	sealed, err := Seal(key, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(sealed, []byte("Initech")) {
+		t.Error("sealed output leaks plaintext")
+	}
+	if got, err := Unseal(key, sealed); err != nil || !bytes.Equal(got, plain) {
+		t.Errorf("Unseal = %q, %v; want the plaintext", got, err)
+	}
+	if got, err := Seal(nil, plain); err != nil || !bytes.Equal(got, plain) {
+		t.Errorf("Seal(nil) = %q, %v; a plaintext store must pass data through", got, err)
+	}
+	if got, err := Unseal(key, plain); err != nil || !bytes.Equal(got, plain) {
+		t.Errorf("Unseal of a file written before encryption = %q, %v; want it unchanged", got, err)
+	}
+	if _, err := Unseal(nil, sealed); !errors.Is(err, ErrSealedNoKey) {
+		t.Errorf("Unseal(nil, sealed) err = %v, want ErrSealedNoKey", err)
+	}
+}

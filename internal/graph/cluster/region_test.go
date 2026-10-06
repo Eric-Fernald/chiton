@@ -87,7 +87,7 @@ func TestSidecarIsCompactAndRoundTrips(t *testing.T) {
 	nodes, edges := twoCliques()
 	want := Full(nodes, edges, 1.0, nil)
 	path := filepath.Join(t.TempDir(), "cluster.json")
-	if err := WriteSidecar(path, want); err != nil {
+	if err := WriteSidecar(path, want, nil); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(path)
@@ -97,7 +97,7 @@ func TestSidecarIsCompactAndRoundTrips(t *testing.T) {
 	if bytes.Contains(raw, []byte("\n ")) {
 		t.Errorf("sidecar is indented: %.80s", raw)
 	}
-	got, err := LoadSidecar(path)
+	got, err := LoadSidecar(path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

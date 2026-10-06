@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/analyze"
 	_ "github.com/Eric-Fernald/chiton/internal/analyze/rules" // register deterministic rules
 	"github.com/Eric-Fernald/chiton/internal/cache"
+	chitoncrypto "github.com/Eric-Fernald/chiton/internal/crypto"
 	"github.com/Eric-Fernald/chiton/internal/embed"
 	"github.com/Eric-Fernald/chiton/internal/graph/cluster"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
@@ -340,7 +342,7 @@ func TestIncrementalReclusterUpdatesSidecar(t *testing.T) {
 	edges, _ := h.gs.AllEdges(ctx)
 	seed := cluster.RunIncremental(nil, nodes, edges, map[string]bool{}, 1.0, rand.New(rand.NewSource(1)))
 	sidecar := cluster.SidecarPath(h.eng.cfg.GraphPath)
-	if err := cluster.WriteSidecar(sidecar, seed); err != nil {
+	if err := cluster.WriteSidecar(sidecar, seed, nil); err != nil {
 		t.Fatal(err)
 	}
 	seedCount := seed.NodeCount
@@ -355,7 +357,7 @@ func TestIncrementalReclusterUpdatesSidecar(t *testing.T) {
 		t.Error("expected SyncChanges to re-cluster when a sidecar exists")
 	}
 
-	updated, err := cluster.LoadSidecar(sidecar)
+	updated, err := cluster.LoadSidecar(sidecar, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,7 +391,7 @@ func TestSyncReportsReclustered(t *testing.T) {
 
 	nodes, _ := h.gs.AllNodes(ctx)
 	edges, _ := h.gs.AllEdges(ctx)
-	if err := cluster.WriteSidecar(cluster.SidecarPath(h.eng.cfg.GraphPath), cluster.Full(nodes, edges, 1.0, nil)); err != nil {
+	if err := cluster.WriteSidecar(cluster.SidecarPath(h.eng.cfg.GraphPath), cluster.Full(nodes, edges, 1.0, nil), nil); err != nil {
 		t.Fatal(err)
 	}
 	sync(true) // unchanged, sidecar exists
@@ -897,5 +899,34 @@ func TestSyncDirReportsStoreSyncFailure(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(h.graphDir, "cache.json")); !os.IsNotExist(err) {
 		t.Fatalf("cache.json written although the store sync failed (stat err %v)", err)
+	}
+}
+
+// Live sync must keep an encrypted store's cluster sidecar sealed when it re-clusters.
+func TestReclusterKeepsSidecarSealed(t *testing.T) {
+	h := newHarness(t, false, false)
+	key := bytes.Repeat([]byte{9}, 32)
+	h.eng.cfg.SidecarKey = key
+	ctx := context.Background()
+	pa := h.write(t, "a.go", "package src\nfunc A() {}\n")
+	if _, err := h.eng.SyncFile(ctx, pa); err != nil {
+		t.Fatal(err)
+	}
+	nodes, _ := h.gs.AllNodes(ctx)
+	edges, _ := h.gs.AllEdges(ctx)
+	sidecar := cluster.SidecarPath(h.eng.cfg.GraphPath)
+	if err := cluster.WriteSidecar(sidecar, cluster.Full(nodes, edges, 1.0, nil), key); err != nil {
+		t.Fatal(err)
+	}
+
+	pb := h.write(t, "b.go", "package src\nfunc B() {}\n")
+	if _, err := h.eng.SyncChanges(ctx, []Change{{Path: pb, Op: OpUpsert}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cluster.LoadSidecar(sidecar, nil); !errors.Is(err, chitoncrypto.ErrSealedNoKey) {
+		t.Errorf("re-clustered sidecar is readable without the key (err %v); want it sealed", err)
+	}
+	if _, err := cluster.LoadSidecar(sidecar, key); err != nil {
+		t.Errorf("LoadSidecar with the key: %v", err)
 	}
 }

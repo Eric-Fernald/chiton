@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -294,6 +295,7 @@ After init, run "chiton build ." to populate the graph.`,
 
 			if !encrypt {
 				fmt.Fprintln(out, "init: note: encryption disabled (--encrypt=false); graph will be stored in plaintext")
+				fmt.Fprintf(out, "init: note: set %s=1 to hide the per-command plaintext notice\n", plaintextOKEnv)
 				fmt.Fprintf(out, "init: done - %d file(s) created, %d skipped\n", created, skipped)
 				fmt.Fprintf(out, "init: next step: chiton build .\n")
 				return nil
@@ -338,28 +340,116 @@ After init, run "chiton build ." to populate the graph.`,
 	return cmd
 }
 
+// storeKeyInfo is a graph's resolved encryption; every field is nil for a plaintext store.
+type storeKeyInfo struct {
+	key     []byte                // Badger store key
+	fileKey []byte                // seals sidecar files, derived from key
+	kf      *chitoncrypto.KeyFile // the keyfile key came from
+}
+
+// storeKeys memoises resolveStoreKey by graph path.
+var storeKeys sync.Map
+
+// resolveStoreKey derives graphPath's keys once per process, so opening the store and its cluster sidecar
+// prompts for the passphrase, and runs Argon2id, only once.
+func resolveStoreKey(graphPath string) (storeKeyInfo, error) {
+	if v, ok := storeKeys.Load(graphPath); ok {
+		return v.(storeKeyInfo), nil
+	}
+	key, kf, err := chitoncrypto.ResolveKeyForGraph(graphPath, config.StateDir())
+	if err != nil {
+		return storeKeyInfo{}, passphraseHint(err)
+	}
+	info := storeKeyInfo{key: key, kf: kf}
+	if key != nil {
+		if info.fileKey, err = chitoncrypto.FileKey(key); err != nil {
+			return storeKeyInfo{}, err
+		}
+	}
+	storeKeys.Store(graphPath, info)
+	return info, nil
+}
+
 // openGraphStore opens the badger store with encryption if a keyfile is
 // detected next to it. readOnly chooses between Open and OpenReadOnly.
 func openGraphStore(graphPath string, readOnly bool) (*badgerstore.Store, error) {
-	key, kf, err := chitoncrypto.ResolveKeyForGraph(graphPath, config.StateDir())
+	info, err := resolveStoreKey(graphPath)
 	if err != nil {
-		return nil, fmt.Errorf("open store: resolve encryption key: %w", passphraseHint(err))
+		return nil, fmt.Errorf("open store: resolve encryption key: %w", err)
+	}
+	if info.key == nil {
+		if msg := plaintextNotice(graphPath); msg != "" {
+			fmt.Fprintln(os.Stderr, msg)
+		}
 	}
 	open := badgerstore.OpenWith
 	if readOnly {
 		open = badgerstore.OpenReadOnlyWith
 	}
-	gs, err := open(graphPath, badgerstore.Options{EncryptionKey: key})
+	gs, err := open(graphPath, badgerstore.Options{EncryptionKey: info.key})
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w", err)
 	}
 	// Badger rejects a wrong key for an existing store, so a pre-verifier keyfile can now record one.
-	if kf != nil {
-		if err := kf.RecordVerifier(key); err != nil {
+	if info.kf != nil {
+		if err := info.kf.RecordVerifier(info.key); err != nil {
 			fmt.Fprintf(os.Stderr, "chiton: warning: could not add a passphrase verifier to the keyfile: %v\n", err)
 		}
 	}
+	if !readOnly {
+		if err := ensureOutGitignore(filepath.Dir(graphPath)); err != nil {
+			gs.Close()
+			return nil, fmt.Errorf("open store: %w", err)
+		}
+	}
 	return gs, nil
+}
+
+// plaintextOKEnv silences the notice openGraphStore prints for a store with no keyfile.
+const plaintextOKEnv = "CHITON_PLAINTEXT_OK"
+
+// plaintextNotice returns the one-line notice for opening graphPath unencrypted, or "" when plaintextOKEnv is set.
+func plaintextNotice(graphPath string) string {
+	if os.Getenv(plaintextOKEnv) != "" {
+		return ""
+	}
+	return fmt.Sprintf("chiton: note: graph store %s is not encrypted (no keyfile found); docs/SECURITY.md section 2 explains how to encrypt it. Set %s=1 to hide this note.", graphPath, plaintextOKEnv)
+}
+
+// ensureOutGitignore writes a "*" .gitignore into outDir when missing, so the graph is never committed. Only a
+// directory named chiton-out is touched, since a custom graph_path may share its directory with tracked files.
+func ensureOutGitignore(outDir string) error {
+	if filepath.Base(outDir) != "chiton-out" {
+		return nil
+	}
+	p := filepath.Join(outDir, ".gitignore")
+	if _, err := os.Stat(p); err == nil {
+		return nil
+	}
+	if err := os.WriteFile(p, []byte("*\n"), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", p, err)
+	}
+	return nil
+}
+
+// loadClusterSidecar reads graphPath's cluster sidecar, unsealing it when the store is encrypted. A missing
+// sidecar is (nil, nil).
+func loadClusterSidecar(graphPath string) (*cluster.Results, error) {
+	info, err := resolveStoreKey(graphPath)
+	if err != nil {
+		return nil, err
+	}
+	return cluster.LoadSidecar(cluster.SidecarPath(graphPath), info.fileKey)
+}
+
+// writeClusterSidecar writes r beside graphPath, sealed when the store is encrypted, and returns the sidecar path.
+func writeClusterSidecar(graphPath string, r *cluster.Results) (string, error) {
+	info, err := resolveStoreKey(graphPath)
+	if err != nil {
+		return "", err
+	}
+	path := cluster.SidecarPath(graphPath)
+	return path, cluster.WriteSidecar(path, r, info.fileKey)
 }
 
 // passphraseHint adds the fix for a missing passphrase, which an assistant-launched server hits because it has
@@ -802,8 +892,8 @@ Restart chiton serve after clustering to load the new results.`,
 			start := time.Now()
 			results := cluster.Full(nodes, edges, resolution, rand.New(rand.NewSource(seed)))
 
-			sidecarPath := cluster.SidecarPath(cfg.GraphPath)
-			if err := cluster.WriteSidecar(sidecarPath, results); err != nil {
+			sidecarPath, err := writeClusterSidecar(cfg.GraphPath, results)
+			if err != nil {
 				return err
 			}
 
@@ -887,7 +977,7 @@ records in the MCP config so the server uses the same store as 'chiton build'.`,
 			}
 			defer gs.Close()
 
-			clusterResults, err := cluster.LoadSidecar(cluster.SidecarPath(cfg.GraphPath))
+			clusterResults, err := loadClusterSidecar(cfg.GraphPath)
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "serve: warning: could not load cluster sidecar: %v\n", err)
 			}
@@ -989,7 +1079,7 @@ Requires a prior 'chiton cluster' run.`,
 				return err
 			}
 
-			clusterResults, err := cluster.LoadSidecar(cluster.SidecarPath(cfg.GraphPath))
+			clusterResults, err := loadClusterSidecar(cfg.GraphPath)
 			if err != nil {
 				return fmt.Errorf("load cluster sidecar: %w", err)
 			}

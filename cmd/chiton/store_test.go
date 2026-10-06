@@ -14,6 +14,7 @@ import (
 
 	"github.com/Eric-Fernald/chiton/internal/config"
 	chitoncrypto "github.com/Eric-Fernald/chiton/internal/crypto"
+	"github.com/Eric-Fernald/chiton/internal/graph/cluster"
 	badgerstore "github.com/Eric-Fernald/chiton/internal/graph/store/badger"
 )
 
@@ -25,6 +26,7 @@ func testProject(t *testing.T) string {
 	t.Setenv(config.ProjectDirEnv, project)
 	t.Setenv("CHITON_GRAPH_PATH", "")
 	t.Setenv(chitoncrypto.EnvVarPassphrase, "")
+	t.Setenv(plaintextOKEnv, "1")
 	return project
 }
 
@@ -140,5 +142,65 @@ func TestInitNotesAssistantPassphrase(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "serve --stdio") {
 		t.Errorf("init output lacks the assistant passphrase note:\n%s", out.String())
+	}
+}
+
+func TestOpenGraphStoreWritesOutGitignore(t *testing.T) {
+	project := testProject(t)
+	gs, err := openGraphStore(filepath.Join(project, "chiton-out", "graph.kuzu"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gs.Close()
+	b, err := os.ReadFile(filepath.Join(project, "chiton-out", ".gitignore"))
+	if err != nil || string(b) != "*\n" {
+		t.Errorf("chiton-out/.gitignore = %q, %v; want \"*\n\"", b, err)
+	}
+
+	// A custom store directory may hold the user's own tracked files, so it is left alone.
+	gs, err = openGraphStore(filepath.Join(project, "graphs", "g"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gs.Close()
+	if _, err := os.Stat(filepath.Join(project, "graphs", ".gitignore")); !os.IsNotExist(err) {
+		t.Errorf("wrote a .gitignore outside chiton-out (stat err %v)", err)
+	}
+}
+
+func TestPlaintextNotice(t *testing.T) {
+	t.Setenv(plaintextOKEnv, "")
+	if msg := plaintextNotice("chiton-out/graph.kuzu"); !strings.Contains(msg, "not encrypted") || !strings.Contains(msg, plaintextOKEnv) {
+		t.Errorf("notice = %q, want it to say the store is not encrypted and name %s", msg, plaintextOKEnv)
+	}
+	t.Setenv(plaintextOKEnv, "1")
+	if msg := plaintextNotice("chiton-out/graph.kuzu"); msg != "" {
+		t.Errorf("notice with %s=1 = %q, want silence", plaintextOKEnv, msg)
+	}
+}
+
+// An encrypted project's cluster sidecar is written sealed and read back through the same resolved key.
+func TestClusterSidecarSealedForEncryptedProject(t *testing.T) {
+	project := testProject(t)
+	writeKeyfile(t, project)
+	t.Setenv(chitoncrypto.EnvVarPassphrase, "pw")
+	graph := filepath.Join(project, "chiton-out", "graph.kuzu")
+	gs, err := openGraphStore(graph, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gs.Close()
+
+	r := &cluster.Results{NodeCount: 1, Nodes: map[string]cluster.NodeResult{"n": {Label: "Initech acquisition"}}}
+	path, err := writeClusterSidecar(graph, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cluster.LoadSidecar(path, nil); !errors.Is(err, chitoncrypto.ErrSealedNoKey) {
+		t.Errorf("sidecar readable without the key (err %v); want it sealed", err)
+	}
+	got, err := loadClusterSidecar(graph)
+	if err != nil || got.Nodes["n"].Label != "Initech acquisition" {
+		t.Errorf("loadClusterSidecar = %+v, %v", got, err)
 	}
 }

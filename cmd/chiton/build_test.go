@@ -17,6 +17,7 @@ import (
 func TestBuildReplacesStaleSymbols(t *testing.T) {
 	proj := t.TempDir()
 	t.Setenv(config.ProjectDirEnv, proj)
+	t.Setenv(plaintextOKEnv, "1")
 	src := filepath.Join(proj, "src")
 	write := func(rel, body string) {
 		t.Helper()

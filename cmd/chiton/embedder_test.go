@@ -28,6 +28,7 @@ func TestNewEmbedderRefusesRepoChosenRemoteEndpoint(t *testing.T) {
 
 // A refused embed endpoint must disable embeddings only; MCP extraction needs no embedder.
 func TestBuildSemanticDepsKeepsExtractorWhenEndpointRefused(t *testing.T) {
+	t.Setenv(plaintextOKEnv, "1")
 	cfg := &config.Config{
 		GraphPath: filepath.Join(t.TempDir(), "graph.badger"),
 		Embed: config.EmbedConfig{

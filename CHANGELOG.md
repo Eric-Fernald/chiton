@@ -91,6 +91,7 @@ dated section.
 
 ### Changed
 
+- **Opening an unencrypted store prints a one-line notice** (`CHITON_PLAINTEXT_OK=1` hides it), and **`chiton-out/` now gets its own `.gitignore`.**
 - **`chiton cluster` computes betweenness on up to 8 cores.** Brandes pivots are summed in fixed chunks of 32
   on private buffers and added in chunk order, so scores are bit-identical on any core count; a full pass
   over a 118k-node graph dropped from 4.3 s to 0.95 s of compute.
@@ -224,6 +225,7 @@ dated section.
 
 ### Security
 
+- **The cluster sidecar is encrypted for encrypted stores.** `cluster.json` held every node label and source URI in plaintext; it is now sealed with a key derived from the store key. Existing plaintext sidecars load and are sealed on their next write.
 - **Webhook secrets no longer go on the command line.** `--signing-secret` and `--client-state` are removed and now fail with a pointer to `--signing-secret-file` / `--client-state-file`, which read the secret from a file. The `CHITON_SLACK_SIGNING_SECRET` and `CHITON_TEAMS_CLIENT_STATE` env vars work as before.
 - **`chiton install`/`uninstall` no longer reset MCP config files to 0644 or replace symlinks.** Files such as `~/.codex/config.toml` keep their existing mode, a symlinked config is written through, and new MCP configs are created 0600.
 - **`chiton browser ingest|watch` strips userinfo, query strings and fragments from history URLs** (they carried OAuth codes, reset tokens and presigned signatures into every MCP read tool). Rows that then share a URL merge, and pages stored unredacted by an earlier ingest are deleted on the next run. `--keep-query` restores query and fragment.

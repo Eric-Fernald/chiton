@@ -8,7 +8,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Eric-Fernald/chiton/internal/graph/cluster"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 	"github.com/Eric-Fernald/chiton/internal/report"
 )
@@ -57,7 +56,7 @@ to cap dense graphs (Mermaid is additionally capped internally).`,
 			}
 
 			// Cluster overlay is optional; a missing sidecar just means no colours.
-			overlay, err := cluster.LoadSidecar(cluster.SidecarPath(cfg.GraphPath))
+			overlay, err := loadClusterSidecar(cfg.GraphPath)
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "visualize: warning: could not load cluster sidecar: %v\n", err)
 			}
