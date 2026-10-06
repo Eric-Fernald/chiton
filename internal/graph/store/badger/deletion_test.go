@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	badgerdb "github.com/dgraph-io/badger/v4"
@@ -147,14 +149,17 @@ func TestColonEdgeKindAdjacency(t *testing.T) {
 	var left []string
 	if err := gs.db.View(func(txn *badgerdb.Txn) error {
 		return scan(txn, "", func(k, _ []byte) error {
-			left = append(left, string(k))
+			if !strings.HasPrefix(string(k), pfxMeta) {
+				left = append(left, string(k))
+			}
 			return nil
 		})
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(left) != 1 || left[0] != nodeKeyString("b") {
-		t.Fatalf("keys after deleting a = %q, want only b's node key", left)
+	want := []string{string(kindKey("", "b")), nodeKeyString("b"), string(uriKey("", "b"))}
+	if !slices.Equal(left, want) {
+		t.Fatalf("keys after deleting a = %q, want only b's node and index keys %q", left, want)
 	}
 }
 

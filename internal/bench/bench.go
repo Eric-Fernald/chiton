@@ -6,14 +6,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
 	extast "github.com/Eric-Fernald/chiton/internal/extract/ast"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
+	"github.com/Eric-Fernald/chiton/internal/walk"
 )
 
 // estimateTokens approximates token count from character count (chars ÷ 4), the
@@ -88,12 +87,14 @@ func Run(ctx context.Context, name, path string, maxQueries int) (*Report, error
 		files      int
 	)
 
-	walkErr := filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil // skip unreadable entries, keep benchmarking the rest
-		}
+	policy, err := walk.LoadPolicy(path)
+	if err != nil {
+		return nil, err
+	}
+	// Unreadable entries are skipped so the benchmark keeps going over the rest.
+	_, walkErr := walk.Files(ctx, path, policy, func(p string) error {
 		ex := extast.ForFile(p)
-		if d.IsDir() || ex == nil {
+		if ex == nil {
 			return nil
 		}
 		content, err := os.ReadFile(p)
@@ -111,7 +112,7 @@ func Run(ctx context.Context, name, path string, maxQueries int) (*Report, error
 		nodes = append(nodes, ns...)
 		edges = append(edges, es...)
 		return nil
-	})
+	}, nil)
 	if walkErr != nil {
 		return nil, walkErr
 	}
@@ -219,7 +220,7 @@ func (g *graph) topSymbols(n int) []string {
 		}
 		// Skip external import targets (fmt, http.Get). Their huge degree doesn't match any real question
 		// and would inflate every column.
-		if ext, _ := node.Attrs["external"].(bool); ext {
+		if model.IsExternal(node) {
 			continue
 		}
 		rs = append(rs, ranked{id, g.degree[id]})

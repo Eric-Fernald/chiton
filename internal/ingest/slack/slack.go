@@ -108,18 +108,15 @@ func (i *Ingester) ingestOne(ctx context.Context, conv Conversation) (Report, er
 	rep := Report{ChannelID: conv.ChannelID, ThreadTS: conv.ThreadTS, Messages: len(conv.Messages)}
 	uri := ConversationURI(conv.ChannelID, conv.ThreadTS)
 
-	// Replace any prior version of exactly this conversation before re-adding,
-	// the same atomic pattern the Teams ingester and AST extractors use.
-	if _, err := i.store.DeleteBySourceURI(ctx, uri); err != nil {
-		return rep, fmt.Errorf("replace prior conversation %s: %w", uri, err)
-	}
-
 	tr := conversationToTranscript(conv, uri)
 	if len(tr.Turns) == 0 {
-		// Nothing ingestable (e.g. a channel of only join/leave notices). The
-		// delete above already cleared any stale prior version.
+		// Nothing ingestable (e.g. only join/leave notices), so clear any stale prior version.
+		if _, err := i.store.DeleteBySourceURI(ctx, uri); err != nil {
+			return rep, fmt.Errorf("replace prior conversation %s: %w", uri, err)
+		}
 		return rep, nil
 	}
+	// Upsert replaces the prior version by diff, so decisions linked to this conversation survive.
 	n, err := meeting.Upsert(ctx, i.store, tr, i.now(), "conversation")
 	if err != nil {
 		return rep, err

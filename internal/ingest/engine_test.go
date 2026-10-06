@@ -1,21 +1,29 @@
 package ingest
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"fmt"
+	"io/fs"
 	"math/rand"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Eric-Fernald/chiton/internal/analyze"
 	_ "github.com/Eric-Fernald/chiton/internal/analyze/rules" // register deterministic rules
 	"github.com/Eric-Fernald/chiton/internal/cache"
+	chitoncrypto "github.com/Eric-Fernald/chiton/internal/crypto"
 	"github.com/Eric-Fernald/chiton/internal/embed"
 	"github.com/Eric-Fernald/chiton/internal/graph/cluster"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
 	badgerstore "github.com/Eric-Fernald/chiton/internal/graph/store/badger"
+	"github.com/Eric-Fernald/chiton/internal/walk"
 )
 
 type harness struct {
@@ -40,7 +48,7 @@ func newHarness(t *testing.T, reembed, reanalyze bool) *harness {
 	}
 	t.Cleanup(func() { gs.Close() })
 
-	ch, err := cache.Load(filepath.Join(graphDir, "cache.json"))
+	ch, err := cache.Load(filepath.Join(graphDir, "cache.json"), gs.Epoch())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,8 +288,8 @@ func TestSyncDirPruneKeepsPresentExcludedFiles(t *testing.T) {
 	h := newHarness(t, false, false)
 	ctx := context.Background()
 
-	// Index a file that lives under a dir SyncDir's walk ignores (vendor),
-	// simulating a prior `chiton build` that indexed it (build doesn't skip it).
+	// Index a file under a dir SyncDir's walk ignores (vendor), simulating a store written before the ignore
+	// policy existed.
 	vendorDir := filepath.Join(h.dir, "vendor")
 	if err := os.MkdirAll(vendorDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -334,7 +342,7 @@ func TestIncrementalReclusterUpdatesSidecar(t *testing.T) {
 	edges, _ := h.gs.AllEdges(ctx)
 	seed := cluster.RunIncremental(nil, nodes, edges, map[string]bool{}, 1.0, rand.New(rand.NewSource(1)))
 	sidecar := cluster.SidecarPath(h.eng.cfg.GraphPath)
-	if err := cluster.WriteSidecar(sidecar, seed); err != nil {
+	if err := cluster.WriteSidecar(sidecar, seed, nil); err != nil {
 		t.Fatal(err)
 	}
 	seedCount := seed.NodeCount
@@ -349,7 +357,7 @@ func TestIncrementalReclusterUpdatesSidecar(t *testing.T) {
 		t.Error("expected SyncChanges to re-cluster when a sidecar exists")
 	}
 
-	updated, err := cluster.LoadSidecar(sidecar)
+	updated, err := cluster.LoadSidecar(sidecar, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +391,7 @@ func TestSyncReportsReclustered(t *testing.T) {
 
 	nodes, _ := h.gs.AllNodes(ctx)
 	edges, _ := h.gs.AllEdges(ctx)
-	if err := cluster.WriteSidecar(cluster.SidecarPath(h.eng.cfg.GraphPath), cluster.Full(nodes, edges, 1.0, nil)); err != nil {
+	if err := cluster.WriteSidecar(cluster.SidecarPath(h.eng.cfg.GraphPath), cluster.Full(nodes, edges, 1.0, nil), nil); err != nil {
 		t.Fatal(err)
 	}
 	sync(true) // unchanged, sidecar exists
@@ -409,7 +417,7 @@ func TestWatchGracefulShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	ch, err := cache.Load(filepath.Join(root, "chiton-out", "cache.json"))
+	ch, err := cache.Load(filepath.Join(root, "chiton-out", "cache.json"), gs.Epoch())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -500,4 +508,425 @@ func findingsWithRule(views []analyze.FindingView, ruleID string) []analyze.Find
 		}
 	}
 	return out
+}
+
+// TestSyncDirHonoursIgnorePolicy checks SyncDir skips the default directory list and the root's .chitonignore.
+func TestSyncDirHonoursIgnorePolicy(t *testing.T) {
+	h := newHarness(t, false, false)
+	ctx := context.Background()
+	for _, d := range []string{"gen", ".venv"} {
+		if err := os.MkdirAll(filepath.Join(h.dir, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	kept := h.write(t, "a.go", "package src\nfunc A() {}\n")
+	gen := h.write(t, filepath.Join("gen", "g.go"), "package gen\nfunc G() {}\n")
+	venv := h.write(t, filepath.Join(".venv", "v.py"), "def v():\n    pass\n")
+	h.write(t, ".chitonignore", "gen/\n")
+
+	if _, err := h.eng.SyncDir(ctx, h.dir, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.nodesForURI(t, model.FileURI(kept))) == 0 {
+		t.Error("a.go should be indexed")
+	}
+	for _, p := range []string{gen, venv} {
+		if n := len(h.nodesForURI(t, model.FileURI(p))); n != 0 {
+			t.Errorf("%s should be skipped, got %d node(s)", p, n)
+		}
+	}
+}
+
+// TestResyncKeepsForeignEdges reproduces the lost-linkage bug: an edit keeps a meeting's edges on a surviving
+// symbol, and renaming the symbol drops them with it.
+func TestResyncKeepsForeignEdges(t *testing.T) {
+	h := newHarness(t, false, false)
+	ctx := context.Background()
+	p := h.write(t, "foo.go", "package src\nfunc Hello() {}\n")
+	helloID := model.NewNodeID(model.FileURI(p), "Hello")
+	if _, err := h.eng.SyncFile(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	const decID, mtgID = "dec", "mtg"
+	if err := h.gs.UpsertNodes(ctx, []model.Node{
+		{ID: decID, Kind: model.KindDecision, Label: "keep Hello", SourceURI: "decision://meeting://standup"},
+		{ID: mtgID, Kind: model.KindMeeting, Label: "standup", SourceURI: "meeting://standup"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.gs.UpsertEdges(ctx, []model.Edge{
+		{ID: "d", Src: decID, Dst: helloID, Kind: model.EdgeDecidedIn, Provenance: model.ProvInferred},
+		{ID: "m", Src: helloID, Dst: mtgID, Kind: model.EdgeDiscussedIn, Provenance: model.ProvInferred},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	h.write(t, "foo.go", "package src\nfunc Hello() {}\nfunc World() {}\n")
+	if _, err := h.eng.SyncFile(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if !h.hasEdge(t, decID, helloID, model.EdgeDecidedIn) || !h.hasEdge(t, helloID, mtgID, model.EdgeDiscussedIn) {
+		t.Fatal("editing foo.go deleted the meeting edges on the surviving Hello symbol")
+	}
+
+	h.write(t, "foo.go", "package src\nfunc Greet() {}\n")
+	if _, err := h.eng.SyncFile(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if h.edgeTouches(t, helloID) {
+		t.Error("edges still reference the renamed-away Hello symbol")
+	}
+	if n, _ := h.gs.GetNode(ctx, decID); n == nil {
+		t.Error("the decision node itself must survive")
+	}
+}
+
+// TestSyncChangesStopsOnCancel checks a cancelled context stops a batch before it writes anything.
+func TestSyncChangesStopsOnCancel(t *testing.T) {
+	h := newHarness(t, false, false)
+	p := h.write(t, "a.go", "package src\nfunc A() {}\n")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := h.eng.SyncChanges(ctx, []Change{{Path: p, Op: OpUpsert}}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("SyncChanges err = %v, want context.Canceled", err)
+	}
+	if n := len(h.nodesForURI(t, model.FileURI(p))); n != 0 {
+		t.Errorf("cancelled batch wrote %d node(s)", n)
+	}
+}
+
+// TestSyncDirCountsUnreadable checks one unreadable directory is counted and skipped, not fatal.
+func TestSyncDirCountsUnreadable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod cannot make a directory unreadable on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root can read any directory")
+	}
+	h := newHarness(t, false, false)
+	ctx := context.Background()
+	locked := filepath.Join(h.dir, "locked")
+	if err := os.MkdirAll(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h.write(t, filepath.Join("locked", "x.go"), "package locked\nfunc X() {}\n")
+	ok := h.write(t, "a.go", "package src\nfunc A() {}\n")
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+	sum, err := h.eng.SyncDir(ctx, h.dir, true)
+	if err != nil {
+		t.Fatalf("SyncDir aborted on an unreadable dir: %v", err)
+	}
+	if sum.Unreadable != 1 {
+		t.Errorf("Unreadable = %d, want 1", sum.Unreadable)
+	}
+	if len(h.nodesForURI(t, model.FileURI(ok))) == 0 {
+		t.Error("a.go should still be indexed")
+	}
+}
+
+// countingStore records every ReplaceSources call and each node it writes.
+type countingStore struct {
+	*badgerstore.Store
+	calls      int
+	nodeWrites map[string]int
+}
+
+func (c *countingStore) ReplaceSources(ctx context.Context, updates []store.SourceUpdate) ([]int, error) {
+	c.calls++
+	for _, u := range updates {
+		for _, n := range u.Nodes {
+			c.nodeWrites[n.ID]++
+		}
+	}
+	return c.Store.ReplaceSources(ctx, updates)
+}
+
+// TestSyncDirBatchesWrites checks SyncDir writes many extracted files in one batched call, reports scan and
+// unchanged counts, and skips every file on a re-run.
+func TestSyncDirBatchesWrites(t *testing.T) {
+	h := newHarness(t, false, false)
+	ctx := context.Background()
+	cs := &countingStore{Store: h.gs, nodeWrites: map[string]int{}}
+	eng := New(cs, h.cache, Config{GraphPath: h.eng.cfg.GraphPath}, nil, nil, nil)
+	const files = 30
+	for i := range files {
+		h.write(t, fmt.Sprintf("f%02d.go", i), fmt.Sprintf("package src\nfunc F%02d() {}\n", i))
+	}
+
+	sum, err := eng.SyncDir(ctx, h.dir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.Scanned != files || sum.Upserted != files || sum.Nodes != 2*files {
+		t.Fatalf("summary %+v, want %d scanned and upserted, %d nodes", sum, files, 2*files)
+	}
+	if cs.calls != 1 {
+		t.Errorf("ReplaceSources calls = %d, want 1 batched write", cs.calls)
+	}
+
+	sum, err = eng.SyncDir(ctx, h.dir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.Unchanged != files || sum.Upserted != 0 {
+		t.Errorf("re-run summary %+v, want all %d unchanged", sum, files)
+	}
+}
+
+// TestSyncDirPruneKeepsUnstatableFiles checks prune deletes only files whose stat says they do not exist, so a
+// file hidden by a permission error (an unreadable directory) keeps its nodes.
+func TestSyncDirPruneKeepsUnstatableFiles(t *testing.T) {
+	h := newHarness(t, false, false)
+	ctx := context.Background()
+	p := h.write(t, "a.go", "package src\nfunc A() {}\n")
+	if _, err := h.eng.SyncDir(ctx, h.dir, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	h.eng.stat = func(string) (fs.FileInfo, error) { return nil, fs.ErrPermission }
+	sum, err := h.eng.SyncDir(ctx, h.dir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.Deleted != 0 || len(h.nodesForURI(t, model.FileURI(p))) == 0 {
+		t.Fatalf("a file whose stat failed with a permission error was pruned (summary %+v)", sum)
+	}
+
+	h.eng.stat = os.Stat
+	if sum, err = h.eng.SyncDir(ctx, h.dir, true); err != nil || sum.Deleted != 1 {
+		t.Fatalf("SyncDir = %+v, %v; want the gone file pruned", sum, err)
+	}
+}
+
+// TestNoReclusterSkipsTouchedSet checks a NoRecluster engine records no touched IDs for a re-cluster it never runs.
+func TestNoReclusterSkipsTouchedSet(t *testing.T) {
+	h := newHarness(t, false, false)
+	eng := New(h.gs, h.cache, Config{GraphPath: h.eng.cfg.GraphPath, NoRecluster: true}, nil, nil, nil)
+	h.write(t, "a.go", "package src\nfunc A() {}\n")
+	if _, err := eng.SyncDir(context.Background(), h.dir, true); err != nil {
+		t.Fatal(err)
+	}
+	if touched, uris, dirty := eng.takeTouched(); dirty || len(touched) != 0 || len(uris) != 0 {
+		t.Errorf("touched = %d IDs, %d URIs, dirty = %v; want none", len(touched), len(uris), dirty)
+	}
+}
+
+// symlinkInfo is a FileInfo whose mode marks a symlink, so the check runs on hosts that cannot create one.
+type symlinkInfo struct{ fs.FileInfo }
+
+func (symlinkInfo) Mode() fs.FileMode { return fs.ModeSymlink | 0o777 }
+
+// TestSyncFileRefusesNonRegular checks prepare skips whatever Lstat reports as a symlink without reading it.
+func TestSyncFileRefusesNonRegular(t *testing.T) {
+	h := newHarness(t, false, false)
+	p := h.write(t, "notes.md", "SECRET MATERIAL\n")
+	h.eng.lstat = func(name string) (fs.FileInfo, error) {
+		fi, err := os.Lstat(name)
+		if err != nil {
+			return nil, err
+		}
+		return symlinkInfo{fi}, nil
+	}
+	out, err := h.eng.SyncFile(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Skipped || out.Reason != "not a regular file" {
+		t.Errorf("SyncFile = %+v, want skipped as not a regular file", out)
+	}
+	if n := len(h.nodesForURI(t, model.FileURI(p))); n != 0 {
+		t.Errorf("symlink indexed with %d node(s)", n)
+	}
+}
+
+// TestSyncSkipsSymlinks checks neither a direct sync nor a reconcile reads a real symlink, so a link to a file
+// outside the repo (a key, a .env) never reaches the graph.
+func TestSyncSkipsSymlinks(t *testing.T) {
+	h := newHarness(t, false, false)
+	ctx := context.Background()
+	secret := filepath.Join(t.TempDir(), "id_rsa.md")
+	if err := os.WriteFile(secret, []byte("PRIVATE KEY MATERIAL\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(h.dir, "notes.md")
+	if err := os.Symlink(secret, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	out, err := h.eng.SyncFile(ctx, link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Skipped || out.Reason != "not a regular file" {
+		t.Errorf("SyncFile(symlink) = %+v, want skipped as not a regular file", out)
+	}
+	if _, err := h.eng.SyncDir(ctx, h.dir, true); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(h.nodesForURI(t, model.FileURI(link))); n != 0 {
+		t.Errorf("symlinked file indexed with %d node(s)", n)
+	}
+}
+
+// TestSyncDirWritesSharedStubsOnce checks a package stub every file references is written once per run.
+func TestSyncDirWritesSharedStubsOnce(t *testing.T) {
+	h := newHarness(t, false, false)
+	cs := &countingStore{Store: h.gs, nodeWrites: map[string]int{}}
+	eng := New(cs, h.cache, Config{GraphPath: h.eng.cfg.GraphPath}, nil, nil, nil)
+	for _, name := range []string{"A", "B", "C"} {
+		h.write(t, name+".go", "package src\nimport \"fmt\"\nfunc "+name+"() { fmt.Println() }\n")
+	}
+	if _, err := eng.SyncDir(context.Background(), h.dir, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{model.NewNodeID("pkg://fmt", "fmt"), model.NewNodeID("pkg://fmt", "Println")} {
+		if got := cs.nodeWrites[id]; got != 1 {
+			t.Errorf("stub %s written %d times, want 1", id, got)
+		}
+	}
+}
+
+// TestSyncDirPrunesCaseAliases checks a cache entry an older build left under a lower-cased URI is dropped
+// once the file is re-indexed under its canonical URI.
+func TestSyncDirPrunesCaseAliases(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("path case aliases only arise on case-insensitive Windows paths")
+	}
+	h := newHarness(t, false, false)
+	ctx := context.Background()
+	p := h.write(t, "a.go", "package src\nfunc A() {}\n")
+	alias := "file://" + filepath.ToSlash(strings.ToLower(p))
+	if err := h.gs.UpsertNodes(ctx, []model.Node{{ID: model.NewNodeID(alias, alias), Kind: model.KindFile,
+		Label: "a.go", SourceURI: alias}}); err != nil {
+		t.Fatal(err)
+	}
+	h.cache.Mark(alias, "stale")
+
+	if _, err := h.eng.SyncDir(ctx, h.dir, true); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(h.nodesForURI(t, alias)); n != 0 {
+		t.Errorf("alias %s kept %d node(s)", alias, n)
+	}
+	if len(h.nodesForURI(t, model.FileURI(p))) == 0 {
+		t.Error("the canonical URI should be indexed")
+	}
+}
+
+// TestRescanAfterOverflow checks the overflow rescan enqueues changed, new, and vanished files, and that
+// processing them reconciles the graph.
+func TestRescanAfterOverflow(t *testing.T) {
+	h := newHarness(t, false, false)
+	ctx := context.Background()
+	pa := h.write(t, "a.go", "package src\nfunc A() {}\n")
+	pb := h.write(t, "b.go", "package src\nfunc B() {}\n")
+	if _, err := h.eng.SyncDir(ctx, h.dir, true); err != nil {
+		t.Fatal(err)
+	}
+	// Changes the watcher dropped: edit a.go, delete b.go, add c.go.
+	h.write(t, "a.go", "package src\nfunc A2() {}\n")
+	if err := os.Remove(pb); err != nil {
+		t.Fatal(err)
+	}
+	pc := h.write(t, "c.go", "package src\nfunc C() {}\n")
+
+	policy, err := walk.LoadPolicy(h.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var queued []string
+	if err := h.eng.rescan(ctx, h.dir, policy, func(p string) { queued = append(queued, p) }); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, p := range queued {
+		got[model.FileURI(p)] = true
+	}
+	for _, want := range []string{pa, pb, pc} {
+		if !got[model.FileURI(want)] {
+			t.Errorf("rescan did not enqueue %s (queued %v)", want, queued)
+		}
+	}
+
+	for _, p := range queued {
+		if err := h.eng.syncKey(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, ok := h.nodesForURI(t, model.FileURI(pa))["A2"]; !ok {
+		t.Error("edited a.go not re-synced")
+	}
+	if n := len(h.nodesForURI(t, model.FileURI(pb))); n != 0 {
+		t.Errorf("deleted b.go still has %d node(s)", n)
+	}
+	if len(h.nodesForURI(t, model.FileURI(pc))) == 0 {
+		t.Error("new c.go not indexed")
+	}
+}
+
+// syncFails is a store whose Sync always fails.
+type syncFails struct{ store.GraphStore }
+
+func (syncFails) Sync() error { return errors.New("disk gone") }
+
+// TestCacheNotSavedWhenStoreSyncFails checks the cache is never persisted ahead of an unsynced store.
+func TestCacheNotSavedWhenStoreSyncFails(t *testing.T) {
+	h := newHarness(t, false, false)
+	eng := New(syncFails{h.gs}, h.cache, Config{GraphPath: filepath.Join(h.graphDir, "graph")}, nil, nil, nil)
+	p := h.write(t, "a.go", "package a\n\nfunc A() {}\n")
+	if _, err := eng.SyncChanges(context.Background(), []Change{{Path: p, Op: OpUpsert}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(h.graphDir, "cache.json")); !os.IsNotExist(err) {
+		t.Fatalf("cache.json written although the store sync failed (stat err %v)", err)
+	}
+}
+
+// TestSyncDirReportsStoreSyncFailure checks the build path (SyncDir) also skips the cache save and returns the
+// store sync error rather than reporting success.
+func TestSyncDirReportsStoreSyncFailure(t *testing.T) {
+	h := newHarness(t, false, false)
+	eng := New(syncFails{h.gs}, h.cache, Config{GraphPath: filepath.Join(h.graphDir, "graph"), NoRecluster: true}, nil, nil, nil)
+	h.write(t, "a.go", "package a\n\nfunc A() {}\n")
+	if _, err := eng.SyncDir(context.Background(), h.dir, true); err == nil || !strings.Contains(err.Error(), "disk gone") {
+		t.Fatalf("SyncDir err = %v, want the store sync failure", err)
+	}
+	if _, err := os.Stat(filepath.Join(h.graphDir, "cache.json")); !os.IsNotExist(err) {
+		t.Fatalf("cache.json written although the store sync failed (stat err %v)", err)
+	}
+}
+
+// Live sync must keep an encrypted store's cluster sidecar sealed when it re-clusters.
+func TestReclusterKeepsSidecarSealed(t *testing.T) {
+	h := newHarness(t, false, false)
+	key := bytes.Repeat([]byte{9}, 32)
+	h.eng.cfg.SidecarKey = key
+	ctx := context.Background()
+	pa := h.write(t, "a.go", "package src\nfunc A() {}\n")
+	if _, err := h.eng.SyncFile(ctx, pa); err != nil {
+		t.Fatal(err)
+	}
+	nodes, _ := h.gs.AllNodes(ctx)
+	edges, _ := h.gs.AllEdges(ctx)
+	sidecar := cluster.SidecarPath(h.eng.cfg.GraphPath)
+	if err := cluster.WriteSidecar(sidecar, cluster.Full(nodes, edges, 1.0, nil), key); err != nil {
+		t.Fatal(err)
+	}
+
+	pb := h.write(t, "b.go", "package src\nfunc B() {}\n")
+	if _, err := h.eng.SyncChanges(ctx, []Change{{Path: pb, Op: OpUpsert}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cluster.LoadSidecar(sidecar, nil); !errors.Is(err, chitoncrypto.ErrSealedNoKey) {
+		t.Errorf("re-clustered sidecar is readable without the key (err %v); want it sealed", err)
+	}
+	if _, err := cluster.LoadSidecar(sidecar, key); err != nil {
+		t.Errorf("LoadSidecar with the key: %v", err)
+	}
 }

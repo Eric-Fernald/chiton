@@ -1,11 +1,13 @@
 package crypto
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hkdf"
 	"crypto/rand"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 )
 
@@ -83,4 +85,40 @@ func newGCM(key []byte) (cipher.AEAD, error) {
 		return nil, fmt.Errorf("cipher.NewGCM: %w", err)
 	}
 	return gcm, nil
+}
+
+// sealMagic prefixes Seal's output so Unseal can tell a sealed file from one written before encryption was on.
+var sealMagic = []byte("CHITON-SEALED-1\x00")
+
+// ErrSealedNoKey means a file is sealed but no keyfile was found to open it.
+var ErrSealedNoKey = errors.New("file is encrypted but no keyfile was found for this store")
+
+// Seal returns data unchanged for an empty key (a plaintext store), else sealMagic followed by EncryptBytes'
+// envelope. key is a FileKey, never the store key itself.
+func Seal(key, data []byte) ([]byte, error) {
+	if len(key) == 0 {
+		return data, nil
+	}
+	ct, err := EncryptBytes(key, data)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]byte, 0, len(sealMagic)+len(ct))
+	return append(append(out, sealMagic...), ct...), nil
+}
+
+// Unseal reverses Seal. Unsealed data passes through even with a key, so a file written before encryption stays
+// readable until its next write. Sealed data without a key is ErrSealedNoKey.
+func Unseal(key, data []byte) ([]byte, error) {
+	if !bytes.HasPrefix(data, sealMagic) {
+		return data, nil
+	}
+	if len(key) == 0 {
+		return nil, ErrSealedNoKey
+	}
+	plain, err := DecryptBytes(key, data[len(sealMagic):])
+	if err != nil {
+		return nil, fmt.Errorf("decrypt (wrong passphrase or corrupt file): %w", err)
+	}
+	return plain, nil
 }

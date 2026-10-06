@@ -13,13 +13,20 @@ import (
 
 // URI schemes for meeting-domain nodes.
 const (
-	// MeetingURIScheme prefixes a meeting's (and its turns' and decisions')
-	// source_uri, so DeleteBySourceURI can replace a whole meeting atomically.
+	// MeetingURIScheme prefixes a meeting's (and its turns') source_uri, so re-ingest replaces the whole
+	// meeting via store.ReplaceSources.
 	MeetingURIScheme = "meeting://"
+	// DecisionURIScheme prefixes decision and rationale nodes' source_uri, followed by the meeting's URI, so
+	// re-ingesting the transcript never deletes linkage results.
+	DecisionURIScheme = "decision://"
 	// PersonURIScheme prefixes a speaker/attendee identity, shared across
 	// meetings so the same person is one node graph-wide.
 	PersonURIScheme = "person://"
 )
+
+// DecisionURI returns the source_uri for the decisions and rationales linked from the meeting at meetingURI.
+// Keeping meetingURI in it lets a source_prefix on the meeting still match them.
+func DecisionURI(meetingURI string) string { return DecisionURIScheme + meetingURI }
 
 // MeetingURI returns a stable meeting:// URI from a human id (title or external
 // id). The slug keeps it readable and collision-resistant for distinct titles.
@@ -138,17 +145,34 @@ func ToGraph(t *Transcript, now time.Time) ([]model.Node, []model.Edge) {
 	return nodes, edges
 }
 
-// Upsert writes tr's ToGraph subgraph to gs and returns the node count, with noun naming it in errors
-// ("upsert <noun> nodes: ..."). Callers first delete the prior version under tr.SourceURI.
+// Upsert replaces tr's prior version under its source_uri with its ToGraph subgraph and returns the node count,
+// with noun naming it in errors. Edges other sources attached to surviving nodes (linkage, concepts) stay.
 func Upsert(ctx context.Context, gs store.GraphStore, tr *Transcript, now time.Time, noun string) (int, error) {
 	nodes, edges := ToGraph(tr, now)
-	if err := gs.UpsertNodes(ctx, nodes); err != nil {
+	uri := nodes[0].SourceURI
+	if err := rehomeDecisions(ctx, gs, uri); err != nil {
 		return 0, fmt.Errorf("upsert %s nodes: %w", noun, err)
 	}
-	if err := gs.UpsertEdges(ctx, edges); err != nil {
-		return 0, fmt.Errorf("upsert %s edges: %w", noun, err)
+	if _, err := store.ReplaceSources(ctx, gs, store.SourceUpdate{URI: uri, Nodes: nodes, Edges: edges}); err != nil {
+		return 0, fmt.Errorf("upsert %s nodes: %w", noun, err)
 	}
 	return len(nodes), nil
+}
+
+// rehomeDecisions moves decision and rationale nodes still stored under meetingURI (written before
+// DecisionURI existed) to DecisionURI(meetingURI), so replacing the meeting keeps them.
+func rehomeDecisions(ctx context.Context, gs store.GraphStore, meetingURI string) error {
+	legacy, err := store.NodesMatching(ctx, gs, store.NodeFilter{
+		Kinds:     []model.NodeKind{model.KindDecision, model.KindRationale},
+		SourceURI: meetingURI,
+	})
+	if err != nil || len(legacy) == 0 {
+		return err
+	}
+	for i := range legacy {
+		legacy[i].SourceURI = DecisionURI(meetingURI)
+	}
+	return gs.UpsertNodes(ctx, legacy)
 }
 
 // transcriptDuration returns the span from the first turn's start to the last

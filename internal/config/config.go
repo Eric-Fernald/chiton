@@ -1,6 +1,11 @@
 package config
 
 import (
+	"errors"
+	"fmt"
+	"io/fs"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +28,26 @@ func ProjectDir() string {
 	return "."
 }
 
+// StateDirName is the per-project directory for the keyfile, finding baselines and LLM-rule state.
+const StateDirName = ".chiton"
+
+// StateDir returns ProjectDir's .chiton, so a server started in any directory finds the same state as the CLI.
+// It stays the relative ".chiton" when CHITON_PROJECT_DIR is unset.
+func StateDir() string { return filepath.Join(ProjectDir(), StateDirName) }
+
+// Origin names the layer that supplied a config value.
+type Origin string
+
+const (
+	OriginDefault   Origin = "default"
+	OriginEnv       Origin = "environment"
+	OriginUserRC    Origin = "$HOME/.chitonrc"
+	OriginProjectRC Origin = "project .chitonrc"
+)
+
+// embedEndpointEnv is the variable viper maps onto embed.endpoint.
+const embedEndpointEnv = "CHITON_EMBED_ENDPOINT"
+
 // EmbedConfig configures the embedding provider used by `chiton embed`,
 // `chiton search`, and the semantic MCP tools.
 type EmbedConfig struct {
@@ -30,6 +55,8 @@ type EmbedConfig struct {
 	Model    string `mapstructure:"model"`
 	Endpoint string `mapstructure:"endpoint"`
 	Dim      int    `mapstructure:"dim"`
+	// EndpointOrigin records which layer set Endpoint, so CheckEndpoint can refuse a repository-chosen host.
+	EndpointOrigin Origin `mapstructure:"-"`
 }
 
 // SemanticConfig configures subagent-mode semantic extraction.
@@ -100,14 +127,21 @@ func LoadFrom(dir string) (*Config, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
-	// Config file is optional.
-	_ = v.ReadInConfig()
+	// The config file is optional, but one that exists and fails to read or parse must stop the command,
+	// since falling back to defaults would silently open a different store than the file names.
+	if err := v.ReadInConfig(); err != nil {
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFound) && !errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("read config %s: %w", v.ConfigFileUsed(), err)
+		}
+	}
 
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, err
 	}
 	cfg.GraphPath = resolveAgainst(dir, cfg.GraphPath)
+	cfg.Embed.EndpointOrigin = endpointOrigin(v, dir)
 	return &cfg, nil
 }
 
@@ -122,4 +156,56 @@ func resolveAgainst(dir, path string) string {
 		return path
 	}
 	return filepath.Join(abs, path)
+}
+
+// endpointOrigin reports which layer set embed.endpoint. Viper reads one .chitonrc, the project's before $HOME's.
+func endpointOrigin(v *viper.Viper, dir string) Origin {
+	switch {
+	case os.Getenv(embedEndpointEnv) != "":
+		return OriginEnv
+	case !v.InConfig("embed.endpoint"):
+		return OriginDefault
+	case sameDir(filepath.Dir(v.ConfigFileUsed()), dir):
+		return OriginProjectRC
+	default:
+		return OriginUserRC
+	}
+}
+
+// sameDir reports whether a and b are one directory. A failed stat counts as a match, so a config file that
+// cannot be placed gets the stricter project treatment.
+func sameDir(a, b string) bool {
+	ai, errA := os.Stat(a)
+	bi, errB := os.Stat(b)
+	return errA != nil || errB != nil || os.SameFile(ai, bi)
+}
+
+// CheckEndpoint refuses a non-loopback endpoint set by the project's .chitonrc, since a cloned repository must
+// not choose where chiton sends document text and queries. The environment and $HOME/.chitonrc may point anywhere.
+func (e EmbedConfig) CheckEndpoint() error {
+	switch e.EndpointOrigin {
+	case OriginEnv, OriginUserRC, OriginDefault:
+		return nil
+	}
+	if isLoopbackURL(e.Endpoint) {
+		return nil
+	}
+	return fmt.Errorf("embed.endpoint %q comes from the project's .chitonrc and is not a loopback address; "+
+		"chiton will not send document text or queries off-device because a repository asked. "+
+		"If you trust that server, set %s to it yourself", e.Endpoint, embedEndpointEnv)
+}
+
+// isLoopbackURL reports whether raw is an http(s) URL whose host is localhost or a loopback IP. Names are not
+// resolved, so a DNS answer cannot turn a remote host into an allowed one.
+func isLoopbackURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return false
+	}
+	host := u.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

@@ -173,6 +173,7 @@ func (s *LinkService) Submit(ctx context.Context, r LinkResult) (LinkReport, err
 
 	now := s.now()
 	meetingURI := meeting.SourceURI
+	decisionURI := DecisionURI(meetingURI)
 	rep := LinkReport{TaskID: r.TaskID}
 
 	var nodes []model.Node
@@ -207,7 +208,7 @@ func (s *LinkService) Submit(ctx context.Context, r LinkResult) (LinkReport, err
 			ID:         decID,
 			Kind:       model.KindDecision,
 			Label:      truncateLabel(summary),
-			SourceURI:  meetingURI,
+			SourceURI:  decisionURI,
 			Attrs:      decAttrs,
 			Provenance: prov,
 			Confidence: conf,
@@ -228,7 +229,7 @@ func (s *LinkService) Submit(ctx context.Context, r LinkResult) (LinkReport, err
 				ID:         ratID,
 				Kind:       model.KindRationale,
 				Label:      truncateLabel(rat),
-				SourceURI:  meetingURI,
+				SourceURI:  decisionURI,
 				Attrs:      map[string]any{"text": rat, "decision_id": decID},
 				Provenance: prov,
 				Confidence: conf,
@@ -370,23 +371,24 @@ func (s *LinkService) resolveSymbol(ctx context.Context, label string) string {
 	return contains
 }
 
-// deleteSupersededDecisions removes decision and rationale nodes under meetingURI not in keep. It uses
-// NodeDeleter, which drops adjacent edges too. Stores without it keep stale decisions until a rebuild.
+// deleteSupersededDecisions removes the meeting's decision and rationale nodes not in keep, under DecisionURI or
+// (written before it existed) the meeting's own URI. Stores without NodeDeleter keep stale ones until a rebuild.
 func (s *LinkService) deleteSupersededDecisions(ctx context.Context, meetingURI string, keep map[string]bool) error {
-	prior, err := store.NodesMatching(ctx, s.store, store.NodeFilter{
-		Kinds:     []model.NodeKind{model.KindDecision, model.KindRationale},
-		SourceURI: meetingURI,
-	})
-	if err != nil {
-		return fmt.Errorf("load nodes for supersede: %w", err)
-	}
 	var stale []string
-	for _, n := range prior {
-		// The filter ignores an empty SourceURI, so the check stays for a meeting without one.
-		if n.SourceURI != meetingURI || keep[n.ID] {
-			continue
+	for _, uri := range []string{DecisionURI(meetingURI), meetingURI} {
+		prior, err := store.NodesMatching(ctx, s.store, store.NodeFilter{
+			Kinds:     []model.NodeKind{model.KindDecision, model.KindRationale},
+			SourceURI: uri,
+		})
+		if err != nil {
+			return fmt.Errorf("load nodes for supersede: %w", err)
 		}
-		stale = append(stale, n.ID)
+		for _, n := range prior {
+			// The filter ignores an empty SourceURI, so the check stays for a meeting without one.
+			if n.SourceURI == uri && !keep[n.ID] {
+				stale = append(stale, n.ID)
+			}
+		}
 	}
 	if len(stale) == 0 {
 		return nil

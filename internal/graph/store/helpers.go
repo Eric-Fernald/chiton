@@ -128,3 +128,100 @@ func EmbeddingIDs(ctx context.Context, es EmbeddingStore) ([]string, error) {
 	}
 	return ids, nil
 }
+
+// EmbeddingMetas lists es's stored embeddings without their vectors, via EmbeddingMetaLister when es has it.
+func EmbeddingMetas(ctx context.Context, es EmbeddingStore) ([]EmbeddingMeta, error) {
+	if l, ok := es.(EmbeddingMetaLister); ok {
+		return l.EmbeddingMetas(ctx)
+	}
+	embs, err := es.AllEmbeddings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	metas := make([]EmbeddingMeta, len(embs))
+	for i, e := range embs {
+		metas[i] = EmbeddingMeta{NodeID: e.NodeID, Model: e.Model, Dim: len(e.Vec), TextSHA: e.TextSHA}
+	}
+	return metas, nil
+}
+
+// ReplaceSources makes each update its source's stored content via SourceReplacer, else DeleteBySourceURI plus
+// upserts (which also drops edges other sources attached). Update URIs must be distinct; returns stale-node counts.
+func ReplaceSources(ctx context.Context, gs GraphStore, updates ...SourceUpdate) ([]int, error) {
+	if r, ok := gs.(SourceReplacer); ok {
+		return r.ReplaceSources(ctx, updates)
+	}
+	deleted := make([]int, len(updates))
+	for i, u := range updates {
+		if !u.Fresh {
+			n, err := gs.DeleteBySourceURI(ctx, u.URI)
+			if err != nil {
+				return deleted, err
+			}
+			deleted[i] = n
+		}
+		if err := gs.UpsertNodes(ctx, u.Nodes); err != nil {
+			return deleted, err
+		}
+		if err := gs.UpsertEdges(ctx, u.Edges); err != nil {
+			return deleted, err
+		}
+	}
+	return deleted, nil
+}
+
+// CountByKind tallies gs's nodes and edges by kind, via KindCounter when gs has it.
+func CountByKind(ctx context.Context, gs GraphStore) (map[model.NodeKind]int, map[model.EdgeKind]int, error) {
+	if c, ok := gs.(KindCounter); ok {
+		return c.CountByKind(ctx)
+	}
+	all, err := gs.AllNodes(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	nodes := map[model.NodeKind]int{}
+	for _, n := range all {
+		nodes[n.Kind]++
+	}
+	allEdges, err := gs.AllEdges(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	edges := map[model.EdgeKind]int{}
+	for _, e := range allEdges {
+		edges[e.Kind]++
+	}
+	return nodes, edges, nil
+}
+
+// DeleteNodes removes nodes and their edges by ID via NodeDeleter when gs has it, else by each node's source_uri
+// (which also removes any other node sharing that URI). It returns how many nodes were deleted.
+func DeleteNodes(ctx context.Context, gs GraphStore, nodes []model.Node) (int, error) {
+	if len(nodes) == 0 {
+		return 0, nil
+	}
+	if d, ok := gs.(NodeDeleter); ok {
+		ids := make([]string, len(nodes))
+		for i, n := range nodes {
+			ids[i] = n.ID
+		}
+		return d.DeleteByIDs(ctx, ids)
+	}
+	total := 0
+	for _, n := range nodes {
+		k, err := gs.DeleteBySourceURI(ctx, n.SourceURI)
+		total += k
+		if err != nil {
+			return total, err
+		}
+	}
+	return total, nil
+}
+
+// Sync flushes gs's writes to stable storage when gs is a Syncer; otherwise it does nothing.
+func Sync(gs GraphStore) error {
+	if s, ok := gs.(Syncer); ok {
+		return s.Sync()
+	}
+	return nil
+}

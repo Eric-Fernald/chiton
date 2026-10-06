@@ -78,7 +78,7 @@ func (t serverTable) write(path string, entry any) (created, preexisted bool, er
 	servers["chiton"] = entry
 	doc[t.key] = servers
 
-	if err := saveDoc(path, doc, t.marshal); err != nil {
+	if err := saveDoc(path, doc, t.marshal, mcpConfigPerm); err != nil {
 		return false, false, err
 	}
 	return created, preexisted, nil
@@ -98,7 +98,7 @@ func (t serverTable) remove(path string) (changed bool, err error) {
 	if len(servers) == 0 {
 		delete(doc, t.key)
 	}
-	return true, saveOrRemove(path, doc, len(doc) == 0 || (t.shell != nil && t.shell(doc)), t.marshal)
+	return true, saveOrRemove(path, doc, len(doc) == 0 || (t.shell != nil && t.shell(doc)), t.marshal, mcpConfigPerm)
 }
 
 // has reports whether path registers a chiton server. It returns false, nil for a missing file.

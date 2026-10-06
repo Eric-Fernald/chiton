@@ -3,6 +3,8 @@ package mcpsrv
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -53,7 +55,7 @@ func TestDiffFindingsHandlerResolved(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := diffFindingsHandler(gs, dir)(ctx, toolReq(map[string]any{"baseline": "latest"}))
+	res, err := diffFindingsHandler(gs, dir, ".")(ctx, toolReq(map[string]any{"baseline": "latest"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +74,7 @@ func TestDiffFindingsHandlerResolved(t *testing.T) {
 func TestDiffFindingsHandlerNoBaseline(t *testing.T) {
 	ctx := context.Background()
 	gs := openStore(t)
-	res, err := diffFindingsHandler(gs, analyze.BaselineDir(t.TempDir()))(ctx, toolReq(map[string]any{}))
+	res, err := diffFindingsHandler(gs, analyze.BaselineDir(t.TempDir()), ".")(ctx, toolReq(map[string]any{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,11 +149,64 @@ func TestSubmitAnalysisReadOnlyStore(t *testing.T) {
 }
 
 func TestPendingAnalysesNilService(t *testing.T) {
-	res, err := pendingAnalysesHandler(nil)(context.Background(), toolReq(map[string]any{}))
+	res, err := pendingAnalysesHandler(nil, ".")(context.Background(), toolReq(map[string]any{}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(resultText(t, res), "unavailable") {
 		t.Fatalf("expected unavailable message, got %q", resultText(t, res))
+	}
+}
+
+// Task specs carry file contents, so pending_analyses must not walk outside the project root.
+func TestPendingAnalysesStaysInsideProjectRoot(t *testing.T) {
+	ctx := context.Background()
+	root, outside := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "in.go"), []byte("package in\n\nfunc F() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "secret.go"), []byte("package s\n\nconst key = \"hunter2\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := pendingAnalysesHandler(analyze.NewLLMService(openStore(t), nil, 0.5, t.TempDir()), root)
+
+	for _, p := range []string{outside, "..", filepath.Join("..", filepath.Base(outside))} {
+		res, err := h(ctx, toolReq(map[string]any{"path": p}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !res.IsError || strings.Contains(resultText(t, res), "hunter2") {
+			t.Errorf("pending_analyses(path=%q) was not refused: %s", p, resultText(t, res))
+		}
+	}
+	res, err := h(ctx, toolReq(map[string]any{"limit": 1}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError || !strings.Contains(resultText(t, res), "in.go") {
+		t.Errorf("the default path should walk the project root: %s", resultText(t, res))
+	}
+}
+
+// diff_findings must resolve refs in the project repo, not the server's working directory.
+func TestResolveBaselineRefUsesProjectRoot(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	root := t.TempDir()
+	for _, args := range [][]string{{"init", "-q"}, {"commit", "--allow-empty", "-q", "-m", "c"}} {
+		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	want := analyze.GitCommit(root, "HEAD")
+	if len(want) != 40 {
+		t.Fatalf("setup: GitCommit(HEAD) = %q", want)
+	}
+	if got := resolveBaselineRef(root, "HEAD"); got != want {
+		t.Errorf("resolveBaselineRef(root, HEAD) = %q, want the project's HEAD %q", got, want)
 	}
 }

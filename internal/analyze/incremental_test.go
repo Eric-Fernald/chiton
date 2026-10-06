@@ -45,7 +45,7 @@ func TestAnalyzeFile_AddsThenPrunes(t *testing.T) {
 	gs := openStore(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "a.go")
-	uri := "file://" + filepath.ToSlash(mustAbs(t, path))
+	uri := model.FileURI(path)
 
 	// File with a TODO marker.
 	write(t, path, "package a\n\n// TODO: fix this\nfunc A() {}\n")
@@ -72,7 +72,7 @@ func TestPruneFileURI(t *testing.T) {
 	gs := openStore(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "b.go")
-	uri := "file://" + filepath.ToSlash(mustAbs(t, path))
+	uri := model.FileURI(path)
 
 	write(t, path, "package b\n\n// FIXME later\nfunc B() {}\n")
 	az := analyze.New(gs, nil)
@@ -100,7 +100,7 @@ func TestPruneFileURI(t *testing.T) {
 func TestPruneFileURI_RemovesLLMFindings(t *testing.T) {
 	gs := openStore(t)
 	ctx := context.Background()
-	uri := "file://" + filepath.ToSlash(mustAbs(t, filepath.Join(t.TempDir(), "svc.go")))
+	uri := model.FileURI(filepath.Join(t.TempDir(), "svc.go"))
 
 	// Insert a synthetic LLM finding node attached to uri via target_uri.
 	id := "llmfinding00000000000000000000aa"
@@ -144,7 +144,7 @@ func TestAnalyzeFile_PreservesGraphScopeFindings(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "a.go")
-	uri := "file://" + filepath.ToSlash(mustAbs(t, path))
+	uri := model.FileURI(path)
 	write(t, path, "package a\n\nfunc A() {}\n")
 
 	// Synthetic deterministic GraphScope finding targeting the file, as a full
@@ -231,13 +231,4 @@ func write(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func mustAbs(t *testing.T, path string) string {
-	t.Helper()
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return abs
 }

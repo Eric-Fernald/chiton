@@ -8,6 +8,7 @@ import (
 	mcpsdk "github.com/mark3labs/mcp-go/server"
 
 	"github.com/Eric-Fernald/chiton/internal/analyze"
+	"github.com/Eric-Fernald/chiton/internal/fsutil"
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
 )
 
@@ -26,22 +27,22 @@ func diffFindingsTool() mcplib.Tool {
 	)
 }
 
-// resolveBaselineRef resolves a git ref (HEAD, branch, short SHA) to the full SHA LoadBaseline keys
-// on. It returns "" and "latest" unchanged, and returns ref itself when git can't resolve it.
-func resolveBaselineRef(ref string) string {
+// resolveBaselineRef resolves a git ref (HEAD, branch, short SHA) in the project repo to the full SHA LoadBaseline
+// keys on. It returns "" and "latest" unchanged, and returns ref itself when git can't resolve it.
+func resolveBaselineRef(projectRoot, ref string) string {
 	if ref == "" || ref == "latest" {
 		return ref
 	}
-	if sha := analyze.GitCommit(".", ref); sha != "" {
+	if sha := analyze.GitCommit(projectRoot, ref); sha != "" {
 		return sha
 	}
 	return ref
 }
 
-func diffFindingsHandler(gs store.GraphStore, baselineDir string) mcpsdk.ToolHandlerFunc {
+func diffFindingsHandler(gs store.GraphStore, baselineDir, projectRoot string) mcpsdk.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-		baselineRef := resolveBaselineRef(req.GetString("baseline", "latest"))
-		targetRef := resolveBaselineRef(req.GetString("target", ""))
+		baselineRef := resolveBaselineRef(projectRoot, req.GetString("baseline", "latest"))
+		targetRef := resolveBaselineRef(projectRoot, req.GetString("target", ""))
 
 		base, err := analyze.LoadBaseline(baselineDir, baselineRef)
 		if err != nil {
@@ -84,7 +85,7 @@ func pendingAnalysesTool() mcplib.Tool {
 	return mcplib.NewTool("pending_analyses",
 		mcplib.WithDescription("Return LLM-rule task specs for files not yet analysed by a given rule. Run each task (inspect the code in 'input' for the issue the rule describes), then call submit_analysis with the findings. This is chiton's subagent path for LLM rules: chiton calls no LLM itself."),
 		mcplib.WithString("path",
-			mcplib.Description("Directory to analyse (default '.')"),
+			mcplib.Description("Directory to analyse, relative to the project root (default '.'). Paths outside the project root are refused."),
 		),
 		mcplib.WithString("rule",
 			mcplib.Description("Limit to one LLM rule by exact ID or substring (e.g. 'llm/injection-risk')"),
@@ -99,12 +100,18 @@ func pendingAnalysesTool() mcplib.Tool {
 	)
 }
 
-func pendingAnalysesHandler(svc *analyze.LLMService) mcpsdk.ToolHandlerFunc {
+// pendingAnalysesHandler serves pending_analyses. Task specs carry file contents, so the walk is confined to
+// root: a caller-supplied path that resolves (symlinks included) outside it is refused.
+func pendingAnalysesHandler(svc *analyze.LLMService, root string) mcpsdk.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		if svc == nil {
 			return mcplib.NewToolResultText("LLM analysis unavailable — the server was started without a graph store."), nil
 		}
-		specs, err := svc.Pending(ctx, req.GetString("path", "."), req.GetString("rule", ""), req.GetInt("limit", 20))
+		dir, err := fsutil.ResolveWithin(root, req.GetString("path", "."))
+		if err != nil {
+			return mcplib.NewToolResultErrorFromErr("pending analyses refused", err), nil
+		}
+		specs, err := svc.Pending(ctx, dir, req.GetString("rule", ""), clampInt(req.GetInt("limit", 20), 1, 200))
 		return pendingResult(specs, err, "pending_analyses",
 			"no pending analyses — every file is already analysed for the selected LLM rule(s).")
 	}

@@ -4,9 +4,9 @@ package fswatch
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 
@@ -15,19 +15,22 @@ import (
 
 // Options customise which paths the watcher cares about.
 type Options struct {
-	// IgnoreDir reports whether a directory (by base name) should not be
-	// watched or descended into (e.g. ".git", "node_modules").
-	IgnoreDir func(name string) bool
+	// Skip reports whether a path under root is ignored: a directory not to watch or descend into, or a file
+	// whose events to drop. isDir says whether the path is known to be a directory.
+	Skip func(path string, isDir bool) bool
 	// Accept reports whether a file path is of interest (e.g. has a supported
 	// extractor). Events for files Accept rejects are dropped.
 	Accept func(path string) bool
 	// OnError, if set, receives non-fatal watcher errors.
 	OnError func(error)
+	// OnOverflow, if set, runs when fsnotify reports dropped events (ErrEventOverflow, e.g. a bulk checkout on
+	// Windows), so the consumer can rescan instead of silently missing changes.
+	OnOverflow func()
 	// OnDirRemove, if set, is called when a watched directory is removed or renamed away. fsnotify
 	// sends no per-child events for this, so the consumer must prune what it indexed underneath.
 	OnDirRemove func(dir string)
 	// WatchRootOnly watches only root, never its subdirectories (e.g. a huge browser profile dir). Leave
-	// IgnoreDir nil with it, since IgnoreDir also matches file-event names and would drop wanted events.
+	// Skip nil with it, since Skip also sees file-event paths and would drop wanted events.
 	WatchRootOnly bool
 }
 
@@ -97,15 +100,26 @@ func (w *Watcher) Run(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
-			if w.opts.OnError != nil && err != nil {
-				w.opts.OnError(err)
-			}
+			w.handleError(err)
 		case ev, ok := <-w.w.Events:
 			if !ok {
 				return nil
 			}
 			w.handle(ev)
 		}
+	}
+}
+
+// handleError reports a watcher error and, when fsnotify dropped events, calls OnOverflow first.
+func (w *Watcher) handleError(err error) {
+	if err == nil {
+		return
+	}
+	if errors.Is(err, fsnotify.ErrEventOverflow) && w.opts.OnOverflow != nil {
+		w.opts.OnOverflow()
+	}
+	if w.opts.OnError != nil {
+		w.opts.OnError(err)
 	}
 }
 
@@ -228,41 +242,13 @@ func (w *Watcher) removeSubtreeWatches(dir string) {
 	}
 }
 
-// ignoredDir reports whether dirPath's base name is ignored.
+// ignoredDir reports whether the directory at dirPath is skipped.
 func (w *Watcher) ignoredDir(dirPath string) bool {
-	if w.opts.IgnoreDir == nil {
-		return false
-	}
-	return w.opts.IgnoreDir(filepath.Base(dirPath))
+	return w.opts.Skip != nil && w.opts.Skip(dirPath, true)
 }
 
-// pathIgnored reports whether any component of path (relative to root) is an ignored directory name,
-// so events under e.g. chiton-out/ never trigger a self-feeding re-extraction loop.
+// pathIgnored reports whether path is skipped or lies under a skipped directory, so events under e.g.
+// chiton-out/ never trigger a self-feeding re-extraction loop.
 func (w *Watcher) pathIgnored(path string) bool {
-	if w.opts.IgnoreDir == nil {
-		return false
-	}
-	rel, err := filepath.Rel(w.root, path)
-	if err != nil {
-		rel = path
-	}
-	return slices.ContainsFunc(splitPath(rel), w.opts.IgnoreDir)
-}
-
-func splitPath(p string) []string {
-	var parts []string
-	for {
-		dir, file := filepath.Split(p)
-		if file != "" {
-			parts = append(parts, file)
-		}
-		if dir == "" {
-			break
-		}
-		p = filepath.Clean(dir)
-		if p == "." || p == string(filepath.Separator) {
-			break
-		}
-	}
-	return parts
+	return w.opts.Skip != nil && w.opts.Skip(path, false)
 }

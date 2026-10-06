@@ -4,6 +4,9 @@ package metrics
 
 import (
 	"math/rand"
+	"runtime"
+	"sync"
+	"sync/atomic"
 
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
@@ -91,13 +94,50 @@ func buildIntGraph(n int, edges []model.Edge, idToIdx map[string]int) *intGraph 
 
 // ── Brandes algorithm ─────────────────────────────────────────────────────────
 
-// betweenness runs Brandes from each source, scaling every contribution by scale, and normalizes the sums.
-// It runs in O(len(sources)·m).
+const (
+	// maxWorkers caps betweenness's goroutines, since each holds five n-length buffers.
+	maxWorkers = 8
+	// chunkSources is the fixed number of sources summed into one partial vector. Because the grouping never
+	// depends on the worker count, scores are bit-identical on every machine.
+	chunkSources = 32
+)
+
+// betweenness runs Brandes from each source on up to maxWorkers goroutines, scaling every contribution by
+// scale, and normalizes the sums. It runs in O(len(sources)·m) total work.
 func betweenness(g *intGraph, sources []int, scale float64) []float64 {
+	return betweennessWorkers(g, sources, scale, min(runtime.GOMAXPROCS(0), maxWorkers))
+}
+
+// betweennessWorkers sums fixed chunkSources-sized chunks into per-chunk partials, then adds them in chunk order,
+// so float summation order never depends on workers or scheduling (16 partials sampled, at most 157 exact).
+func betweennessWorkers(g *intGraph, sources []int, scale float64, workers int) []float64 {
+	nChunks := (len(sources) + chunkSources - 1) / chunkSources
+	workers = max(1, min(workers, nChunks))
+	partial := make([][]float64, nChunks)
+	var next atomic.Int64
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Go(func() {
+			b := newBrandes(g)
+			for {
+				c := int(next.Add(1)) - 1
+				if c >= nChunks {
+					return
+				}
+				p := make([]float64, g.n)
+				for _, s := range sources[c*chunkSources : min((c+1)*chunkSources, len(sources))] {
+					b.accumulate(s, p, scale)
+				}
+				partial[c] = p
+			}
+		})
+	}
+	wg.Wait()
 	bet := make([]float64, g.n)
-	b := newBrandes(g)
-	for _, s := range sources {
-		b.accumulate(s, bet, scale)
+	for _, p := range partial {
+		for i, v := range p {
+			bet[i] += v
+		}
 	}
 	normalize(bet, g.n)
 	return bet

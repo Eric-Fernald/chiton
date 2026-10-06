@@ -67,7 +67,13 @@ func openSyncEngine(cmd *cobra.Command, f *syncEngineFlags) (*ingest.Engine, fun
 	if err != nil {
 		return nil, nil, err
 	}
-	ch, err := loadBuildCache(cfg.GraphPath)
+	// loadStore already resolved the key, so this is a cache hit and never prompts again.
+	keys, err := resolveStoreKey(cfg.GraphPath)
+	if err != nil {
+		gs.Close()
+		return nil, nil, err
+	}
+	ch, err := loadBuildCache(cfg.GraphPath, gs.Epoch(), cmd.ErrOrStderr())
 	if err != nil {
 		gs.Close()
 		return nil, nil, err
@@ -82,16 +88,14 @@ func openSyncEngine(cmd *cobra.Command, f *syncEngineFlags) (*ingest.Engine, fun
 		}
 	}
 
-	var analyzer *analyze.Analyzer
-	if f.reanalyze {
-		analyzer = analyze.New(gs, nil)
-	}
+	analyzer := analyze.New(gs, nil) // without --analyze it only prunes deleted files' findings
 
 	eng := ingest.New(gs, ch, ingest.Config{
 		GraphPath:       cfg.GraphPath,
+		SidecarKey:      keys.fileKey,
 		Resolution:      f.resolution,
 		Reembed:         embedder != nil,
-		Reanalyze:       analyzer != nil,
+		Reanalyze:       f.reanalyze,
 		Workers:         f.workers,
 		Debounce:        time.Duration(f.debounceMS) * time.Millisecond,
 		ClusterDebounce: time.Duration(f.clusterMS) * time.Millisecond,
@@ -142,36 +146,14 @@ func syncGitCmd() *cobra.Command {
 
 With no flag, defaults to the files in HEAD (post-commit semantics).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !gitpkg.Available(root) {
-				return fmt.Errorf("sync git: %s is not a git work tree (or git is not on PATH)", root)
-			}
-			changes, skip, err := resolveGitChanges(root, since, stage, args)
-			if err != nil {
-				return err
-			}
-			out := cmd.OutOrStdout()
-			if skip {
-				fmt.Fprintln(out, "sync git: nothing to do (file checkout, not a branch switch)")
+			err := runSyncGit(cmd, &f, root, since, stage, args)
+			if err != nil && stage != "" {
+				// From a post-commit/post-checkout hook, git has already finished (and post-checkout's exit
+				// status becomes checkout's), so a busy or locked store only warns.
+				fmt.Fprintf(cmd.ErrOrStderr(), "chiton sync git (%s): warning: %v; graph not updated\n", stage, err)
 				return nil
 			}
-			if len(changes) == 0 {
-				fmt.Fprintln(out, "sync git: no changed files")
-				return nil
-			}
-
-			eng, closeStore, err := openSyncEngine(cmd, &f)
-			if err != nil {
-				return err
-			}
-			defer closeStore()
-
-			sum, err := eng.SyncChanges(cmd.Context(), ingest.GitChanges(changes))
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(out, "sync git: %d upserted, %d deleted, %d skipped, %d re-embedded%s\n",
-				sum.Upserted, sum.Deleted, sum.Skipped, sum.Reembedded, reclusterNote(sum.Reclustered))
-			return nil
+			return err
 		},
 	}
 	f.bind(cmd, false)
@@ -179,6 +161,40 @@ With no flag, defaults to the files in HEAD (post-commit semantics).`,
 	cmd.Flags().StringVar(&since, "since", "", "Re-index files changed since this git ref")
 	cmd.Flags().StringVar(&stage, "stage", "", "Hook stage: post-commit | post-checkout")
 	return cmd
+}
+
+// runSyncGit re-indexes the files git changed, as `chiton sync git` describes.
+func runSyncGit(cmd *cobra.Command, f *syncEngineFlags, root, since, stage string, args []string) error {
+	if !gitpkg.Available(root) {
+		return fmt.Errorf("sync git: %s is not a git work tree (or git is not on PATH)", root)
+	}
+	changes, skip, err := resolveGitChanges(root, since, stage, args)
+	if err != nil {
+		return err
+	}
+	out := cmd.OutOrStdout()
+	if skip {
+		fmt.Fprintln(out, "sync git: nothing to do (file checkout, not a branch switch)")
+		return nil
+	}
+	if len(changes) == 0 {
+		fmt.Fprintln(out, "sync git: no changed files")
+		return nil
+	}
+
+	eng, closeStore, err := openSyncEngine(cmd, f)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
+
+	sum, err := eng.SyncChanges(cmd.Context(), ingest.GitChanges(changes))
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "sync git: %d upserted, %d deleted, %d skipped, %d re-embedded%s\n",
+		sum.Upserted, sum.Deleted, sum.Skipped, sum.Reembedded, reclusterNote(sum.Reclustered))
+	return nil
 }
 
 // resolveGitChanges turns the stage/since/args into a change set. skip is true
@@ -236,8 +252,8 @@ func syncOnceCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "sync once: %d upserted, %d deleted, %d skipped, %d re-embedded%s\n",
-				sum.Upserted, sum.Deleted, sum.Skipped, sum.Reembedded, reclusterNote(sum.Reclustered))
+			fmt.Fprintf(cmd.OutOrStdout(), "sync once: %d upserted, %d deleted, %d skipped, %d re-embedded%s%s\n",
+				sum.Upserted, sum.Deleted, sum.Skipped, sum.Reembedded, unreadableNote(sum.Unreadable), reclusterNote(sum.Reclustered))
 			return nil
 		},
 	}
@@ -251,4 +267,12 @@ func reclusterNote(reclustered bool) string {
 		return " (re-clustered)"
 	}
 	return ""
+}
+
+// unreadableNote reports walk entries skipped as unreadable, or "" when there were none.
+func unreadableNote(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf(", %d unreadable", n)
 }

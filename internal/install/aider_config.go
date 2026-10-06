@@ -23,7 +23,7 @@ func AddAiderRead(path, file string) (created, preexisted bool, err error) {
 		reads = append(reads, file)
 	}
 	doc["read"] = reads
-	if err := saveDoc(path, doc, yaml.Marshal); err != nil {
+	if err := saveDoc(path, doc, yaml.Marshal, 0o644); err != nil {
 		return false, false, err
 	}
 	return created, preexisted, nil
@@ -47,7 +47,7 @@ func RemoveAiderRead(path, file string) (changed bool, err error) {
 	} else {
 		doc["read"] = reads
 	}
-	return true, saveOrRemove(path, doc, len(doc) == 0, yaml.Marshal)
+	return true, saveOrRemove(path, doc, len(doc) == 0, yaml.Marshal, 0o644)
 }
 
 // AiderConfHasRead reports whether the Aider config at path lists file in its `read:` setting.

@@ -2,6 +2,7 @@ package vector
 
 import (
 	"fmt"
+	"maps"
 	"math/rand"
 	"slices"
 	"sort"
@@ -25,8 +26,8 @@ func TestFlatSearchTopKMatchesFullSort(t *testing.T) {
 
 	var want []Result
 	q := normalized(query)
-	for i, v := range f.vecs {
-		want = append(want, Result{ID: f.ids[i], Score: dot(q, v)})
+	for i := range f.ids {
+		want = append(want, Result{ID: f.ids[i], Score: dot(q, f.row(i))})
 	}
 	sort.Slice(want, func(i, j int) bool {
 		if want[i].Score != want[j].Score {
@@ -140,10 +141,8 @@ func TestNewFlatSizedMatchesNewFlat(t *testing.T) {
 	if !slices.Equal(plain.ids, sized.ids) || plain.Len() != sized.Len() {
 		t.Fatalf("ids differ: %v vs %v", plain.ids, sized.ids)
 	}
-	for i := range plain.vecs {
-		if !slices.Equal(plain.vecs[i], sized.vecs[i]) || plain.pos[plain.ids[i]] != sized.pos[sized.ids[i]] {
-			t.Fatalf("vector %d differs", i)
-		}
+	if !slices.Equal(plain.vecs, sized.vecs) || !maps.Equal(plain.pos, sized.pos) {
+		t.Fatal("slabs or positions differ")
 	}
 	q := []float32{0.3, -0.2, 0.9}
 	if got, want := sized.Search(q, 10), plain.Search(q, 10); !slices.Equal(got, want) {
@@ -170,5 +169,50 @@ func TestFlatEdgeCases(t *testing.T) {
 	// Dimension mismatch is skipped, not panicked.
 	if got := f.Search([]float32{1, 0, 0}, 3); got != nil {
 		t.Fatal("mismatched-dim query should yield no results")
+	}
+}
+
+// TestFlatMatchesReferenceAfterMutations checks the slab against a map of normalized vectors scored the same way,
+// through adds, replacements and swap-with-last deletes.
+func TestFlatMatchesReferenceAfterMutations(t *testing.T) {
+	rng := rand.New(rand.NewSource(3))
+	f := NewFlatSized(10)
+	ref := map[string][]float32{}
+	for i := range 500 {
+		id := fmt.Sprintf("n%d", rng.Intn(120))
+		if i%7 == 0 {
+			f.Delete([]string{id})
+			delete(ref, id)
+			continue
+		}
+		v := []float32{rng.Float32() - 0.5, rng.Float32() - 0.5, rng.Float32() - 0.5, rng.Float32() - 0.5}
+		f.Add([]Item{{ID: id, Vec: v}})
+		ref[id] = normalized(v)
+	}
+	if f.Len() != len(ref) {
+		t.Fatalf("Len = %d, want %d", f.Len(), len(ref))
+	}
+	q := []float32{0.2, -0.7, 0.1, 0.4}
+	nq := normalized(q)
+	var want []Result
+	for id, v := range ref {
+		want = append(want, Result{ID: id, Score: dot(nq, v)})
+	}
+	slices.SortFunc(want, rankOrder)
+	for _, k := range []int{1, 5, len(want), len(want) + 3} {
+		if got := f.Search(q, k); !slices.Equal(got, want[:min(k, len(want))]) {
+			t.Fatalf("k=%d: got %v\nwant %v", k, got, want[:min(k, len(want))])
+		}
+	}
+}
+
+func TestFlatSkipsMismatchedDimOnAdd(t *testing.T) {
+	f := NewFlat()
+	f.Add([]Item{{ID: "a", Vec: []float32{1, 0}}, {ID: "b", Vec: []float32{1, 0, 0}}})
+	if f.Len() != 1 {
+		t.Fatalf("Len = %d, want 1 (the 3-dim vector skipped)", f.Len())
+	}
+	if got := f.Search([]float32{1, 0, 0}, 3); got != nil {
+		t.Fatalf("mismatched-dim query = %v, want nil", got)
 	}
 }

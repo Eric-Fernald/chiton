@@ -2,6 +2,7 @@
 package mcpsrv
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	mcpsdk "github.com/mark3labs/mcp-go/server"
 
 	"github.com/Eric-Fernald/chiton/internal/analyze"
+	"github.com/Eric-Fernald/chiton/internal/config"
 	"github.com/Eric-Fernald/chiton/internal/extract/meeting"
 	"github.com/Eric-Fernald/chiton/internal/extract/subagent"
 	"github.com/Eric-Fernald/chiton/internal/graph/cluster"
@@ -38,29 +40,35 @@ type Deps struct {
 	// BaselineDir is where diff_findings reads saved baselines from
 	// (default: .chiton/baselines).
 	BaselineDir string
+	// ProjectRoot confines pending_analyses' path argument and is where diff_findings resolves git refs
+	// (default "."; serve passes config.ProjectDir()).
+	ProjectRoot string
+	// IncludePII turns off redaction of people's names and addresses in the graph tools (serve --include-pii).
+	IncludePII bool
 }
 
 // New creates an MCPServer exposing chiton's tools over gs. overlay (nil before any cluster pass)
 // and each Deps service are optional. A tool missing its service replies that it is unavailable.
 func New(gs store.GraphStore, overlay *cluster.Results, deps Deps) *mcpsdk.MCPServer {
 	s := mcpsdk.NewMCPServer("chiton", "0.1.0")
-	s.AddTool(getNodeTool(), getNodeHandler(gs))
-	s.AddTool(neighborhoodTool(), neighborhoodHandler(gs))
-	s.AddTool(queryTool(), queryHandler(gs))
-	s.AddTool(shortestPathTool(), shortestPathHandler(gs))
-	s.AddTool(godNodesTool(), godNodesHandler(overlay))
-	s.AddTool(graphSummaryTool(), graphSummaryHandler(gs, overlay))
+	r := redactor{includePII: deps.IncludePII}
+	s.AddTool(getNodeTool(), getNodeHandler(gs, r))
+	s.AddTool(neighborhoodTool(), neighborhoodHandler(gs, r))
+	s.AddTool(queryTool(), queryHandler(gs, r))
+	s.AddTool(shortestPathTool(), shortestPathHandler(gs, r))
+	s.AddTool(godNodesTool(), godNodesHandler(gs, overlay, r))
+	s.AddTool(graphSummaryTool(), graphSummaryHandler(gs, overlay, r))
 	s.AddTool(listFindingsTool(), listFindingsHandler(gs))
 	s.AddTool(explainFindingTool(), explainFindingHandler(gs))
-	s.AddTool(semanticSearchTool(), semanticSearchHandler(deps.Retriever))
+	s.AddTool(semanticSearchTool(), semanticSearchHandler(deps.Retriever, r))
 	s.AddTool(pendingExtractionsTool(), pendingExtractionsHandler(deps.Extractor))
 	s.AddTool(submitExtractionTool(), submitExtractionHandler(deps.Extractor))
 	baselineDir := deps.BaselineDir
 	if baselineDir == "" {
-		baselineDir = analyze.BaselineDir(".chiton")
+		baselineDir = analyze.BaselineDir(config.StateDir())
 	}
-	s.AddTool(diffFindingsTool(), diffFindingsHandler(gs, baselineDir))
-	s.AddTool(pendingAnalysesTool(), pendingAnalysesHandler(deps.LLM))
+	s.AddTool(diffFindingsTool(), diffFindingsHandler(gs, baselineDir, cmp.Or(deps.ProjectRoot, ".")))
+	s.AddTool(pendingAnalysesTool(), pendingAnalysesHandler(deps.LLM, cmp.Or(deps.ProjectRoot, ".")))
 	s.AddTool(submitAnalysisTool(), submitAnalysisHandler(deps.LLM))
 	// Phase 4: meetings & external sources.
 	s.AddTool(searchMeetingsTool(), searchMeetingsHandler(gs))
@@ -110,6 +118,18 @@ func neighborhoodTool() mcplib.Tool {
 		mcplib.WithString("source_prefix",
 			mcplib.Description("Optional filter: only return neighbor nodes whose source_uri contains this substring (e.g. \"Go_Projects\" to scope to one corpus)"),
 		),
+		mcplib.WithInteger("max_nodes",
+			mcplib.DefaultNumber(100),
+			mcplib.Description("Max nodes to return, nearest hops first (default 100, max 500). The result sets truncated when more were reachable."),
+			mcplib.Min(1),
+			mcplib.Max(500),
+		),
+		mcplib.WithInteger("max_tokens",
+			mcplib.DefaultNumber(4000),
+			mcplib.Description("Approximate token budget for the returned nodes and edges (default 4000, max 16000)."),
+			mcplib.Min(500),
+			mcplib.Max(16000),
+		),
 		mcplib.WithReadOnlyHintAnnotation(true),
 	)
 }
@@ -157,14 +177,14 @@ func clampInt(v, lo, hi int) int {
 	return min(max(v, lo), hi)
 }
 
-// lookupNode resolves label (plus an optional file hint) to one node. A non-nil result is the
-// tool response to return instead: a search failure or a no-match message.
-func lookupNode(ctx context.Context, gs store.GraphStore, label, file string) (model.Node, *mcplib.CallToolResult) {
+// lookupNode resolves label (plus an optional file hint) to one node. A non-nil result is the tool response
+// to return instead: a search failure, or a no-match message, also given for a node whose label names a person.
+func lookupNode(ctx context.Context, gs store.GraphStore, r redactor, label, file string) (model.Node, *mcplib.CallToolResult) {
 	node, found, err := store.FindNode(ctx, gs, label, file)
 	if err != nil {
 		return model.Node{}, mcplib.NewToolResultErrorFromErr("search failed", err)
 	}
-	if !found {
+	if !found || r.hidden(node) {
 		return model.Node{}, mcplib.NewToolResultText(fmt.Sprintf("no node found matching %q", label))
 	}
 	return node, nil
@@ -175,61 +195,120 @@ func parseEdgeKinds(req mcplib.CallToolRequest) []model.EdgeKind {
 	return model.ParseEdgeKinds(req.GetStringSlice("edge_kinds", nil))
 }
 
-func getNodeHandler(gs store.GraphStore) mcpsdk.ToolHandlerFunc {
+func getNodeHandler(gs store.GraphStore, r redactor) mcpsdk.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		label, err := req.RequireString("label")
 		if err != nil {
 			return mcplib.NewToolResultError(err.Error()), nil
 		}
-		node, errRes := lookupNode(ctx, gs, label, req.GetString("file", ""))
+		node, errRes := lookupNode(ctx, gs, r, label, req.GetString("file", ""))
 		if errRes != nil {
 			return errRes, nil
 		}
-		return jsonResult(toLeanNode(node))
+		return jsonResult(r.node(node))
 	}
 }
 
-func neighborhoodHandler(gs store.GraphStore) mcpsdk.ToolHandlerFunc {
+func neighborhoodHandler(gs store.GraphStore, r redactor) mcpsdk.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		label, err := req.RequireString("label")
 		if err != nil {
 			return mcplib.NewToolResultError(err.Error()), nil
 		}
-		prefix := req.GetString("source_prefix", "")
 		depth := clampInt(req.GetInt("depth", 2), 1, 5)
+		maxNodes := clampInt(req.GetInt("max_nodes", 100), 1, 500)
+		maxTokens := clampInt(req.GetInt("max_tokens", 4000), 500, 16000)
 
-		seed, errRes := lookupNode(ctx, gs, label, req.GetString("file", ""))
+		seed, errRes := lookupNode(ctx, gs, r, label, req.GetString("file", ""))
 		if errRes != nil {
 			return errRes, nil
 		}
-
 		sub, err := gs.Neighbors(ctx, seed.ID, depth, parseEdgeKinds(req))
 		if err != nil {
 			return mcplib.NewToolResultErrorFromErr("neighbors failed", err), nil
 		}
-
-		labels := nodeLabels(sub.Nodes)
-		labels[seed.ID] = seed.Label
-		leanNodes, leanEdges := filterByPrefix(seed.Label,
-			toLeanNodes(sub.Nodes), toLeanEdges(sub.Edges, labels), prefix)
+		reachable := keepPrefix(seed.ID, sub.Nodes, req.GetString("source_prefix", ""), r)
+		nodes, edges := capNeighborhood(reachable, sub.Edges, maxNodes, maxTokens, r)
 
 		type result struct {
-			Seed    leanNode   `json:"seed"`
-			Nodes   []leanNode `json:"nodes"`
-			Edges   []leanEdge `json:"edges"`
-			Summary string     `json:"summary"`
+			Seed      leanNode   `json:"seed"`
+			Nodes     []leanNode `json:"nodes"`
+			Edges     []leanEdge `json:"edges"`
+			Truncated bool       `json:"truncated,omitempty"`
+			Summary   string     `json:"summary"`
 		}
-		return jsonResult(result{
-			Seed:  toLeanNode(seed),
-			Nodes: leanNodes,
-			Edges: leanEdges,
-			Summary: fmt.Sprintf("%d nodes, %d edges within depth %d of %q",
-				len(leanNodes), len(leanEdges), depth, seed.Label),
-		})
+		res := result{
+			Seed:      r.node(seed),
+			Nodes:     nodes,
+			Edges:     edges,
+			Truncated: len(nodes) < len(reachable),
+			Summary:   fmt.Sprintf("%d nodes, %d edges within depth %d of %q", len(nodes), len(edges), depth, r.label(seed)),
+		}
+		if res.Truncated {
+			res.Summary += fmt.Sprintf(" (truncated from %d reachable nodes; raise max_nodes/max_tokens or narrow edge_kinds/source_prefix)", len(reachable))
+		}
+		return jsonResult(res)
 	}
 }
 
-func queryHandler(gs store.GraphStore) mcpsdk.ToolHandlerFunc {
+// keepPrefix keeps the seed and the nodes whose redacted source_uri contains prefix (case-insensitive).
+func keepPrefix(seedID string, nodes []model.Node, prefix string, r redactor) []model.Node {
+	if prefix == "" {
+		return nodes
+	}
+	lower := strings.ToLower(prefix)
+	var out []model.Node
+	for _, n := range nodes {
+		if n.ID == seedID || strings.Contains(strings.ToLower(r.sourceURI(n)), lower) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// capNeighborhood keeps the longest BFS-order prefix of nodes within maxNodes and maxTokens, pricing each node
+// as its lean JSON plus its edges back to earlier nodes, and returns that prefix with the edges among it.
+func capNeighborhood(nodes []model.Node, edges []model.Edge, maxNodes, maxTokens int, r redactor) ([]leanNode, []leanEdge) {
+	pos := make(map[string]int, len(nodes))
+	for i, n := range nodes {
+		pos[n.ID] = i
+	}
+	labels := r.labels(nodes)
+	lean := r.nodes(nodes)
+	cost := make([]int, len(nodes))
+	for i := range lean {
+		cost[i] = jsonLen(lean[i])
+	}
+	var within []model.Edge
+	for _, e := range edges {
+		i, okSrc := pos[e.Src]
+		j, okDst := pos[e.Dst]
+		if okSrc && okDst {
+			within = append(within, e)
+			cost[max(i, j)] += jsonLen(toLeanEdge(e, labels))
+		}
+	}
+	idx := make([]int, min(len(nodes), maxNodes))
+	for i := range idx {
+		idx[i] = i
+	}
+	kept := len(retrieve.TrimToBudget(idx, maxTokens, func(i int) int { return cost[i] }))
+	keptEdges := []leanEdge{}
+	for _, e := range within {
+		if pos[e.Src] < kept && pos[e.Dst] < kept {
+			keptEdges = append(keptEdges, toLeanEdge(e, labels))
+		}
+	}
+	return lean[:kept], keptEdges
+}
+
+// jsonLen is v's compact JSON size, the unit token budgets are priced in (~4 bytes per token).
+func jsonLen(v any) int {
+	b, _ := json.Marshal(v)
+	return len(b)
+}
+
+func queryHandler(gs store.GraphStore, r redactor) mcpsdk.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		query, err := req.RequireString("query")
 		if err != nil {
@@ -241,24 +320,25 @@ func queryHandler(gs store.GraphStore) mcpsdk.ToolHandlerFunc {
 		if err != nil {
 			return mcplib.NewToolResultErrorFromErr("search failed", err), nil
 		}
-		if len(nodes) == 0 {
-			return mcplib.NewToolResultText(fmt.Sprintf("no nodes found matching %q", query)), nil
-		}
 		lower := strings.ToLower(prefix)
 		lean := make([]leanNode, 0, len(nodes))
 		for _, n := range nodes {
-			if prefix == "" || strings.Contains(strings.ToLower(n.SourceURI), lower) {
-				lean = append(lean, toLeanNode(n))
+			if !r.hidden(n) && (prefix == "" || strings.Contains(strings.ToLower(n.SourceURI), lower)) {
+				lean = append(lean, r.node(n))
 			}
 		}
-		if len(lean) == 0 {
+		switch {
+		case len(lean) > 0:
+			return jsonResult(lean)
+		case prefix != "":
 			return mcplib.NewToolResultText(fmt.Sprintf("no nodes found matching %q with source_prefix %q", query, prefix)), nil
+		default:
+			return mcplib.NewToolResultText(fmt.Sprintf("no nodes found matching %q", query)), nil
 		}
-		return jsonResult(lean)
 	}
 }
 
-func shortestPathHandler(gs store.GraphStore) mcpsdk.ToolHandlerFunc {
+func shortestPathHandler(gs store.GraphStore, r redactor) mcpsdk.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		fromLabel, err := req.RequireString("from")
 		if err != nil {
@@ -273,7 +353,7 @@ func shortestPathHandler(gs store.GraphStore) mcpsdk.ToolHandlerFunc {
 		if err != nil {
 			return mcplib.NewToolResultErrorFromErr("search 'from' failed", err), nil
 		}
-		if len(fromNodes) == 0 {
+		if len(fromNodes) == 0 || r.hidden(fromNodes[0]) {
 			return mcplib.NewToolResultText(fmt.Sprintf("no node found matching 'from' %q", fromLabel)), nil
 		}
 
@@ -281,7 +361,7 @@ func shortestPathHandler(gs store.GraphStore) mcpsdk.ToolHandlerFunc {
 		if err != nil {
 			return mcplib.NewToolResultErrorFromErr("search 'to' failed", err), nil
 		}
-		if len(toNodes) == 0 {
+		if len(toNodes) == 0 || r.hidden(toNodes[0]) {
 			return mcplib.NewToolResultText(fmt.Sprintf("no node found matching 'to' %q", toLabel)), nil
 		}
 
@@ -299,8 +379,8 @@ func shortestPathHandler(gs store.GraphStore) mcpsdk.ToolHandlerFunc {
 			Edges []leanEdge `json:"edges"`
 		}
 		return jsonResult(leanPath{
-			Nodes: toLeanNodes(path.Nodes),
-			Edges: toLeanEdges(path.Edges, nodeLabels(path.Nodes)),
+			Nodes: r.nodes(path.Nodes),
+			Edges: toLeanEdges(path.Edges, r.labels(path.Nodes)),
 		})
 	}
 }
@@ -324,27 +404,6 @@ type leanEdge struct {
 	Attrs map[string]any `json:"attrs,omitempty"`
 }
 
-func toLeanNode(n model.Node) leanNode {
-	return leanNode{
-		Kind:       n.Kind,
-		Label:      n.Label,
-		SourceURI:  n.SourceURI,
-		Span:       n.Span,
-		Attrs:      n.Attrs,
-		Provenance: n.Provenance,
-		Confidence: n.Confidence,
-	}
-}
-
-// toLeanNodes projects nodes to their lean shape. The result is never nil, so JSON renders [], not null.
-func toLeanNodes(nodes []model.Node) []leanNode {
-	out := make([]leanNode, len(nodes))
-	for i, n := range nodes {
-		out[i] = toLeanNode(n)
-	}
-	return out
-}
-
 // toLeanEdges projects edges to their lean shape, naming endpoints by label. The result is never nil.
 func toLeanEdges(edges []model.Edge, labels map[string]string) []leanEdge {
 	out := make([]leanEdge, len(edges))
@@ -352,38 +411,6 @@ func toLeanEdges(edges []model.Edge, labels map[string]string) []leanEdge {
 		out[i] = toLeanEdge(e, labels)
 	}
 	return out
-}
-
-func nodeLabels(nodes []model.Node) map[string]string {
-	m := make(map[string]string, len(nodes))
-	for _, n := range nodes {
-		m[n.ID] = n.Label
-	}
-	return m
-}
-
-// filterByPrefix keeps neighbor nodes whose source_uri contains prefix and edges whose endpoints
-// both survive. The seed always survives, so its edges are kept.
-func filterByPrefix(seedLabel string, nodes []leanNode, edges []leanEdge, prefix string) ([]leanNode, []leanEdge) {
-	if prefix == "" {
-		return nodes, edges
-	}
-	lower := strings.ToLower(prefix)
-	kept := map[string]bool{seedLabel: true}
-	var filteredNodes []leanNode
-	for _, n := range nodes {
-		if strings.Contains(strings.ToLower(n.SourceURI), lower) {
-			filteredNodes = append(filteredNodes, n)
-			kept[n.Label] = true
-		}
-	}
-	var filteredEdges []leanEdge
-	for _, e := range edges {
-		if kept[e.From] && kept[e.To] {
-			filteredEdges = append(filteredEdges, e)
-		}
-	}
-	return filteredNodes, filteredEdges
 }
 
 func toLeanEdge(e model.Edge, labels map[string]string) leanEdge {
@@ -411,13 +438,13 @@ func godNodesTool() mcplib.Tool {
 	)
 }
 
-func godNodesHandler(overlay *cluster.Results) mcpsdk.ToolHandlerFunc {
-	return func(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func godNodesHandler(gs store.GraphStore, overlay *cluster.Results, r redactor) mcpsdk.ToolHandlerFunc {
+	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		if overlay == nil {
 			return mcplib.NewToolResultText("no cluster data available — run 'chiton cluster' then restart chiton serve"), nil
 		}
 
-		limit := req.GetInt("limit", 10)
+		limit := clampInt(req.GetInt("limit", 10), 1, 100)
 		filterComm := req.GetInt("community_id", -1)
 
 		type godNode struct {
@@ -427,22 +454,22 @@ func godNodesHandler(overlay *cluster.Results) mcpsdk.ToolHandlerFunc {
 			Degree      int     `json:"degree"`
 		}
 
-		var candidates []cluster.NodeResult
-		for _, nr := range overlay.Nodes {
-			if filterComm >= 0 && nr.CommunityID != filterComm {
-				continue
-			}
-			candidates = append(candidates, nr)
+		ids := rankedIDs(overlay, func(_ string, nr cluster.NodeResult) bool {
+			return filterComm < 0 || nr.CommunityID == filterComm
+		})
+		if len(ids) > limit {
+			ids = ids[:limit]
 		}
-		sortByBetweenness(candidates)
-		if limit > 0 && len(candidates) > limit {
-			candidates = candidates[:limit]
+		stored, err := r.loadLabels(ctx, gs, ids)
+		if err != nil {
+			return mcplib.NewToolResultErrorFromErr("failed to load nodes", err), nil
 		}
 
-		out := make([]godNode, len(candidates))
-		for i, nr := range candidates {
+		out := make([]godNode, len(ids))
+		for i, id := range ids {
+			nr := overlay.Nodes[id]
 			out[i] = godNode{
-				Label:       nr.Label,
+				Label:       r.overlayLabel(id, nr, stored),
 				Community:   nr.CommunityID,
 				Betweenness: nr.Betweenness,
 				Degree:      nr.Degree,
@@ -468,51 +495,69 @@ func graphSummaryTool() mcplib.Tool {
 	)
 }
 
-func graphSummaryHandler(gs store.GraphStore, overlay *cluster.Results) mcpsdk.ToolHandlerFunc {
+// scopedKindCounts counts nodes and edges by kind among the nodes whose redacted source URI contains scope
+// (case-insensitive), so a person:// scope can't probe for a name. It also returns the in-scope node IDs.
+func scopedKindCounts(ctx context.Context, gs store.GraphStore, r redactor, scope string) (map[model.NodeKind]int, map[model.EdgeKind]int, map[string]bool, error) {
+	allNodes, err := gs.AllNodes(ctx)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("load nodes: %w", err)
+	}
+	allEdges, err := gs.AllEdges(ctx)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("load edges: %w", err)
+	}
+	scopeLower := strings.ToLower(scope)
+	inScope := make(map[string]bool)
+	byNode := make(map[model.NodeKind]int)
+	for _, n := range allNodes {
+		if strings.Contains(strings.ToLower(r.sourceURI(n)), scopeLower) {
+			inScope[n.ID] = true
+			byNode[n.Kind]++
+		}
+	}
+	byEdge := make(map[model.EdgeKind]int)
+	for _, e := range allEdges {
+		if inScope[e.Src] && inScope[e.Dst] {
+			byEdge[e.Kind]++
+		}
+	}
+	return byNode, byEdge, inScope, nil
+}
+
+// sumCounts totals a by-kind count map.
+func sumCounts[K comparable](m map[K]int) int {
+	total := 0
+	for _, c := range m {
+		total += c
+	}
+	return total
+}
+
+func graphSummaryHandler(gs store.GraphStore, overlay *cluster.Results, r redactor) mcpsdk.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		scope := req.GetString("scope", "")
 		maxTokens := req.GetInt("max_tokens", 4000)
 
-		allNodes, err := gs.AllNodes(ctx)
+		var (
+			byNodeKind map[model.NodeKind]int
+			byEdgeKind map[model.EdgeKind]int
+			inScope    map[string]bool // built only when scoped, since every node counts when unscoped
+			err        error
+		)
+		if scope == "" {
+			byNodeKind, byEdgeKind, err = store.CountByKind(ctx, gs)
+		} else {
+			byNodeKind, byEdgeKind, inScope, err = scopedKindCounts(ctx, gs, r, scope)
+		}
 		if err != nil {
-			return mcplib.NewToolResultErrorFromErr("failed to load nodes", err), nil
-		}
-		allEdges, err := gs.AllEdges(ctx)
-		if err != nil {
-			return mcplib.NewToolResultErrorFromErr("failed to load edges", err), nil
-		}
-
-		scopeLower := strings.ToLower(scope)
-		var inScope map[string]bool // built only when scoped, since every node counts when unscoped
-		if scope != "" {
-			inScope = make(map[string]bool)
-		}
-		nodeCount := 0
-		byNodeKind := make(map[model.NodeKind]int)
-		for _, n := range allNodes {
-			if scope != "" {
-				if !strings.Contains(strings.ToLower(n.SourceURI), scopeLower) {
-					continue
-				}
-				inScope[n.ID] = true
-			}
-			nodeCount++
-			byNodeKind[n.Kind]++
-		}
-
-		edgeCount := 0
-		byEdgeKind := make(map[model.EdgeKind]int)
-		for _, e := range allEdges {
-			if scope == "" || (inScope[e.Src] && inScope[e.Dst]) {
-				byEdgeKind[e.Kind]++
-				edgeCount++
-			}
+			return mcplib.NewToolResultErrorFromErr("graph summary failed", err), nil
 		}
 
 		type commSummary struct {
 			ID        int      `json:"id"`
 			NodeCount int      `json:"node_count"`
 			TopNodes  []string `json:"top_nodes"`
+			topIDs    []string // TopNodes' node IDs, labelled once the trimmed set is known
 		}
 		type godNodeSummary struct {
 			Label       string  `json:"label"`
@@ -525,18 +570,13 @@ func graphSummaryHandler(gs store.GraphStore, overlay *cluster.Results) mcpsdk.T
 		var godNodes []godNodeSummary
 
 		if overlay != nil {
-			var candidates []cluster.NodeResult
-			for id, nr := range overlay.Nodes {
-				if scope != "" && !inScope[id] {
-					continue
-				}
-				candidates = append(candidates, nr)
-			}
-			// Sort first so each community's top_nodes are its highest-betweenness members.
-			sortByBetweenness(candidates)
+			// Rank first so each community's top_nodes are its highest-betweenness members.
+			ids := rankedIDs(overlay, func(id string, _ cluster.NodeResult) bool { return scope == "" || inScope[id] })
+			godIDs := ids[:min(10, len(ids))]
 
 			commIdx := make(map[int]int) // maps a community ID to its index in communities
-			for _, nr := range candidates {
+			for _, id := range ids {
+				nr := overlay.Nodes[id]
 				i, ok := commIdx[nr.CommunityID]
 				if !ok {
 					i = len(communities)
@@ -545,29 +585,45 @@ func graphSummaryHandler(gs store.GraphStore, overlay *cluster.Results) mcpsdk.T
 				}
 				c := &communities[i]
 				c.NodeCount++
-				if len(c.TopNodes) < 5 {
-					c.TopNodes = append(c.TopNodes, nr.Label)
+				if len(c.topIDs) < 5 {
+					c.topIDs = append(c.topIDs, id)
 				}
 			}
 			slices.SortFunc(communities, func(a, b commSummary) int {
 				return cmp.Or(cmp.Compare(b.NodeCount, a.NodeCount), cmp.Compare(a.ID, b.ID))
 			})
 
-			for _, nr := range candidates[:min(10, len(candidates))] {
+			// Trim communities to stay within token budget (~4 chars/token,
+			// ~100 chars per community entry, 300 chars fixed overhead).
+			charBudget := maxTokens*4 - 300 - len(godIDs)*80
+			maxComms := max(charBudget/100, 0)
+			if len(communities) > maxComms {
+				communities = communities[:maxComms]
+			}
+
+			// Label only the nodes shown, from their stored (redacted) nodes.
+			shown := slices.Clone(godIDs)
+			for _, c := range communities {
+				shown = append(shown, c.topIDs...)
+			}
+			stored, err := r.loadLabels(ctx, gs, shown)
+			if err != nil {
+				return mcplib.NewToolResultErrorFromErr("failed to load nodes", err), nil
+			}
+			for i := range communities {
+				c := &communities[i]
+				for _, id := range c.topIDs {
+					c.TopNodes = append(c.TopNodes, r.overlayLabel(id, overlay.Nodes[id], stored))
+				}
+			}
+			for _, id := range godIDs {
+				nr := overlay.Nodes[id]
 				godNodes = append(godNodes, godNodeSummary{
-					Label:       nr.Label,
+					Label:       r.overlayLabel(id, nr, stored),
 					CommunityID: nr.CommunityID,
 					Betweenness: nr.Betweenness,
 					Degree:      nr.Degree,
 				})
-			}
-
-			// Trim communities to stay within token budget (~4 chars/token,
-			// ~100 chars per community entry, 300 chars fixed overhead).
-			charBudget := maxTokens*4 - 300 - len(godNodes)*80
-			maxComms := max(charBudget/100, 0)
-			if len(communities) > maxComms {
-				communities = communities[:maxComms]
 			}
 		}
 
@@ -582,8 +638,8 @@ func graphSummaryHandler(gs store.GraphStore, overlay *cluster.Results) mcpsdk.T
 		}
 		return jsonResult(summary{
 			Scope:       scope,
-			NodeCount:   nodeCount,
-			EdgeCount:   edgeCount,
+			NodeCount:   sumCounts(byNodeKind),
+			EdgeCount:   sumCounts(byEdgeKind),
 			ByNodeKind:  byNodeKind,
 			ByEdgeKind:  byEdgeKind,
 			Communities: communities,
@@ -592,8 +648,20 @@ func graphSummaryHandler(gs store.GraphStore, overlay *cluster.Results) mcpsdk.T
 	}
 }
 
-// sortByBetweenness orders cluster results with cluster.CompareByBetweenness, the shared god-node ranking.
-func sortByBetweenness(rs []cluster.NodeResult) { slices.SortFunc(rs, cluster.CompareByBetweenness) }
+// rankedIDs returns the IDs of the overlay results keep accepts, ranked by cluster.CompareByBetweenness (the
+// shared god-node order), then by ID.
+func rankedIDs(overlay *cluster.Results, keep func(id string, nr cluster.NodeResult) bool) []string {
+	var ids []string
+	for id, nr := range overlay.Nodes {
+		if keep(id, nr) {
+			ids = append(ids, id)
+		}
+	}
+	slices.SortFunc(ids, func(a, b string) int {
+		return cmp.Or(cluster.CompareByBetweenness(overlay.Nodes[a], overlay.Nodes[b]), cmp.Compare(a, b))
+	})
+	return ids
+}
 
 // pendingResult renders a pending-task listing. It reports "<tool, spaced> failed" on error, the empty
 // message when there are no specs, and the specs as JSON otherwise.
@@ -621,10 +689,14 @@ func bindAndSubmit[R, Rep any](ctx context.Context, req mcplib.CallToolRequest, 
 	return jsonResult(rep)
 }
 
+// jsonResult renders v as compact JSON. HTML escaping is off, so code like "<-ch" or "a && b" stays readable
+// and doesn't grow into `\u003c` / `\u0026` sequences that cost tokens.
 func jsonResult(v any) (*mcplib.CallToolResult, error) {
-	b, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
 		return mcplib.NewToolResultErrorFromErr("marshal failed", err), nil
 	}
-	return mcplib.NewToolResultText(string(b)), nil
+	return mcplib.NewToolResultText(strings.TrimSuffix(buf.String(), "\n")), nil
 }

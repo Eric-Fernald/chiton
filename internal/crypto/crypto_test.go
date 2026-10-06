@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -76,6 +77,7 @@ func TestDeriveKey_RejectsBadParams(t *testing.T) {
 		"empty salt":       func(kf *KeyFile) { kf.SaltHex = "" },
 		"short salt":       func(kf *KeyFile) { kf.SaltHex = "0011" },
 		"bad kdf":          func(kf *KeyFile) { kf.KDF = "scrypt" },
+		"bad verifier":     func(kf *KeyFile) { kf.Verifier = "zz" },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -190,7 +192,7 @@ func TestGetPassphrase_NonInteractive(t *testing.T) {
 
 func TestResolveKeyForGraph_NoKeyfile(t *testing.T) {
 	graph := filepath.Join(t.TempDir(), "graph.kuzu")
-	key, kf, err := ResolveKeyForGraph(graph)
+	key, kf, err := ResolveKeyForGraph(graph, filepath.Join(t.TempDir(), ".chiton"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +208,7 @@ func TestResolveKeyForGraph_FindsKeyfileNextToGraph(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv(EnvVarPassphrase, "test-passphrase")
-	key, kf, err := ResolveKeyForGraph(graph)
+	key, kf, err := ResolveKeyForGraph(graph, filepath.Join(t.TempDir(), ".chiton"))
 	if err != nil {
 		t.Fatalf("ResolveKeyForGraph: %v", err)
 	}
@@ -238,4 +240,117 @@ func saveTempKeyfile(t *testing.T, kf *KeyFile) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// A keyfile in the project's state dir must be found even when the graph lives elsewhere and the process
+// runs from another directory, as an assistant-launched server does.
+func TestResolveKeyForGraph_FindsKeyfileInStateDir(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), ".chiton")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	kf, err := DefaultKeyFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := kf.Save(ResolveKeyfilePath(stateDir), false); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvVarPassphrase, "test-passphrase")
+
+	graph := filepath.Join(t.TempDir(), "store", "graph.kuzu")
+	key, got, err := ResolveKeyForGraph(graph, stateDir)
+	if err != nil {
+		t.Fatalf("ResolveKeyForGraph: %v", err)
+	}
+	if got == nil || len(key) != 32 {
+		t.Fatalf("keyfile in the state dir was not used: kf=%v keylen=%d", got, len(key))
+	}
+}
+
+// A mistyped passphrase must fail clearly instead of deriving a key that creates or opens a store.
+func TestDeriveKey_VerifierRejectsWrongPassphrase(t *testing.T) {
+	kf, err := DefaultKeyFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := kf.DeriveKey("right horse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kf.SetVerifier(key)
+	if _, err := kf.DeriveKey("rihgt horse"); !errors.Is(err, ErrWrongPassphrase) {
+		t.Errorf("DeriveKey(typo) err = %v, want ErrWrongPassphrase", err)
+	}
+	again, err := kf.DeriveKey("right horse")
+	if err != nil || !bytes.Equal(again, key) {
+		t.Errorf("DeriveKey(right) = %x, %v; want the original key", again, err)
+	}
+}
+
+// Keyfiles written before verifiers existed have none and must keep accepting any passphrase.
+func TestDeriveKey_LegacyKeyfileHasNoVerifier(t *testing.T) {
+	kf, err := DefaultKeyFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := kf.DeriveKey("anything"); err != nil {
+		t.Errorf("legacy keyfile rejected a passphrase: %v", err)
+	}
+}
+
+func TestKeyFile_RecordVerifierUpgradesInPlace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), KeyfileName)
+	kf, err := DefaultKeyFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := kf.Save(path, false); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadKeyFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := loaded.DeriveKey("pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := loaded.RecordVerifier(key); err != nil {
+		t.Fatalf("RecordVerifier: %v", err)
+	}
+	reloaded, err := LoadKeyFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Verifier == "" {
+		t.Fatal("verifier was not persisted")
+	}
+	if _, err := reloaded.DeriveKey("not pw"); !errors.Is(err, ErrWrongPassphrase) {
+		t.Errorf("after the upgrade, a wrong passphrase gave %v, want ErrWrongPassphrase", err)
+	}
+}
+
+func TestSealUnseal(t *testing.T) {
+	key := bytes.Repeat([]byte{0x42}, 32)
+	plain := []byte(`{"label":"Initech acquisition sync"}`)
+	sealed, err := Seal(key, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(sealed, []byte("Initech")) {
+		t.Error("sealed output leaks plaintext")
+	}
+	if got, err := Unseal(key, sealed); err != nil || !bytes.Equal(got, plain) {
+		t.Errorf("Unseal = %q, %v; want the plaintext", got, err)
+	}
+	if got, err := Seal(nil, plain); err != nil || !bytes.Equal(got, plain) {
+		t.Errorf("Seal(nil) = %q, %v; a plaintext store must pass data through", got, err)
+	}
+	if got, err := Unseal(key, plain); err != nil || !bytes.Equal(got, plain) {
+		t.Errorf("Unseal of a file written before encryption = %q, %v; want it unchanged", got, err)
+	}
+	if _, err := Unseal(nil, sealed); !errors.Is(err, ErrSealedNoKey) {
+		t.Errorf("Unseal(nil, sealed) err = %v, want ErrSealedNoKey", err)
+	}
 }

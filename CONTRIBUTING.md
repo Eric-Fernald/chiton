@@ -321,7 +321,7 @@ server that starts elsewhere would read a different store than `chiton build`
 wrote. Pass it explicitly (`-e CHITON_PROJECT_DIR=/path/to/repo`) if a dev server
 ever seems to be answering from an empty graph.
 
-The MCP server has no authentication. `chiton serve --http` and the webhook
+The HTTP transport requires a per-start bearer token and refuses browser origins that are not allowlisted. `chiton serve --http` and the webhook
 receivers all bind loopback by default and warn loudly when pointed at a wildcard
 address — keep it that way, and read [SECURITY.md](SECURITY.md) and
 [docs/SECURITY.md](docs/SECURITY.md) before changing anything in that area.

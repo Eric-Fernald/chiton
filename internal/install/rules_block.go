@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-
-	"github.com/Eric-Fernald/chiton/internal/fsutil"
 )
 
 // ChitonBlockStart and ChitonBlockEnd delimit the region of a rules file chiton owns. Install and
@@ -41,7 +39,7 @@ func UpsertRulesBlock(path, content string) (created, preexisted bool, err error
 		next = strings.TrimRight(text, "\n") + "\n\n" + block + "\n"
 	}
 
-	if err := fsutil.WriteFileAtomic(path, []byte(next), 0o644); err != nil {
+	if err := writeKeepingMode(path, []byte(next), 0o644); err != nil {
 		return false, false, fmt.Errorf("write %s: %w", path, err)
 	}
 	return created, preexisted, nil
@@ -62,13 +60,13 @@ func RemoveRulesBlock(path string) (changed bool, err error) {
 		return false, nil
 	}
 	next := stripBlock(text)
-	if strings.TrimSpace(next) == "" {
+	if strings.TrimSpace(next) == "" && !isSymlink(path) { // a symlinked rules file is emptied, not unlinked
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return true, fmt.Errorf("remove %s: %w", path, err)
 		}
 		return true, nil
 	}
-	if err := fsutil.WriteFileAtomic(path, []byte(next), 0o644); err != nil {
+	if err := writeKeepingMode(path, []byte(next), 0o644); err != nil {
 		return true, fmt.Errorf("write %s: %w", path, err)
 	}
 	return true, nil

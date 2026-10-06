@@ -15,8 +15,6 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
 )
 
-const chitonDir = ".chiton"
-
 // analyzeCmd runs deterministic rules itself (chiton analyze <path>). Its pending and submit subcommands
 // run the LLM-rule subagent cycle, mirroring `chiton extract pending|submit`.
 func analyzeCmd() *cobra.Command {
@@ -77,6 +75,9 @@ this command only reports how many LLM-rule tasks are pending (unless --no-llm).
 
 			fmt.Fprintf(out, "analyze: %d files scanned, %d rules run, %d findings [%s]\n",
 				res.FilesScanned, res.RulesRun, len(filtered), res.Duration.Round(time.Millisecond))
+			if len(res.Skipped) > 0 {
+				fmt.Fprintf(cmd.ErrOrStderr(), "analyze: skipped %d unreadable path(s), e.g. %s\n", len(res.Skipped), res.Skipped[0])
+			}
 			for _, f := range filtered {
 				loc := f.TargetURI
 				if f.Span != nil {
@@ -111,7 +112,7 @@ this command only reports how many LLM-rule tasks are pending (unless --no-llm).
 // runDiff loads a baseline, diffs it against the live findings, prints the
 // breakdown, and (for --diff, not --since) records a fresh baseline for HEAD.
 func runDiff(ctx context.Context, out io.Writer, gs store.GraphStore, diff bool, since string) error {
-	baselineDir := analyze.BaselineDir(chitonDir)
+	baselineDir := analyze.BaselineDir(config.StateDir())
 	current, err := analyze.CurrentFindings(ctx, gs)
 	if err != nil {
 		return fmt.Errorf("load current findings: %w", err)
@@ -201,7 +202,7 @@ func short(s string) string {
 // reportPendingLLM prints how many LLM-rule tasks are awaiting dispatch. It is
 // best-effort: a walk failure is reported, not fatal.
 func reportPendingLLM(ctx context.Context, out io.Writer, gs store.GraphStore, cfg *config.Config, path string) {
-	svc := analyze.NewLLMService(gs, nil, cfg.Semantic.ConfidenceThreshold, chitonDir)
+	svc := analyze.NewLLMService(gs, nil, cfg.Semantic.ConfidenceThreshold, config.StateDir())
 	specs, err := svc.Pending(ctx, path, "", 0)
 	if err != nil {
 		fmt.Fprintf(out, "analyze: note: could not compute pending LLM tasks: %v\n", err)
@@ -234,7 +235,7 @@ results back with 'chiton analyze submit'. chiton calls no LLM itself.`,
 				return err
 			}
 			// Pending does not touch the store; nil keeps it usable before a build.
-			svc := analyze.NewLLMService(nil, nil, cfg.Semantic.ConfidenceThreshold, chitonDir)
+			svc := analyze.NewLLMService(nil, nil, cfg.Semantic.ConfidenceThreshold, config.StateDir())
 			specs, err := svc.Pending(cmd.Context(), path, rule, limit)
 			if err != nil {
 				return err
@@ -274,7 +275,7 @@ func analyzeSubmitCmd() *cobra.Command {
 			}
 			defer gs.Close()
 
-			svc := analyze.NewLLMService(gs, nil, cfg.Semantic.ConfidenceThreshold, chitonDir)
+			svc := analyze.NewLLMService(gs, nil, cfg.Semantic.ConfidenceThreshold, config.StateDir())
 			out := cmd.OutOrStdout()
 			var findings, ambiguous int
 			for _, r := range results {

@@ -354,3 +354,36 @@ func TestLLMRuleFilter(t *testing.T) {
 		t.Fatalf("rule filter failed: %+v", specs)
 	}
 }
+
+// A symlinked file inside the walked tree can point anywhere, so Pending must not read through it.
+func TestLLMPendingSkipsSymlinks(t *testing.T) {
+	ctx := context.Background()
+	tmp, outside := t.TempDir(), t.TempDir()
+	secret := filepath.Join(outside, "secret.go")
+	if err := os.WriteFile(secret, []byte("package s\n\n// hunter2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(tmp, "link.go")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	// A regular file proves the walk yields tasks at all, so the symlink check below can't pass vacuously.
+	if err := os.WriteFile(filepath.Join(tmp, "ok.go"), []byte("package ok\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg := NewRegistry()
+	reg.Register(fakeLLMRule{id: "llm/test", cat: CategoryBugs, sev: SeverityHigh, langs: []string{"go"}})
+	specs, err := NewLLMService(nil, reg, 0.5, filepath.Join(tmp, ".chiton")).Pending(ctx, tmp, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sawRegular := false
+	for _, sp := range specs {
+		if strings.Contains(sp.Input, "hunter2") {
+			t.Fatalf("Pending read through symlink %s", sp.Path)
+		}
+		sawRegular = sawRegular || filepath.Base(sp.Path) == "ok.go"
+	}
+	if !sawRegular {
+		t.Fatalf("Pending returned no task for the regular file; got %d specs", len(specs))
+	}
+}

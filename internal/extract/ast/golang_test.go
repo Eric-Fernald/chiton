@@ -104,3 +104,41 @@ func helper() string { return "" }
 		}
 	}
 }
+
+// TestGoExtractorDedupes checks repeated calls, a doubly imported package, and duplicate init funcs yield each
+// node and edge once.
+func TestGoExtractorDedupes(t *testing.T) {
+	src := `package p
+
+import (
+	"fmt"
+	f "fmt"
+)
+
+func a() { b(); b(); fmt.Println(); f.Println() }
+
+func b() {}
+
+func init() {}
+
+func init() {}
+`
+	nodes, edges, err := (&GoExtractor{}).ExtractFile(context.Background(), writeTempFile(t, "p.go", src))
+	if err != nil {
+		t.Fatalf("ExtractFile: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, n := range nodes {
+		if seen[n.ID] {
+			t.Errorf("duplicate node %q", n.Label)
+		}
+		seen[n.ID] = true
+	}
+	seen = map[string]bool{}
+	for _, e := range edges {
+		if seen[e.ID] {
+			t.Errorf("duplicate %s edge %s -> %s", e.Kind, e.Src, e.Dst)
+		}
+		seen[e.ID] = true
+	}
+}

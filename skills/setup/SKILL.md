@@ -88,21 +88,28 @@ chiton cluster       # Leiden communities + betweenness, written to cluster.json
 **Encryption, and what it means for the plugin.** `chiton init` encrypts the
 store by default, deriving the key from a passphrase. An assistant-launched MCP
 server has no terminal, so it cannot prompt for one — it exits immediately with
-`no passphrase available: set CHITON_PASSPHRASE or run interactively`. Two ways
-forward, and the user picks:
+`no passphrase available: set CHITON_PASSPHRASE or run interactively`. The
+error's second line names the fix. Two ways forward, and the user picks:
 
 - Export `CHITON_PASSPHRASE` in the shell profile that starts Claude Code, so
   the server inherits it. The passphrase is never written to the graph, the
   logs, or any config file.
-- Or scaffold without encryption: `chiton init --encrypt=false`. Reasonable for
-  a graph over already-public code; not for one holding email, Slack, or
-  meeting transcripts.
+- Or, before the first `chiton init`, scaffold without encryption:
+  `chiton init --encrypt=false`. Once a keyfile exists that flag changes
+  nothing; turning encryption off then means removing `.chiton/keyfile.json`
+  and `chiton-out/` and rebuilding, which discards ingested meetings, email
+  and Slack. Reasonable for a graph over already-public code; not for one
+  holding email, Slack, or meeting transcripts.
+
+OS keychain support is not implemented; the environment variable is the only
+non-interactive path.
 
 Do not put the passphrase in the plugin's `.mcp.json` or in any file inside the
 repository.
 
 `chiton build` is incremental — a SHA-256 content cache skips unchanged files,
-so re-running it is cheap.
+and a rebuild removes symbols and files deleted since the last one, so re-running
+it is cheap.
 
 Optional, in rough order of value:
 
@@ -150,8 +157,10 @@ chiton sync once .                   # manual one-shot reconcile
 | Symptom | Cause | Fix |
 |---|---|---|
 | MCP tools missing entirely | `chiton` not on `PATH` when the server launched | install, then `/reload-plugins` |
-| `no passphrase available` | encrypted store, no terminal to prompt on | export `CHITON_PASSPHRASE`, or re-scaffold with `chiton init --encrypt=false` |
-| `open store: ... Log truncate required` | a previous process died holding the store | close other chiton processes; re-open read-write once to auto-truncate |
+| `no passphrase available` | encrypted store, no terminal to prompt on | export `CHITON_PASSPHRASE` in the shell profile that starts the assistant, then restart it |
+| graph store is in use by another chiton process | a writer (sync watch, build, serve --writable) holds the store, or on Windows a running chiton serve blocks a writer | stop the other process (or the assistant's server) and retry |
+| needs a one-time read-write pass | a chiton writer crashed, or the store predates this chiton | close other chiton processes and retry; the next open repairs it |
 | Tools work but return nothing | graph never built, or built elsewhere | `chiton build .` at the workspace root, then restart |
 | `submit_*` tools fail to write | server started read-only | restart with `chiton serve --writable`, or use the CLI submit path |
 | `semantic_search` errors | no embeddings | `chiton embed`, then restart the server |
+| serve warns "made with model …" | embedding model changed | `chiton embed`, then restart the server |

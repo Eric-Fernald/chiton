@@ -1,5 +1,5 @@
-// Package ingest is chiton's live-sync engine. It re-extracts changed files and replaces their nodes in place
-// (DeleteBySourceURI is safe because no cross-file structural edges point into a file's symbols).
+// Package ingest is chiton's live-sync engine. It re-extracts changed files and replaces their nodes by diff
+// (store.ReplaceSources), so edges other sources attached to surviving symbols stay.
 package ingest
 
 import (
@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"math/rand"
 	"os"
-	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +26,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/ingest/fswatch"
 	gitpkg "github.com/Eric-Fernald/chiton/internal/ingest/git"
 	"github.com/Eric-Fernald/chiton/internal/jobs"
+	"github.com/Eric-Fernald/chiton/internal/walk"
 )
 
 // Op is the kind of change applied to a file.
@@ -46,12 +49,14 @@ type Logger func(format string, args ...any)
 // Config tunes the engine. Zero values get sane defaults via withDefaults.
 type Config struct {
 	GraphPath       string        // for locating the cluster sidecar
+	SidecarKey      []byte        // seals cluster.json for an encrypted store; nil writes plaintext
 	Resolution      float64       // Leiden resolution for incremental re-cluster
 	Reembed         bool          // re-embed a changed file's embeddable nodes
 	Reanalyze       bool          // re-run deterministic FileRules on change
 	Workers         int           // watch-mode worker concurrency
 	Debounce        time.Duration // per-file debounce in watch mode
 	ClusterDebounce time.Duration // idle window before an incremental re-cluster
+	NoRecluster     bool          // skip the post-batch re-cluster (build leaves clustering to 'chiton cluster')
 }
 
 func (c Config) withDefaults() Config {
@@ -79,12 +84,15 @@ type Engine struct {
 	analyzer *analyze.Analyzer // nil ⇒ no re-analyze
 	cfg      Config
 	log      Logger
+	stat     func(string) (fs.FileInfo, error) // os.Stat; prune's existence check, swappable in tests
+	lstat    func(string) (fs.FileInfo, error) // os.Lstat; prepare's regular-file check, swappable in tests
 
 	clusterMu sync.Mutex
 
-	touchedMu sync.Mutex
-	touched   map[string]bool
-	dirty     bool
+	touchedMu   sync.Mutex
+	touched     map[string]bool // re-cluster seed IDs
+	touchedURIs map[string]bool // files re-synced or deleted since the last re-cluster
+	dirty       bool
 }
 
 // New builds an Engine. embedder and analyzer may be nil to disable re-embed /
@@ -93,14 +101,25 @@ func New(s store.GraphStore, c *cache.Cache, cfg Config, embedder embed.Embedder
 	if log == nil {
 		log = func(string, ...any) {}
 	}
+	// SyncDir's walker and writer, and Watch's workers, log concurrently, so serialise the sink.
+	var logMu sync.Mutex
+	sink := log
+	log = func(format string, args ...any) {
+		logMu.Lock()
+		defer logMu.Unlock()
+		sink(format, args...)
+	}
 	return &Engine{
-		store:    s,
-		cache:    c,
-		embedder: embedder,
-		analyzer: analyzer,
-		cfg:      cfg.withDefaults(),
-		log:      log,
-		touched:  map[string]bool{},
+		store:       s,
+		cache:       c,
+		embedder:    embedder,
+		analyzer:    analyzer,
+		cfg:         cfg.withDefaults(),
+		log:         log,
+		stat:        os.Stat,
+		lstat:       os.Lstat,
+		touched:     map[string]bool{},
+		touchedURIs: map[string]bool{},
 	}
 }
 
@@ -119,81 +138,204 @@ type Outcome struct {
 
 // BatchSummary aggregates a SyncChanges / SyncDir run.
 type BatchSummary struct {
+	Scanned     int // supported files the walk found (SyncDir only)
 	Upserted    int
 	Deleted     int
-	Skipped     int
+	Skipped     int // unchanged plus unreadable or unparsable files
+	Unchanged   int // files the content cache skipped
+	Unreadable  int // walk entries that could not be read, logged and skipped (SyncDir only)
+	Nodes       int // nodes written
+	Edges       int // edges written
 	Reembedded  int
 	Reclustered bool
+}
+
+const (
+	syncQueue       = 256    // buffered paths and results between SyncDir's walker, pool, and writer
+	batchRecords    = 20_000 // nodes plus edges per batched ReplaceSources call
+	reasonUnchanged = "unchanged"
+)
+
+// prepared is one file read, hashed, and extracted off the writer goroutine.
+type prepared struct {
+	path, uri, sha string
+	content        []byte // kept only when re-analyze needs it
+	nodes          []model.Node
+	edges          []model.Edge
+	prior          *analyze.PriorFindings // read by apply just before the replace; nil makes re-analyze query the store
+	gone           bool                   // the file vanished, so the writer deletes its URI
+	out            Outcome                // Skipped when there is nothing to write
+}
+
+func skipped(path, reason string) Outcome {
+	return Outcome{Path: path, Op: OpUpsert, Skipped: true, Reason: reason}
+}
+
+// prepare reads, hashes, and extracts path without touching the store, so a pool can run it concurrently.
+// Read and parse failures come back as skips.
+func (e *Engine) prepare(ctx context.Context, path string) prepared {
+	p := prepared{path: path, uri: model.FileURI(path)}
+	ex := extast.ForFile(path)
+	if ex == nil {
+		p.out = skipped(path, "unsupported file type")
+		return p
+	}
+	fi, err := e.lstat(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		p.gone = true
+		return p
+	case err != nil:
+		p.out = skipped(path, "stat: "+err.Error())
+		return p
+	case !fi.Mode().IsRegular():
+		// Never follow a symlink or junction: its target may be outside the repo (a key, a .env).
+		p.out = skipped(path, "not a regular file")
+		return p
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			p.gone = true
+		} else {
+			p.out = skipped(path, "read: "+err.Error())
+		}
+		return p
+	}
+	p.sha = model.ContentSHA(content)
+	if !e.cache.Changed(p.uri, p.sha) {
+		p.out = skipped(path, reasonUnchanged)
+		return p
+	}
+	// Extract the same bytes that were hashed, so the cached hash always matches the extracted content.
+	if p.nodes, p.edges, err = ex.ExtractSource(ctx, path, content); err != nil {
+		p.nodes, p.edges = nil, nil
+		p.out = skipped(path, "extract: "+err.Error())
+		return p
+	}
+	if e.reanalyzing() {
+		p.content = content
+	}
+	return p
+}
+
+func (e *Engine) reanalyzing() bool { return e.cfg.Reanalyze && e.analyzer != nil }
+
+// apply writes a batch of distinct files in one ReplaceSources call, then marks the cache and runs follow-ups. A file
+// whose node was absent is Fresh; shared, when non-nil, holds pkg:// stubs already written this run.
+func (e *Engine) apply(ctx context.Context, batch []prepared, shared map[string]bool) ([]Outcome, error) {
+	if shared != nil {
+		for i := range batch {
+			batch[i].nodes = dropWritten(batch[i].nodes, batch[i].uri, shared)
+		}
+	}
+	fileIDs := make([]string, len(batch))
+	for i, p := range batch {
+		fileIDs[i] = model.NewNodeID(p.uri, p.uri)
+	}
+	existing, err := store.GetNodes(ctx, e.store, fileIDs)
+	if err != nil {
+		return nil, fmt.Errorf("look up file nodes: %w", err)
+	}
+	indexed := make(map[string]bool, len(existing))
+	for _, n := range existing {
+		indexed[n.ID] = true
+	}
+	updates := make([]store.SourceUpdate, len(batch))
+	for i, p := range batch {
+		updates[i] = store.SourceUpdate{URI: p.uri, Nodes: p.nodes, Edges: p.edges, Fresh: !indexed[fileIDs[i]]}
+	}
+	// Read each file's findings while the AFFECTS edges into its nodes still exist; the replace drops those on
+	// nodes the new extraction lacks.
+	if e.reanalyzing() {
+		for i := range batch {
+			if batch[i].prior, err = e.analyzer.ReadPriorFindings(ctx, batch[i].uri); err != nil {
+				e.log("sync: %s: %v", batch[i].path, err)
+			}
+		}
+	}
+	deleted, err := store.ReplaceSources(ctx, e.store, updates...)
+	if err != nil {
+		return nil, fmt.Errorf("replace %d file(s): %w", len(batch), err)
+	}
+	outs := make([]Outcome, len(batch))
+	for i, p := range batch {
+		e.cache.Mark(p.uri, p.sha)
+		outs[i] = e.finish(ctx, p, deleted[i])
+	}
+	return outs, nil
+}
+
+// dropWritten removes nodes of other sources (pkg:// stubs) already in written and records the rest. Stubs
+// carry no per-file state, so rewriting one for every importing file is pure overhead.
+func dropWritten(nodes []model.Node, uri string, written map[string]bool) []model.Node {
+	out := nodes[:0]
+	for _, n := range nodes {
+		if n.SourceURI != uri {
+			if written[n.ID] {
+				continue
+			}
+			written[n.ID] = true
+		}
+		out = append(out, n)
+	}
+	return out
+}
+
+// finish re-embeds and re-analyzes a written file when configured and reports its outcome.
+func (e *Engine) finish(ctx context.Context, p prepared, deleted int) Outcome {
+	ids := make([]string, 0, len(p.nodes))
+	for _, n := range p.nodes {
+		ids = append(ids, n.ID)
+	}
+	out := Outcome{Path: p.path, Op: OpUpsert, NodesUpserted: len(p.nodes), EdgesUpserted: len(p.edges),
+		NodesDeleted: deleted, TouchedIDs: ids}
+	if e.cfg.Reembed && e.embedder != nil {
+		n, err := e.reembed(ctx, p.nodes)
+		if err != nil {
+			e.log("sync: %s: re-embed failed: %v", p.path, err)
+		}
+		out.Reembedded = n
+	}
+	if e.reanalyzing() {
+		if _, err := e.analyzer.ReanalyzeExtracted(ctx, p.path, p.content, p.nodes, p.edges, p.prior); err != nil {
+			e.log("sync: %s: re-analyze failed: %v", p.path, err)
+		}
+	}
+	if !e.cfg.NoRecluster {
+		// Prior findings are seeds too: the pruned ones drop out of the sidecar, the rest are re-clustered.
+		e.markTouched(append(clusterSeeds(p.nodes), p.prior.IDs()...), p.uri)
+	}
+	return out
+}
+
+// clusterSeeds returns the IDs a re-cluster starts from. External package stubs are shared hubs (pkg://fmt
+// has thousands of importers), so they are never seeds.
+func clusterSeeds(nodes []model.Node) []string {
+	ids := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		if !model.IsExternal(n) {
+			ids = append(ids, n.ID)
+		}
+	}
+	return ids
 }
 
 // SyncFile (re-)extracts a single file into the graph and hands a vanished file to DeleteFile.
 // Read and parse failures are skips, not errors, so a watcher never stops on one bad file.
 func (e *Engine) SyncFile(ctx context.Context, path string) (Outcome, error) {
-	ex := extast.ForFile(path)
-	if ex == nil {
-		return Outcome{Path: path, Op: OpUpsert, Skipped: true, Reason: "unsupported file type"}, nil
+	p := e.prepare(ctx, path)
+	switch {
+	case p.gone:
+		return e.deleteURI(ctx, p.uri)
+	case p.out.Skipped:
+		return p.out, nil
 	}
-	uri := model.FileURI(path)
-	content, err := os.ReadFile(path)
+	outs, err := e.apply(ctx, []prepared{p}, nil)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return e.deleteURI(ctx, uri)
-		}
-		return Outcome{Path: path, Op: OpUpsert, Skipped: true, Reason: "read: " + err.Error()}, nil
+		return Outcome{}, err
 	}
-
-	hexSum := model.ContentSHA(content)
-	if !e.cache.Changed(uri, hexSum) {
-		return Outcome{Path: path, Op: OpUpsert, Skipped: true, Reason: "unchanged"}, nil
-	}
-
-	// Extract the same bytes that were hashed, so the cached hash always matches the extracted content.
-	nodes, edges, err := ex.ExtractSource(ctx, path, content)
-	if err != nil {
-		return Outcome{Path: path, Op: OpUpsert, Skipped: true, Reason: "extract: " + err.Error()}, nil
-	}
-
-	deleted, err := e.store.DeleteBySourceURI(ctx, uri)
-	if err != nil {
-		return Outcome{}, fmt.Errorf("delete stale nodes for %s: %w", uri, err)
-	}
-	if err := e.store.UpsertNodes(ctx, nodes); err != nil {
-		return Outcome{}, fmt.Errorf("upsert nodes for %s: %w", uri, err)
-	}
-	if err := e.store.UpsertEdges(ctx, edges); err != nil {
-		return Outcome{}, fmt.Errorf("upsert edges for %s: %w", uri, err)
-	}
-	e.cache.Mark(uri, hexSum)
-
-	ids := make([]string, 0, len(nodes))
-	for _, n := range nodes {
-		ids = append(ids, n.ID)
-	}
-
-	out := Outcome{
-		Path:          path,
-		Op:            OpUpsert,
-		NodesUpserted: len(nodes),
-		EdgesUpserted: len(edges),
-		NodesDeleted:  deleted,
-		TouchedIDs:    ids,
-	}
-
-	if e.cfg.Reembed && e.embedder != nil {
-		n, err := e.reembed(ctx, nodes)
-		if err != nil {
-			e.log("sync: %s: re-embed failed: %v", path, err)
-		}
-		out.Reembedded = n
-	}
-	if e.cfg.Reanalyze && e.analyzer != nil {
-		if _, err := e.analyzer.AnalyzeExtracted(ctx, path, content, nodes, edges); err != nil {
-			e.log("sync: %s: re-analyze failed: %v", path, err)
-		}
-	}
-
-	e.markTouched(ids)
-	return out, nil
+	return outs[0], nil
 }
 
 // DeleteFile removes a file's nodes/edges (and its findings) from the graph.
@@ -218,6 +360,9 @@ func (e *Engine) SyncChanges(ctx context.Context, changes []Change) (*BatchSumma
 	defer e.saveCache()
 	sum := &BatchSummary{}
 	for _, ch := range changes {
+		if err := ctx.Err(); err != nil {
+			return sum, err
+		}
 		out, err := e.SyncChange(ctx, ch)
 		if err != nil {
 			return sum, err
@@ -228,69 +373,202 @@ func (e *Engine) SyncChanges(ctx context.Context, changes []Change) (*BatchSumma
 	return sum, nil
 }
 
-// SyncDir reconciles a directory tree in one pass. It (re-)syncs every supported file and, when prune is
-// true, deletes indexed files under the tree that are gone from disk.
-func (e *Engine) SyncDir(ctx context.Context, root string, prune bool) (*BatchSummary, error) {
-	defer e.saveCache()
-	sum := &BatchSummary{}
-	seen := map[string]bool{}
+// SyncDir reconciles a directory tree: GOMAXPROCS workers read and extract each supported file the walk policy
+// keeps, this goroutine writes results in batches, and prune deletes indexed files gone from disk.
+func (e *Engine) SyncDir(ctx context.Context, root string, prune bool) (sum *BatchSummary, err error) {
+	sum = &BatchSummary{}
+	defer func() { err = errors.Join(err, e.persistCache()) }()
+	policy, err := walk.LoadPolicy(root)
+	if err != nil {
+		return sum, err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if path != root && DefaultIgnoreDir(d.Name()) {
-				return filepath.SkipDir
+	// Only the walker writes seen, scanned, stats, and walkErr; closing paths and then results orders every
+	// write before the reads below.
+	seen := map[string]bool{}
+	var scanned int
+	var stats walk.Stats
+	var walkErr error
+	paths := make(chan string, syncQueue)
+	go func() {
+		defer close(paths)
+		stats, walkErr = walk.Files(ctx, root, policy, func(path string) error {
+			if extast.ForFile(path) == nil {
+				return nil
 			}
-			return nil
+			seen[model.FileURI(path)] = true
+			scanned++
+			select {
+			case paths <- path:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}, func(path string, err error) { e.log("sync: skip %s: %v", path, err) })
+	}()
+
+	results := make(chan prepared, syncQueue)
+	var wg sync.WaitGroup
+	for range runtime.GOMAXPROCS(0) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for path := range paths {
+				if ctx.Err() == nil {
+					results <- e.prepare(ctx, path)
+				}
+			}
+		}()
+	}
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	if err := e.writeAll(ctx, results, sum); err != nil {
+		cancel()
+		for range results {
 		}
-		if extast.ForFile(path) == nil {
-			return nil
-		}
-		out, err := e.SyncFile(ctx, path)
-		if err != nil {
-			return err
-		}
-		seen[model.FileURI(path)] = true
-		e.tally(sum, out)
-		return nil
-	})
+		return sum, err
+	}
+	sum.Scanned, sum.Unreadable = scanned, stats.Unreadable
 	if walkErr != nil {
 		return sum, walkErr
 	}
-
 	if prune {
-		rootURI := model.FileURI(root)
-		for _, uri := range e.cache.URIs() {
-			if uri != rootURI && !strings.HasPrefix(uri, rootURI+"/") {
-				continue
-			}
-			if seen[uri] {
-				continue
-			}
-			// Prune only files that are gone from disk. A file this walk excluded (ignored dir, unsupported
-			// type, or narrower root) must survive.
-			if p, ok := model.PathFromFileURI(uri); ok {
-				if _, err := os.Stat(p); err == nil {
-					continue
-				}
-			}
-			out, err := e.deleteURI(ctx, uri)
-			if err != nil {
-				return sum, err
-			}
-			e.tally(sum, out)
+		if err := e.prune(ctx, root, seen, sum); err != nil {
+			return sum, err
 		}
 	}
-
 	e.flush(ctx, sum)
 	return sum, nil
+}
+
+// writeAll applies prepared files in batches of about batchRecords nodes and edges, deleting vanished files and
+// tallying skips as they arrive.
+func (e *Engine) writeAll(ctx context.Context, results <-chan prepared, sum *BatchSummary) error {
+	var batch []prepared
+	shared := map[string]bool{}
+	records := 0
+	writeBatch := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		outs, err := e.apply(ctx, batch, shared)
+		if err != nil {
+			return err
+		}
+		for _, out := range outs {
+			e.tally(sum, out)
+		}
+		batch, records = nil, 0
+		return nil
+	}
+	for p := range results {
+		switch {
+		case p.gone:
+			out, err := e.deleteURI(ctx, p.uri)
+			if err != nil {
+				return err
+			}
+			e.tally(sum, out)
+		case p.out.Skipped:
+			e.logSkip(p.out)
+			e.tally(sum, p.out)
+		default:
+			batch = append(batch, p)
+			if records += len(p.nodes) + len(p.edges); records >= batchRecords {
+				if err := writeBatch(); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return writeBatch()
+}
+
+// logSkip reports a file skipped for any reason but an unchanged hash.
+func (e *Engine) logSkip(out Outcome) {
+	if out.Reason != reasonUnchanged {
+		e.log("sync: skip %s: %s", out.Path, out.Reason)
+	}
+}
+
+// underURI reports whether uri is dirURI or a file:// URI beneath it.
+func underURI(uri, dirURI string) bool {
+	return uri == dirURI || strings.HasPrefix(uri, strings.TrimSuffix(dirURI, "/")+"/")
+}
+
+// prune deletes indexed files under root that the walk missed and are gone from disk, plus non-canonical aliases
+// of files it re-indexed. A file the walk excluded (ignored, unsupported, narrower root) but still present survives.
+func (e *Engine) prune(ctx context.Context, root string, seen map[string]bool, sum *BatchSummary) error {
+	rootURI := model.FileURI(root)
+	for _, uri := range e.cache.URIs() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		p, ok := model.PathFromFileURI(uri)
+		if !ok || seen[uri] {
+			continue
+		}
+		canon := model.FileURI(p)
+		if !underURI(canon, rootURI) {
+			continue
+		}
+		if canon == uri || !seen[canon] {
+			// Only a file known to be gone is pruned: a stat error such as EACCES says nothing about whether it exists.
+			if _, err := e.stat(p); !errors.Is(err, fs.ErrNotExist) {
+				if err != nil {
+					e.log("sync: keep %s: %v", p, err)
+				}
+				continue
+			}
+		}
+		out, err := e.deleteURI(ctx, uri)
+		if err != nil {
+			return err
+		}
+		e.tally(sum, out)
+	}
+	return nil
+}
+
+// rescan enqueues every supported file under root and every indexed file under it gone from disk, so after an
+// overflow the file queue re-syncs what changed and deletes what vanished; the content cache skips the rest.
+func (e *Engine) rescan(ctx context.Context, root string, policy *walk.Policy, enqueue func(path string)) error {
+	seen := map[string]bool{}
+	if _, err := walk.Files(ctx, root, policy, func(path string) error {
+		if extast.ForFile(path) != nil {
+			seen[model.FileURI(path)] = true
+			enqueue(path)
+		}
+		return nil
+	}, func(path string, err error) { e.log("watch: rescan: skip %s: %v", path, err) }); err != nil {
+		return err
+	}
+	rootURI := model.FileURI(root)
+	for _, uri := range e.cache.URIs() {
+		if seen[uri] || !underURI(uri, rootURI) {
+			continue
+		}
+		if p, ok := model.PathFromFileURI(uri); ok {
+			if _, err := e.stat(p); errors.Is(err, fs.ErrNotExist) {
+				enqueue(p)
+			}
+		}
+	}
+	return nil
 }
 
 // Watch re-syncs changed files under root until ctx is cancelled, then drains in-flight work and re-clusters.
 // Queues run on context.Background() so a cancel stops fsnotify but Drain still processes queued edits.
 func (e *Engine) Watch(ctx context.Context, root string) error {
+	policy, err := walk.LoadPolicy(root)
+	if err != nil {
+		return err
+	}
 	// A single-worker, longer-debounced queue serialises cluster passes.
 	clusterQ := jobs.New(func(c context.Context, _ string) error {
 		_, err := e.recluster(c)
@@ -310,10 +588,18 @@ func (e *Engine) Watch(ctx context.Context, root string) error {
 	})
 	fileQ.Start(context.Background())
 
+	// An overflow means fsnotify dropped changes; one coalesced rescan feeds the whole tree to fileQ.
+	rescanQ := jobs.New(func(c context.Context, _ string) error {
+		e.log("watch: event overflow — rescanning %s", root)
+		return e.rescan(c, root, policy, fileQ.Enqueue)
+	}, jobs.Options{Workers: 1, Debounce: e.cfg.Debounce})
+	rescanQ.Start(context.Background())
+
 	w, err := fswatch.New(root, fileQ.Enqueue, fswatch.Options{
-		IgnoreDir: DefaultIgnoreDir,
-		Accept:    func(p string) bool { return extast.ForFile(p) != nil },
-		OnError:   func(err error) { e.log("watch: %v", err) },
+		Skip:       policy.Skip,
+		Accept:     func(p string) bool { return extast.ForFile(p) != nil },
+		OnError:    func(err error) { e.log("watch: %v", err) },
+		OnOverflow: func() { rescanQ.Enqueue("rescan") },
 		// A renamed/removed directory yields no per-child events, so prune the
 		// graph for every file previously indexed under it.
 		OnDirRemove: func(dir string) {
@@ -324,6 +610,7 @@ func (e *Engine) Watch(ctx context.Context, root string) error {
 		},
 	})
 	if err != nil {
+		rescanQ.Stop()
 		fileQ.Stop()
 		clusterQ.Stop()
 		return err
@@ -333,8 +620,9 @@ func (e *Engine) Watch(ctx context.Context, root string) error {
 	runErr := w.Run(ctx) // blocks until ctx cancelled
 	_ = w.Close()
 
-	// Graceful shutdown: drain queued file work first (its OnDone re-arms the
-	// cluster trigger), then drain the cluster queue, then a final flush.
+	// Graceful shutdown: drain a pending rescan (it feeds fileQ), then queued file work (its OnDone re-arms the
+	// cluster trigger), then the cluster queue, then a final flush.
+	rescanQ.Drain()
 	fileQ.Drain()
 	clusterQ.Drain()
 
@@ -343,9 +631,7 @@ func (e *Engine) Watch(ctx context.Context, root string) error {
 	if _, err := e.recluster(flushCtx); err != nil {
 		e.log("watch: final re-cluster failed: %v", err)
 	}
-	if err := e.cache.Save(); err != nil {
-		e.log("watch: cache save failed: %v", err)
-	}
+	e.saveCache()
 
 	if runErr != nil && !errors.Is(runErr, context.Canceled) {
 		return runErr
@@ -359,7 +645,7 @@ func (e *Engine) pruneDir(ctx context.Context, dir string) int {
 	prefix := model.FileURI(dir)
 	pruned := 0
 	for _, uri := range e.cache.URIs() {
-		if uri == prefix || strings.HasPrefix(uri, prefix+"/") {
+		if underURI(uri, prefix) {
 			if _, err := e.deleteURI(ctx, uri); err != nil {
 				e.log("sync: prune %s failed: %v", uri, err)
 				continue
@@ -391,13 +677,13 @@ func (e *Engine) recluster(ctx context.Context) (haveSidecar bool, err error) {
 	defer e.clusterMu.Unlock()
 
 	sidecarPath := cluster.SidecarPath(e.cfg.GraphPath)
-	touched, dirty := e.takeTouched()
+	touched, uris, dirty := e.takeTouched()
 	if !dirty {
 		_, statErr := os.Stat(sidecarPath)
 		return statErr == nil, nil
 	}
 
-	prev, err := cluster.LoadSidecar(sidecarPath)
+	prev, err := cluster.LoadSidecar(sidecarPath, e.cfg.SidecarKey)
 	if err != nil {
 		return false, fmt.Errorf("load cluster sidecar: %w", err)
 	}
@@ -407,23 +693,39 @@ func (e *Engine) recluster(ctx context.Context) (haveSidecar bool, err error) {
 		return false, nil
 	}
 
-	nodes, err := e.store.AllNodes(ctx)
-	if err != nil {
-		return false, fmt.Errorf("load nodes for re-cluster: %w", err)
+	// A re-synced or deleted file's old nodes are seeds too, so any it no longer has drop out.
+	for id, nr := range prev.Nodes {
+		if uris[nr.SourceURI] {
+			touched[id] = true
+		}
 	}
-	edges, err := e.store.AllEdges(ctx)
+	region, err := cluster.BuildRegion(slices.Sorted(maps.Keys(touched)), cluster.RegionDepth, storeNeighbors(ctx, e.store))
 	if err != nil {
-		return false, fmt.Errorf("load edges for re-cluster: %w", err)
+		return false, fmt.Errorf("load re-cluster region: %w", err)
 	}
 
 	rng := rand.New(rand.NewSource(42))
-	res := cluster.RunIncremental(prev, nodes, edges, touched, e.cfg.Resolution, rng)
-	if err := cluster.WriteSidecar(sidecarPath, res); err != nil {
+	res := cluster.ApplyRegion(prev, region, e.cfg.Resolution, rng)
+	if err := cluster.WriteSidecar(sidecarPath, res, e.cfg.SidecarKey); err != nil {
 		return false, err
 	}
-	e.log("sync: re-clustered %d touched node(s) → %d communities over %d nodes",
-		len(touched), res.CommunityCount, res.NodeCount)
+	e.log("sync: re-clustered %d node(s) around %d touched → %d communities over %d nodes",
+		len(region.Nodes), len(touched), res.CommunityCount, res.NodeCount)
 	return true, nil
+}
+
+// storeNeighbors backs cluster.BuildRegion with one gs.Neighbors read per expanded node.
+func storeNeighbors(ctx context.Context, gs store.GraphStore) cluster.NeighborFunc {
+	return func(id string) (*model.Node, []model.Edge, []model.Node, error) {
+		sub, err := gs.Neighbors(ctx, id, 1, nil)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if len(sub.Nodes) == 0 || sub.Nodes[0].ID != id {
+			return nil, nil, nil, nil // Neighbors lists the node itself first only when it exists
+		}
+		return &sub.Nodes[0], sub.Edges, sub.Nodes[1:], nil
+	}
 }
 
 // reembed embeds the embeddable nodes among the given set and upserts vectors.
@@ -445,7 +747,9 @@ func (e *Engine) reembed(ctx context.Context, nodes []model.Node) (int, error) {
 // deleteURI removes a source_uri's nodes, edges, cache entry, and findings, first marking its surviving
 // neighbors touched (before the edges vanish) so the re-cluster refreshes their communities.
 func (e *Engine) deleteURI(ctx context.Context, uri string) (Outcome, error) {
-	e.markSurvivorsTouched(ctx, uri)
+	if !e.cfg.NoRecluster {
+		e.markSurvivorsTouched(ctx, uri)
+	}
 	deleted, err := e.store.DeleteBySourceURI(ctx, uri)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("delete %s: %w", uri, err)
@@ -459,25 +763,23 @@ func (e *Engine) deleteURI(ctx context.Context, uri string) (Outcome, error) {
 	return Outcome{Path: uri, Op: OpDelete, NodesDeleted: deleted}, nil
 }
 
-// markSurvivorsTouched marks a file's nodes and their neighbors within 2 hops touched, and always sets dirty.
-// Cross-file edges only point out to shared package nodes, which are the survivors whose community may shift.
+// markSurvivorsTouched marks a file's nodes and their neighbors within 2 hops touched (external stubs are
+// leaves, as in a re-cluster), and always marks uri and sets dirty.
 func (e *Engine) markSurvivorsTouched(ctx context.Context, uri string) {
-	fileID := model.NewNodeID(uri, uri)
-	sub, err := e.store.Neighbors(ctx, fileID, 2, nil)
+	r, err := cluster.BuildRegion([]string{model.NewNodeID(uri, uri)}, cluster.RegionDepth, storeNeighbors(ctx, e.store))
 	if err != nil {
-		e.markDirty()
+		e.markTouched(nil, uri)
 		return
 	}
-	ids := make([]string, 0, len(sub.Nodes))
-	for _, n := range sub.Nodes {
-		ids = append(ids, n.ID)
-	}
-	e.markTouched(ids) // sets dirty even when ids is empty
+	e.markTouched(clusterSeeds(r.Nodes), uri)
 }
 
-// flush re-clusters after a batch. The cache is persisted separately by a
-// deferred saveCache in the caller, so it is saved even when a change errors.
+// flush re-clusters after a batch unless NoRecluster. The cache is persisted separately by the caller's
+// deferred save, so it is saved even when a change errors.
 func (e *Engine) flush(ctx context.Context, sum *BatchSummary) {
+	if e.cfg.NoRecluster {
+		return
+	}
 	haveSidecar, err := e.recluster(ctx)
 	if err != nil {
 		e.log("sync: re-cluster failed: %v", err)
@@ -486,11 +788,22 @@ func (e *Engine) flush(ctx context.Context, sum *BatchSummary) {
 	sum.Reclustered = haveSidecar
 }
 
-// saveCache persists the content cache, logging (not returning) any error so it
-// is safe to use in a deferred best-effort save.
-func (e *Engine) saveCache() {
+// persistCache syncs the store, then saves the content cache, so the cache never vouches for writes a crash lost.
+// On a failed sync the previous cache stays, and the next run re-extracts what this one wrote.
+func (e *Engine) persistCache() error {
+	if err := store.Sync(e.store); err != nil {
+		return fmt.Errorf("store sync failed, cache not saved: %w", err)
+	}
 	if err := e.cache.Save(); err != nil {
-		e.log("sync: cache save failed: %v", err)
+		return fmt.Errorf("save cache: %w", err)
+	}
+	return nil
+}
+
+// saveCache is persistCache for deferred best-effort use: it logs rather than returns the error.
+func (e *Engine) saveCache() {
+	if err := e.persistCache(); err != nil {
+		e.log("sync: %v", err)
 	}
 }
 
@@ -498,51 +811,41 @@ func (e *Engine) tally(sum *BatchSummary, out Outcome) {
 	switch {
 	case out.Skipped:
 		sum.Skipped++
+		if out.Reason == reasonUnchanged {
+			sum.Unchanged++
+		}
 	case out.Op == OpDelete:
 		sum.Deleted++
 	default:
 		sum.Upserted++
+		sum.Nodes += out.NodesUpserted
+		sum.Edges += out.EdgesUpserted
 	}
 	sum.Reembedded += out.Reembedded
 }
 
-func (e *Engine) markTouched(ids []string) {
+// markTouched records re-cluster seeds and the file URI whose nodes changed, and sets dirty.
+func (e *Engine) markTouched(ids []string, uri string) {
 	e.touchedMu.Lock()
 	defer e.touchedMu.Unlock()
 	for _, id := range ids {
 		e.touched[id] = true
 	}
+	e.touchedURIs[uri] = true
 	e.dirty = true
 }
 
-func (e *Engine) markDirty() {
-	e.touchedMu.Lock()
-	defer e.touchedMu.Unlock()
-	e.dirty = true
-}
-
-// takeTouched atomically returns and resets the accumulated touched set and
-// dirty flag.
-func (e *Engine) takeTouched() (map[string]bool, bool) {
+// takeTouched atomically returns and resets the accumulated seeds, file URIs, and dirty flag.
+func (e *Engine) takeTouched() (ids, uris map[string]bool, dirty bool) {
 	e.touchedMu.Lock()
 	defer e.touchedMu.Unlock()
 	if !e.dirty {
-		return nil, false
+		return nil, nil, false
 	}
-	t := e.touched
-	e.touched = map[string]bool{}
+	ids, uris = e.touched, e.touchedURIs
+	e.touched, e.touchedURIs = map[string]bool{}, map[string]bool{}
 	e.dirty = false
-	return t, true
-}
-
-// DefaultIgnoreDir reports whether the watcher and reconciler skip a directory base name. It includes the
-// chiton output dirs so store and cache writes never feed back into the watcher.
-func DefaultIgnoreDir(name string) bool {
-	switch name {
-	case ".git", ".chiton", "chiton-out", "node_modules", "vendor", ".hg", ".svn":
-		return true
-	}
-	return false
+	return ids, uris, true
 }
 
 // GitChanges adapts git-package changes (from a diff) into engine Changes.

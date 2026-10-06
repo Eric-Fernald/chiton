@@ -1,9 +1,11 @@
 package browser
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -204,17 +206,174 @@ func TestChromeToTime(t *testing.T) {
 	}
 }
 
-func TestIsWebURL(t *testing.T) {
+func TestParseWebURL(t *testing.T) {
 	web := []string{"https://example.com", "http://x.org/path"}
 	notWeb := []string{"chrome://settings", "about:blank", "file:///c:/x.txt", "chrome-extension://abc/page.html", "javascript:void(0)", ""}
 	for _, u := range web {
-		if !isWebURL(u) {
-			t.Errorf("isWebURL(%q)=false want true", u)
+		if _, ok := parseWebURL(u); !ok {
+			t.Errorf("parseWebURL(%q) ok=false want true", u)
 		}
 	}
 	for _, u := range notWeb {
-		if isWebURL(u) {
-			t.Errorf("isWebURL(%q)=true want false", u)
+		if _, ok := parseWebURL(u); ok {
+			t.Errorf("parseWebURL(%q) ok=true want false", u)
+		}
+	}
+}
+
+// TestIngestDBRedactsAndMergesPages checks tokens in the query, fragment or userinfo never reach the store, and
+// rows that then share a URL merge: newest row's title and last visit, summed visit counts.
+func TestIngestDBRedactsAndMergesPages(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "History")
+	recent := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
+	writeHistoryDB(t, dbPath, []Visit{
+		{URL: "https://app.example.com/callback?code=SECRET1&state=x", Title: "Signed in", VisitCount: 1, LastVisit: recent},
+		{URL: "https://app.example.com/callback?code=SECRET2", Title: "Old", VisitCount: 2, LastVisit: recent.Add(-time.Hour)},
+		{URL: "https://user:pw@example.org/p#access_token=SECRET3", Title: "", VisitCount: 1, LastVisit: recent},
+	})
+	gs := newStore(t)
+	ctx := context.Background()
+	rep, err := New(gs).IngestDB(ctx, dbPath, "chrome", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Visits != 3 || rep.NodesUpserted != 2 {
+		t.Errorf("report = %+v, want 3 rows merged into 2 pages", rep)
+	}
+
+	var snap bytes.Buffer
+	if err := gs.Snapshot(ctx, &snap); err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"SECRET1", "SECRET2", "SECRET3", "pw@", "code="} {
+		if strings.Contains(snap.String(), leak) {
+			t.Errorf("stored graph still contains %q", leak)
+		}
+	}
+
+	nodes, _ := gs.AllNodes(ctx)
+	byURI := map[string]model.Node{}
+	for _, n := range nodes {
+		byURI[n.SourceURI] = n
+	}
+	cb, ok := byURI["browser://https://app.example.com/callback"]
+	if !ok {
+		t.Fatalf("no merged callback node in %v", byURI)
+	}
+	if vc, _ := cb.Attrs["visit_count"].(float64); vc != 3 {
+		t.Errorf("visit_count = %v, want 3 (summed across rows)", cb.Attrs["visit_count"])
+	}
+	if cb.Label != "Signed in" || cb.Attrs["last_visit"] != recent.Format(time.RFC3339) {
+		t.Errorf("label=%q last_visit=%v, want the newest row's", cb.Label, cb.Attrs["last_visit"])
+	}
+	if p := byURI["browser://https://example.org/p"]; p.Label != "https://example.org/p" || p.Attrs["url"] != "https://example.org/p" {
+		t.Errorf("untitled page label=%q url=%v, want the redacted URL", p.Label, p.Attrs["url"])
+	}
+}
+
+func TestIngestDBKeepQuery(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "History")
+	writeHistoryDB(t, dbPath, []Visit{
+		{URL: "https://u:pw@example.com/search?q=go#r", Title: "Search", VisitCount: 1, LastVisit: time.Now().UTC()},
+	})
+	gs := newStore(t)
+	if _, err := New(gs).IngestDB(context.Background(), dbPath, "chrome", Options{KeepQuery: true}); err != nil {
+		t.Fatal(err)
+	}
+	nodes, _ := gs.AllNodes(context.Background())
+	if len(nodes) != 1 || nodes[0].SourceURI != "browser://https://example.com/search?q=go#r" {
+		t.Fatalf("nodes = %+v, want query and fragment kept, userinfo dropped", nodes)
+	}
+}
+
+// TestIngestDBPurgesUnredactedNodes checks nodes an earlier chiton stored under a full URL are deleted, while
+// clean history nodes and non-history url nodes stay.
+func TestIngestDBPurgesUnredactedNodes(t *testing.T) {
+	gs := newStore(t)
+	ctx := context.Background()
+	legacy := func(raw string) model.Node {
+		uri := "browser://" + raw
+		return model.Node{ID: model.NewNodeID(uri, raw), Kind: model.KindURL, Label: raw, SourceURI: uri,
+			Attrs: map[string]any{"source": "browser", "url": raw}}
+	}
+	secret, clean := legacy("https://x.example/reset?token=SECRET"), legacy("https://x.example/docs")
+	web := model.Node{ID: "web", Kind: model.KindURL, Label: "page", SourceURI: "https://x.example/p?q=1"}
+	if err := gs.UpsertNodes(ctx, []model.Node{secret, clean, web}); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(t.TempDir(), "History")
+	writeHistoryDB(t, dbPath, nil)
+
+	rep, err := New(gs).IngestDB(ctx, dbPath, "chrome", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Purged != 1 {
+		t.Errorf("Purged = %d, want 1", rep.Purged)
+	}
+	for id, want := range map[string]bool{secret.ID: false, clean.ID: true, web.ID: true} {
+		if n, _ := gs.GetNode(ctx, id); (n != nil) != want {
+			t.Errorf("node %s present=%v, want %v", id, n != nil, want)
+		}
+	}
+}
+
+func TestIngestDBRedactsSecretsInTitles(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "History")
+	now := time.Now().UTC()
+	writeHistoryDB(t, dbPath, []Visit{
+		{URL: "https://a.example/cb?code=SECRET1", Title: "https://a.example/cb?code=SECRET1", VisitCount: 1, LastVisit: now},
+		{URL: "https://b.example/cb?code=SECRET2", Title: "b.example/cb?code=SECRET2", VisitCount: 1, LastVisit: now},
+		{URL: "https://c.example/p#tok=SECRET3", Title: "Page tok=SECRET3", VisitCount: 1, LastVisit: now},
+	})
+	gs := newStore(t)
+	ctx := context.Background()
+	if _, err := New(gs).IngestDB(ctx, dbPath, "chrome", Options{}); err != nil {
+		t.Fatal(err)
+	}
+	var snap bytes.Buffer
+	if err := gs.Snapshot(ctx, &snap); err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"SECRET1", "SECRET2", "SECRET3"} {
+		if strings.Contains(snap.String(), leak) {
+			t.Errorf("stored graph still contains %q", leak)
+		}
+	}
+}
+
+func TestPurgeRunsOncePerIngesterAndSkipsKeepQuery(t *testing.T) {
+	gs := newStore(t)
+	ctx := context.Background()
+	legacy := func(raw string) model.Node {
+		uri := "browser://" + raw
+		return model.Node{ID: model.NewNodeID(uri, raw), Kind: model.KindURL, Label: raw, SourceURI: uri,
+			Attrs: map[string]any{"source": "browser", "url": raw}}
+	}
+	first, second, trailing := legacy("https://x.example/a?t=1"), legacy("https://x.example/b?t=2"), legacy("https://x.example/c#")
+	if err := gs.UpsertNodes(ctx, []model.Node{first, trailing}); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(t.TempDir(), "History")
+	writeHistoryDB(t, dbPath, nil)
+
+	kept := New(gs)
+	if rep, _ := kept.IngestDB(ctx, dbPath, "chrome", Options{KeepQuery: true}); rep.Purged != 0 {
+		t.Errorf("KeepQuery purged %d, want 0", rep.Purged)
+	}
+	ing := New(gs)
+	if rep, _ := ing.IngestDB(ctx, dbPath, "chrome", Options{}); rep.Purged != 1 {
+		t.Errorf("first run purged %d, want 1", rep.Purged)
+	}
+	if err := gs.UpsertNodes(ctx, []model.Node{second}); err != nil {
+		t.Fatal(err)
+	}
+	if rep, _ := ing.IngestDB(ctx, dbPath, "chrome", Options{}); rep.Purged != 0 {
+		t.Errorf("second run purged %d, want 0", rep.Purged)
+	}
+	for id, want := range map[string]bool{first.ID: false, second.ID: true, trailing.ID: true} {
+		if n, _ := gs.GetNode(ctx, id); (n != nil) != want {
+			t.Errorf("node %s present=%v, want %v", id, n != nil, want)
 		}
 	}
 }

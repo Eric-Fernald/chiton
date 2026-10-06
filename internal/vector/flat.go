@@ -7,12 +7,13 @@ import (
 	"strings"
 )
 
-// Flat is an exact cosine index. It L2-normalizes vectors on insert, so a search is a dot product.
-// Not safe for concurrent mutation; build once, then read.
+// Flat is an exact cosine index. It L2-normalizes vectors on insert, so a search is a dot product. Vectors live in
+// one slab of dim-wide rows. Not safe for concurrent mutation; build once, then read.
 type Flat struct {
+	dim  int // row width, fixed by the first vector added
 	ids  []string
-	vecs [][]float32    // parallel to ids; each normalized
-	pos  map[string]int // id → index into ids/vecs
+	vecs []float32      // row i, normalized, is vecs[i*dim:(i+1)*dim], parallel to ids
+	pos  map[string]int // id → row
 }
 
 // NewFlat returns an empty Flat index.
@@ -20,25 +21,36 @@ func NewFlat() *Flat { return NewFlatSized(0) }
 
 // NewFlatSized returns an empty Flat index presized for n vectors, so adding n of them never regrows it.
 func NewFlatSized(n int) *Flat {
-	return &Flat{ids: make([]string, 0, n), vecs: make([][]float32, 0, n), pos: make(map[string]int, n)}
+	return &Flat{ids: make([]string, 0, n), pos: make(map[string]int, n)}
 }
 
-// Add inserts or replaces vectors by ID. Zero-length vectors are skipped.
+// Add inserts or replaces vectors by ID. It skips zero-length vectors and any whose length differs from the first
+// vector added, since a cosine score across dimensions is meaningless.
 func (f *Flat) Add(items []Item) {
 	for _, it := range items {
 		if len(it.Vec) == 0 {
 			continue
 		}
-		v := normalized(it.Vec)
-		if idx, ok := f.pos[it.ID]; ok {
-			f.vecs[idx] = v
+		if f.dim == 0 {
+			f.dim = len(it.Vec)
+			f.vecs = make([]float32, 0, cap(f.ids)*f.dim)
+		}
+		if len(it.Vec) != f.dim {
 			continue
 		}
-		f.pos[it.ID] = len(f.ids)
-		f.ids = append(f.ids, it.ID)
-		f.vecs = append(f.vecs, v)
+		idx, ok := f.pos[it.ID]
+		if !ok {
+			idx = len(f.ids)
+			f.pos[it.ID] = idx
+			f.ids = append(f.ids, it.ID)
+			f.vecs = slices.Grow(f.vecs, f.dim)[:len(f.vecs)+f.dim]
+		}
+		normalizeInto(f.row(idx), it.Vec)
 	}
 }
+
+// row returns vector i, capped so an append can't spill into row i+1.
+func (f *Flat) row(i int) []float32 { return f.vecs[i*f.dim : (i+1)*f.dim : (i+1)*f.dim] }
 
 // Search returns up to k results ranked by descending cosine similarity, ties broken by ascending ID.
 // A zero or dimension-mismatched query, or k <= 0, yields no results.
@@ -47,17 +59,14 @@ func (f *Flat) Search(query []float32, k int) []Result {
 		return nil
 	}
 	q := normalized(query)
-	if len(q) == 0 || isZero(q) {
-		return nil
+	if len(q) != f.dim || isZero(q) {
+		return nil // an empty, zero or dimension-mismatched query
 	}
 
 	// top is a min-heap of the best k hits seen so far, rooted at the worst one kept, so a scan is O(n log k).
 	top := make([]Result, 0, min(k, len(f.ids)))
-	for i, v := range f.vecs {
-		if len(v) != len(q) {
-			continue // dimension mismatch (e.g. mixed embedders); skip
-		}
-		r := Result{ID: f.ids[i], Score: dot(q, v)}
+	for i, id := range f.ids {
+		r := Result{ID: id, Score: dot(q, f.row(i))}
 		switch {
 		case len(top) < k:
 			top = append(top, r)
@@ -124,11 +133,11 @@ func (f *Flat) Delete(ids []string) {
 		last := len(f.ids) - 1
 		if idx != last {
 			f.ids[idx] = f.ids[last]
-			f.vecs[idx] = f.vecs[last]
+			copy(f.row(idx), f.row(last))
 			f.pos[f.ids[idx]] = idx
 		}
 		f.ids = f.ids[:last]
-		f.vecs = f.vecs[:last]
+		f.vecs = f.vecs[:last*f.dim]
 		delete(f.pos, id)
 	}
 }
@@ -138,19 +147,25 @@ func (f *Flat) Len() int { return len(f.ids) }
 
 // normalized returns a unit-L2 copy of v. A zero vector returns a zero copy.
 func normalized(v []float32) []float32 {
+	out := make([]float32, len(v))
+	normalizeInto(out, v)
+	return out
+}
+
+// normalizeInto writes v scaled to unit L2 length into dst (len(v) long), or zeros for a zero vector.
+func normalizeInto(dst, v []float32) {
 	var sum float64
 	for _, x := range v {
 		sum += float64(x) * float64(x)
 	}
-	out := make([]float32, len(v))
 	if sum == 0 {
-		return out
+		clear(dst)
+		return
 	}
 	inv := float32(1 / math.Sqrt(sum))
 	for i, x := range v {
-		out[i] = x * inv
+		dst[i] = x * inv
 	}
-	return out
 }
 
 // isZero reports whether every component of v is zero (a zero vector has no

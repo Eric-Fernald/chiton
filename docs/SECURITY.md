@@ -81,8 +81,8 @@ command or tool named in the third column.
 | Destination | Code | Triggered by | Data sent |
 |---|---|---|---|
 | `http://localhost:11434/api/embed` (configurable) | `internal/embed/ollama.go` | `chiton embed`, `chiton search`, `chiton sync … --embed`, and the **`semantic_search` MCP tool** | Node text / the query string to be embedded |
-| `https://slack.com/api/*` | `internal/ingest/slack/web_client.go` | `chiton slack fetch`, and **automatically, per verified inbound event, while `chiton slack serve-events` runs** | Bot/user OAuth token + channel/thread ids; receives message content |
-| `https://gmail.googleapis.com` | `internal/ingest/email/gmail.go` | `chiton email gmail` | OAuth2 access token + your query; receives message bodies |
+| `https://slack.com/api/*` | `internal/ingest/slack/web_client.go` | `chiton slack fetch`, and **automatically, per verified inbound event, while `chiton slack serve-events` runs** | Bot/user OAuth token + channel/thread ids; receives message content; rate-limited calls (HTTP 429) are retried up to 3 times, honouring `Retry-After`, capped at 1 minute per wait |
+| `https://gmail.googleapis.com` | `internal/ingest/email/gmail.go` | `chiton email gmail` | OAuth2 access token + your query; receives message bodies; rate-limited calls (HTTP 429) are retried up to 3 times, honouring `Retry-After`, capped at 1 minute per wait |
 | `https://graph.microsoft.com` | `internal/ingest/email/outlook.go`, `internal/ingest/teams/graph_client.go` | `chiton email outlook`, `chiton teams fetch`, and **automatically, per verified inbound notification, while `chiton teams serve-webhook` runs** | Graph token; receives mail / meeting transcripts |
 | `https://login.microsoftonline.com` | `azidentity` (vendored) | The same three commands, to mint a token | **Your Teams/Outlook tenant id, client id, and client secret** |
 | **Any host you name** | `internal/ingest/url/fetch.go` | `chiton add-url`, and the **`add_url` MCP tool on a `--writable` server** | An HTTP GET with a chiton user-agent; receives the page/PDF |
@@ -94,7 +94,10 @@ Notes that materially change the picture:
   without an explicit user command.** It is loopback by default, and
   `CHITON_EMBED_PROVIDER=hash` removes it entirely — but
   `embed.endpoint` / `CHITON_EMBED_ENDPOINT` can redirect it off-device, at
-  which point node text and queries go wherever you pointed it.
+  which point node text and queries go wherever you pointed it. A non-loopback
+  `embed.endpoint` from the project's `.chitonrc` is refused, so a cloned
+  repository cannot redirect it; only `CHITON_EMBED_ENDPOINT` or
+  `$HOME/.chitonrc` can.
 - **Microsoft Graph is behind the `msgraph` build tag and is absent from default
   and release binaries.** `chiton teams fetch`, `chiton teams serve-webhook`,
   and `chiton email outlook` still appear in `--help`, but fail with a
@@ -104,8 +107,9 @@ Notes that materially change the picture:
 - **`AZURE_AUTHORITY_HOST` is read by the vendored Azure SDK, not by chiton.**
   If it is set in your environment, it redirects where the client secret above
   is sent. chiton neither reads nor validates it.
-- `hostAllowed` (§5.3) performs a **DNS lookup** for any host passed to
-  `add-url`, which is itself observable traffic.
+- Fetching a named host passed to `add-url` performs a **DNS lookup** at dial
+  time (where the §5.3 guard vets the resolved address), which is itself
+  observable traffic. `hostAllowed` only checks literal IPs and looks nothing up.
 
 ### 1.2 Subprocesses
 
@@ -115,7 +119,7 @@ external programs:
 | Program | When | Notes |
 |---|---|---|
 | `git` | `chiton sync git`, `chiton analyze --since`, repo detection | Read-only plumbing (`rev-parse`, log/diff) |
-| `yt-dlp` | `chiton add-url` / `add_url` on a YouTube URL | Looked up on `PATH`; downloads subtitles into a temp dir that is removed afterwards. **This branch bypasses the `hostAllowed` SSRF check** (§5.3) |
+| `yt-dlp` | `chiton add-url` / `add_url` on a YouTube URL | Looked up on `PATH`; downloads subtitles into a temp dir that is removed afterwards. **This branch bypasses the SSRF guard** (`hostAllowed` and the dial-time check, §5.3) |
 | A whisper CLI | `chiton meeting transcribe` | **Auto-detected from `PATH`**, trying `whisper`, `whisper-cli`, `whisper-cpp`, `whisper.cpp` in order (`internal/ingest/audio/shellout.go`) |
 
 The whisper auto-detection is the one worth a second look before you trust a
@@ -129,10 +133,11 @@ in-process whisper.cpp backend exists but requires a `-tags whisper_cgo` build.
 |---|---|---|
 | `chiton-out/graph.kuzu/` (default `graph_path`) | The BadgerDB graph: all node text, transcripts, email bodies, embeddings | **Yes**, when a keyfile is present (§2) |
 | `chiton-out/hnsw.idx` | Saved HNSW index: node IDs and graph links, no vectors or text | **Yes**, when the store is encrypted: AES-256-GCM under a key derived from the store's (§2) |
-| `chiton-out/cluster.json`, `chiton-out/cache.json` | Cluster sidecar and content-hash cache | **No — plaintext** |
-| `.chiton/keyfile.json` | Argon2id salt + KDF parameters only (no key, no passphrase) | n/a — no secret in it |
+| `chiton-out/cluster.json` | Cluster sidecar: every node's label, source URI and community | **Yes**, sealed with AES-256-GCM under a subkey of the store key when a keyfile is present (§2). A sidecar written before encryption was on loads, and is sealed on its next write |
+| `chiton-out/cache.json` | Content-hash cache | **No**: `file://` paths of repository files and their SHA-256, nothing that is not already in the working tree |
+| `.chiton/keyfile.json` | Argon2id salt, KDF parameters, and a verifier tag (HMAC-SHA256 of the key); no key, no passphrase | n/a, but not harmless: the verifier lets anyone holding this file alone test passphrase guesses offline, at Argon2id cost (§2) |
 | `.chiton/hooks.yaml`, `sources.yaml`, `schema_version`, `.gitignore` | Policy files | **No — plaintext**, and `hooks.yaml`/`sources.yaml` are meant to be committed |
-| `.chiton/baselines/<commit>.json`, `.chiton/llm-analyzed.json` | Finding baselines and LLM-rule state | **No — plaintext** |
+| `.chiton/baselines/<commit>.json`, `.chiton/llm-analyzed.json` | Finding baselines and LLM-rule state | **No — plaintext**. Plaintext on purpose: rule IDs and messages about repository files. |
 | `chiton export --out <file>` | Full graph snapshot, embeddings inlined | **No — plaintext JSON** |
 | OS temp dir | A copy of the browser History DB (`chiton-hist-*`), yt-dlp scratch (`chiton-yt-*`) | **No** — removed after use |
 
@@ -140,8 +145,9 @@ in-process whisper.cpp backend exists but requires a `-tags whisper_cgo` build.
 protect `.chiton/`; that was wrong. The encrypted data lives under
 `chiton-out/`, and `.chiton/` holds plaintext policy plus the (secret-free)
 keyfile. `chiton init` writes a `.chiton/.gitignore` that keeps everything but
-`hooks.yaml` and `sources.yaml` out of git; **`chiton-out/` is not
-auto-ignored** — add it to your repo's `.gitignore` yourself.
+`hooks.yaml` and `sources.yaml` out of git. A writable open writes
+`chiton-out/.gitignore` (`*`), so the store is never committed. A custom
+`graph_path` directory is left alone.
 
 **Outside the project directory:** `chiton install` and `chiton uninstall` write
 assistant configuration into your **home directory**, not just the repo —
@@ -153,7 +159,8 @@ install` for Claude Code additionally writes `.claude/skills/chiton/SKILL.md`
 and `.claude/skills/chiton-subagent-tasks/SKILL.md` inside the project.
 
 `.chitonrc` is read from `$CHITON_PROJECT_DIR` (or the working directory) **and
-from `$HOME`**, so a home-directory config can influence any project.
+from `$HOME`**, so a home-directory config can influence any project. A project `.chitonrc`
+cannot point `embed.endpoint` off-device (§1.1).
 
 ### 1.4 Telemetry
 
@@ -216,25 +223,24 @@ lives. Badger encrypts with AES-256 in CTR mode (`y.XORBlock` in
 `badger/v4`), which keeps the contents confidential but does not authenticate
 them: it does not detect tampering with the files on disk.
 
-> **Scope caveat (shipped reality):** only the Badger store and the saved HNSW
-> index (`hnsw.idx`) are encrypted today. The index is sealed with
-> `EncryptBytes` under `FileKey`, an HKDF-SHA256 derivation of the store key, so
-> it never shares a key with the store; without the key it is not loaded and
-> `serve` rebuilds the index instead. The package doc in
-> `internal/crypto/keyfile.go` describes the same wrapping for other artifacts
-> (`cache.json`, `cluster.json`, `audit.jsonl`), but that is **not yet wired in**.
-> Everything in the "No — plaintext" rows of §1.3 stays plaintext: the cluster
-> sidecar, the content cache, `.chiton/baselines/`, `.chiton/llm-analyzed.json`,
-> and `chiton export` snapshots. The design's "export archive is encrypted with
+> **Scope caveat (shipped reality):** the Badger store and, for an encrypted
+> store, the saved HNSW index (`hnsw.idx`) and the cluster sidecar
+> (`cluster.json`) are encrypted. Both files are sealed with AES-256-GCM under
+> `FileKey`, an HKDF-SHA256 derivation of the store key, so they never share a
+> key with the store; without the key `serve` rebuilds the index and runs
+> without cluster data. `cache.json`, `.chiton/baselines/`, `.chiton/llm-analyzed.json` and
+> `chiton export` snapshots stay plaintext; the first three hold only data
+> derived from repository files. The design's "export archive is encrypted with
 > the same passphrase" is **planned, not shipped.** Protect exported snapshots
-> and sidecars yourself.
+> yourself.
 
 ### Key derivation and handling
 
 Encryption keys are derived from a **user passphrase** via **Argon2id**; the
 passphrase itself is **never written to disk**. The on-disk
-`.chiton/keyfile.json` holds only the salt and KDF parameters — without the
-passphrase it reveals nothing.
+`.chiton/keyfile.json` holds the salt, KDF parameters and a passphrase
+verifier — no key and no passphrase, though the verifier allows offline
+guessing (below).
 
 | Parameter | Default (`DefaultKeyFile`) | Notes |
 |---|---|---|
@@ -245,6 +251,8 @@ passphrase it reveals nothing.
 | Salt | 16 random bytes (hex) | Floor 16 bytes |
 | Key length | 32 bytes | Must be exactly 32 (AES-256) |
 | Cipher | `AES-256-GCM` | A label in the keyfile. It is the cipher for sealed files (`hnsw.idx`); Badger encrypts the store itself in CTR mode |
+
+The keyfile also stores a verifier, an HMAC-SHA256 tag of the derived key over a fixed label, so a mistyped passphrase fails with `wrong passphrase` before any store is opened or created. The verifier is not secret, though: anyone holding `keyfile.json` alone can now test passphrase guesses offline, where before they also needed the encrypted store. Each guess still costs a full Argon2id run, so passphrase strength is what protects you; keep the keyfile as private as the store. Keyfiles from before this change gain a verifier on the first successful open.
 
 The derivation is deterministic: the same passphrase + same keyfile always
 produce the same 32-byte key, so the encrypted store re-opens reliably. A loaded
@@ -281,9 +289,16 @@ chiton build .
 ```
 
 Key resolution is automatic: when chiton opens a graph it looks for a keyfile
-next to the store, one directory up in `.chiton/`, and finally in `./.chiton/`
+next to the store, one directory up in `.chiton/`, and finally in `$CHITON_PROJECT_DIR/.chiton/` (the working directory's `.chiton/` when unset)
 (`internal/crypto/resolve.go`). If a keyfile is found, it derives the key and
 opens the store encrypted; if none is found, the store opens in plaintext.
+
+Opening a store with no keyfile prints a one-line notice on stderr;
+`CHITON_PLAINTEXT_OK=1` hides it. To encrypt an existing plaintext store, run
+`chiton export --out snapshot.json`, move `chiton-out/` aside, run
+`chiton init`, then `chiton merge snapshot.json` and `chiton cluster`, and
+delete the snapshot and the old store. Export before `init`: once a keyfile
+exists, chiton opens the old store with a key and Badger rejects it.
 
 ### Threats this addresses
 
@@ -328,10 +343,36 @@ Three ingest paths create `person` nodes, and all three tag them:
   (`internal/ingest/email/email.go`). The address is additionally stored in
   `attrs.email`. So the graph holds real addresses, not just display names.
 
-### Where the `include_pii` gate actually applies — read this part
+### Where the gate applies — read this part
 
-**PII gating is enforced in exactly one file: `internal/mcp/meetings.go`.** Only
-two of the nineteen MCP tools honour it:
+Redaction happens at two levels.
+
+**Server-wide, in the graph tools** (`internal/mcp/redact.go`). By default
+`get_node`, `query_graph`, `get_node_neighborhood`, `shortest_path`,
+`semantic_search`, `graph_summary` and `god_nodes` hide who people are:
+
+- A `person` node (or any node tagged `pii`) comes back as `[redacted person]`
+  with source URI `person://[redacted]` and no `attrs.email`. Edge endpoints use
+  the same placeholder.
+- Other nodes lose the attrs that name or address people: meeting
+  `participants` (replaced by `participant_count`), turn `speaker`,
+  `person_id`, email `from`/`from_name`/`to`/`cc`, and action-item assignees.
+  Speaker prefixes in transcript text and speaker-named turn labels become
+  `[redacted]`.
+- `god_nodes` and `graph_summary` take each cluster entry's label from its
+  stored node and redact it the same way. An entry whose node is no longer
+  stored (deleted since the last `chiton cluster`) fails closed as
+  `[redacted]`, because its stale cluster label may name a person.
+- Label lookups skip a node whose label names a person, so `query_graph "alice"`
+  reports no match rather than confirming that Alice is in the graph.
+  `semantic_search` drops such nodes and recounts its summary.
+- `graph_summary`'s `scope` is matched against the redacted source URI, so a
+  `person://<name>` scope can't be used to test whether someone is in the graph.
+
+`chiton serve --include-pii` turns this off for the whole server.
+
+**Per call, in the two meeting tools** (`internal/mcp/meetings.go`), which keep
+their own `include_pii` argument whether or not the server flag is set:
 
 - `search_meetings` returns each meeting with its decisions and linked code
   symbols, but **participant names are omitted** unless `include_pii: true` is
@@ -342,16 +383,13 @@ two of the nineteen MCP tools honour it:
 - `decisions_about` drops **action-item assignee names** unless `include_pii` is
   set. (There is no separate "action-item tool"; the flag lives here.)
 
-**Every other read tool has no PII gating at all.** `get_node`, `query_graph`,
-`get_node_neighborhood`, `shortest_path`, `graph_summary`, `god_nodes`, and
-`semantic_search` will return `person` nodes — display names *and* the
-`attrs.email` addresses — and will return browser-history `url` nodes, which are
-not PII-tagged in the first place. A caller that wants the names does not need
-`include_pii`; it just needs to ask a different tool.
-
-Treat the gate as *a courtesy default on the two meeting tools*, not as an
-access control over the graph. If the graph must not contain a person's
-identifiers, don't ingest the source.
+Redaction is an output filter, not an access control over the store. Any MCP
+client can pass `include_pii: true` to the meeting tools, and anyone who can
+read the store can read every name in it. Browser-history `url` nodes are not
+PII-tagged and are returned as stored. `pending_meeting_links` task specs still
+carry transcripts verbatim, speaker names included, because the linking subagent
+needs them. If the graph must not contain a person's identifiers, don't ingest
+the source.
 
 > **Also out of scope today:** PII tagging covers `person` nodes only. Free-text
 > PII inside transcript bodies, email bodies, and doc sections is **never
@@ -370,6 +408,8 @@ driver. Cookies, `Login Data`, saved credentials, and form autofill stores are
 **never opened**, and **no page is fetched** — the graph gets the title you saw,
 not the page you saw. Chrome, Edge, and Brave profiles are auto-detected.
 
+By default stored URLs are `scheme://host/path`: userinfo, query string and fragment are removed before anything is written, because they carry OAuth codes, reset and magic-link tokens and presigned-URL signatures. `--keep-query` keeps the query and fragment (userinfo is always dropped). The first ingest after upgrading deletes nodes an older version stored with a query; run `chiton cluster` afterwards so `cluster.json` drops their labels. Tokens embedded in the **path** (for example `/reset/<token>`) are not detected.
+
 That still means your browsing history — every URL and title, including private
 ones — is in the graph as `url` nodes, ungated, retrievable by any read tool.
 
@@ -377,17 +417,20 @@ ones — is in the graph as `url` nodes, ungated, retrievable by any read tool.
 
 ## 4. Credentials and secrets
 
-Every secret chiton uses is read **from the environment only**. None is
+Every secret chiton uses is read from the environment, or for the two webhook
+secrets from a file you name with `--signing-secret-file` / `--client-state-file`.
+No secret is accepted as a flag value, where `ps` and shell history would record
+it. None is
 persisted to disk, written to a config file, or logged.
 
 | Variable | Used by | Sent to |
 |---|---|---|
 | `CHITON_PASSPHRASE` | Every command that opens an encrypted store | Nowhere — derived locally into an AES key |
 | `CHITON_SLACK_TOKEN` | `chiton slack fetch`, `slack serve-events` | `slack.com` as `Authorization: Bearer …` |
-| `CHITON_SLACK_SIGNING_SECRET` | `chiton slack serve-events` | Nowhere — used locally to verify inbound request signatures |
+| `CHITON_SLACK_SIGNING_SECRET` | `chiton slack serve-events` (or `--signing-secret-file`) | Nowhere — used locally to verify inbound request signatures |
 | `CHITON_GMAIL_TOKEN` | `chiton email gmail` | `gmail.googleapis.com` as `Authorization: Bearer …` |
 | `CHITON_OUTLOOK_CLIENT_SECRET` (with `_TENANT_ID`, `_CLIENT_ID`, `_USER_ID`) | `chiton email outlook` (`msgraph` builds only) | `login.microsoftonline.com` to mint a token |
-| `CHITON_TEAMS_CLIENT_SECRET` (with `_TENANT_ID`, `_CLIENT_ID`, `_USER_ID`, `_CLIENT_STATE`) | `chiton teams fetch`, `teams serve-webhook` (`msgraph` builds only) | `login.microsoftonline.com` to mint a token; `CLIENT_STATE` stays local and validates inbound notifications |
+| `CHITON_TEAMS_CLIENT_SECRET` (with `_TENANT_ID`, `_CLIENT_ID`, `_USER_ID`, `_CLIENT_STATE`) | `chiton teams fetch`, `teams serve-webhook` (or `--client-state-file`) (`msgraph` builds only) | `login.microsoftonline.com` to mint a token; `CLIENT_STATE` stays local and validates inbound notifications |
 
 Handling properties worth verifying yourself:
 
@@ -409,30 +452,43 @@ chiton does not use an OS keychain.
 
 ## 5. Network listeners and the MCP surface
 
-Three commands can open a listening socket. None of them authenticates the
-caller by identity.
+Three commands can open a listening socket. `chiton serve --http` checks a
+bearer token, the two receivers verify a shared secret or signature, and none
+of them identifies the caller beyond that.
 
 | Command | Default bind | Auth |
 |---|---|---|
-| `chiton serve` **with no flags** | `127.0.0.1:7474`, HTTP + SSE | **None** |
+| `chiton serve --http <addr>` | the given address, HTTP + SSE | Per-start bearer token + Origin allowlist + JSON-only POST (no TLS) |
 | `chiton serve --stdio` | *no socket at all* | n/a |
-| `chiton serve --unix <path>` | filesystem socket (Linux/macOS) | filesystem permissions only |
+| `chiton serve --unix <path>` | filesystem socket (Linux/macOS) | filesystem permissions: the socket is created `0600`, owner-only |
 | `chiton teams serve-webhook` | `127.0.0.1:8444` | Graph `clientState` shared secret |
 | `chiton slack serve-events` | `127.0.0.1:8445` | Slack request-signature verification |
 
 ### 5.1 `chiton serve`
 
-**A bare `chiton serve` with no flags starts the HTTP/SSE transport** — `--http`
-is not opt-in, it is the default, and `--stdio` is what you must ask for. The
-assistant installers and the plugin all pass `--stdio`, so this matters mainly
-when you start a daemon by hand.
+A bare `chiton serve` speaks stdio and opens no socket; HTTP/SSE starts only
+with an explicit `--http <addr>`.
 
-The HTTP/SSE transport has **no authentication, no TLS, and no origin check**.
-Anything that can reach the port can read the entire graph — code, findings,
-meetings, emails, browser history, PII. It binds loopback by default and prints
+The HTTP/SSE transport has four controls and **no TLS**:
+
+- **Bearer token.** Every request must send `Authorization: Bearer <token>`. The
+  token is generated at each start and written to `<graph dir>/mcp-token` (mode
+  0600, removed on exit), or pinned with `CHITON_MCP_TOKEN` (at least 16
+  characters).
+- **Origin allowlist.** A request carrying an `Origin` header is refused unless
+  that origin is listed with `--allow-origin` (default: none; `*` is rejected).
+- **JSON-only POSTs.** `Content-Type` must be `application/json`, and a body is
+  capped at 8 MiB. A `text/plain` POST needs no CORS preflight, so this is what
+  stops a web page from calling tools.
+- **No wildcard CORS.** The server never sends `Access-Control-Allow-Origin: *`.
+
+Because there is no TLS, the token and the entire graph — code, findings,
+meetings, emails, browser history, PII — cross the network unencrypted if you
+bind off loopback. It binds loopback by default and prints
 a loud stderr warning when asked to bind a wildcard address (`0.0.0.0`, `::`, or
 an empty host), but it will not stop you. Do not expose it, and be aware that a
-loopback bind is still reachable by every local process and, in a browser
+loopback bind is still reachable by every local process (any process that can
+read the token file can call tools) and, in a browser
 context, by any page that can talk to `127.0.0.1`.
 
 ### 5.2 The two receivers
@@ -451,31 +507,35 @@ context, by any page that can talk to `127.0.0.1`.
 ### 5.3 `add_url` — assistant-driven fetching
 
 On a `--writable` server, `add_url` lets the assistant make chiton fetch **any
-http/https URL**, and also lets it read **an arbitrary local file path or
-`file://` URL** and put the contents in the graph. This is the widest capability
-chiton exposes over MCP.
+http/https URL**. This is the widest capability chiton exposes over MCP. It
+accepts only http/https; bare paths and `file://` URLs are refused, so an
+injected instruction can't make it read a local file. `pending_analyses` is
+likewise confined to the project root and skips symlinked files.
 
 Shipped mitigations (`internal/ingest/url/`):
 
 - The **read-only check runs before the fetch**, so a default (non-`--writable`)
   stdio server makes no request at all — it returns an error instead.
-- `hostAllowed` rejects loopback, private, link-local, and unspecified addresses
-  — both as literals *and* after DNS resolution — blocking SSRF at cloud
-  metadata endpoints such as `169.254.169.254`.
-- `CheckRedirect` re-applies `hostAllowed` on **every** hop, with a 10-redirect
-  cap, so a public host cannot redirect into the internal network.
+- A dial-time guard (`net.Dialer.Control`) checks the address actually connected
+  to, on the first request and on every redirect. It refuses loopback, RFC 1918,
+  link-local (cloud metadata such as `169.254.169.254`), CGNAT `100.64/10`,
+  `198.18/15`, `0/8`, `240/4`, `192.0.0/24`, multicast, ULA, and IPv4-embedding
+  IPv6 (NAT64, 6to4, Teredo, IPv4-compatible `::/96`, SIIT `::ffff:0:0:0/96`),
+  and treats IPv4-mapped IPv6 as IPv4. It is what stops a named host, including
+  one whose DNS answer changes between lookup and connect.
+- `hostAllowed` fails fast on a literal non-public IP in the URL, and
+  `CheckRedirect` re-applies it on **every** hop, with a 10-redirect cap; the
+  dial-time guard covers named redirect targets.
 - Responses are capped at 32 MiB and the client has a 30 s timeout.
+- Over MCP `add_url` accepts only http/https, so local reads stay CLI-only
+  (`chiton add-url`).
 
 Acknowledged residual gaps, stated plainly:
 
-- **DNS-rebinding TOCTOU.** `hostAllowed` resolves the name, then the HTTP
-  client resolves it again to dial. A determined attacker can race the two. The
-  code documents this itself; closing it needs a custom `DialContext`, which is
-  not implemented.
-- **The `yt-dlp` branch bypasses `hostAllowed` entirely.** A YouTube-shaped host
-  goes straight to the subprocess without the SSRF check.
-- **Local file reads are not path-restricted.** `add_url` with a bare path or a
-  `file://` URL will read anything the chiton process can read.
+- `add_url` connects directly and ignores `HTTP(S)_PROXY`.
+- **The `yt-dlp` branch bypasses the SSRF guard entirely.** A YouTube-shaped
+  host goes straight to the subprocess without `hostAllowed` or the dial-time
+  check.
 
 If you run `chiton serve --writable`, you are trusting the assistant with those
 capabilities. The read-only default exists precisely so that you have to opt in.
@@ -494,11 +554,12 @@ status is labelled **shipped** or **planned**.
 | Laptop theft / lost device reading the store off disk | AES-256 (Badger, CTR mode) store encryption keyed from an Argon2id passphrase | **Shipped** |
 | Backup leakage (`chiton-out/` in cloud/disk backups) | Same store encryption | **Shipped** |
 | Stolen `chiton-out/graph.kuzu/` yields readable data | Same store encryption | **Shipped** |
-| Plaintext sidecars / exports leaking the same data | — | **Not mitigated:** `cluster.json`, `cache.json`, `.chiton/baselines/`, `.chiton/llm-analyzed.json`, and `chiton export` output are plaintext |
-| Meeting/email PII surfaced by the two meeting tools | `person` nodes tagged `pii=true`, hidden unless `include_pii` | **Shipped, but narrow** — see §3; the other read tools have no gate |
+| Plaintext sidecars / exports leaking the same data | Sealed under a key derived from the store key (§2) | **Partly mitigated:** `cluster.json` and `hnsw.idx` are sealed for encrypted stores; `cache.json`, baselines, `llm-analyzed.json` and `chiton export` output are plaintext |
+| Meeting/email PII surfaced by the two meeting tools | `person` nodes tagged `pii=true`, hidden unless `include_pii` | Shipped: redacted by default in every read tool; `--include-pii` opts out |
+| A symlink in an indexed repo pointing outside it (e.g. `notes.md -> ~/.ssh/id_rsa`) pulling its target into the graph and `pending_extractions` | `build`, `sync`, and `sync watch` index regular files only; symlinks and junctions are skipped at the walk and at the read | **Shipped** (`analyze` via Section D) |
 | Accidental upload of secrets to a remote LLM | Subagent mode = no built-in LLM calls; per-source allowlist + secret scrubbing | **Partly:** no built-in LLM egress (shipped); allowlist/scrubbing **planned** |
-| SSRF via assistant-driven `add_url` | Read-only default; `hostAllowed` on the host and on every redirect; 10-redirect cap | **Shipped, with known gaps** (§5.3) |
-| Unauthenticated reader on the MCP HTTP port | Loopback default + wildcard-bind warning | **Partial:** there is no authentication at all (§5.1) |
+| SSRF via assistant-driven `add_url` | Read-only default; a dial-time guard on the address actually connected to (first request and every redirect); `hostAllowed` on literal IPs; no proxy; 10-redirect cap | **Shipped; the `yt-dlp` branch is a known gap** (§5.3) |
+| Unauthenticated reader on the MCP HTTP port | Per-start bearer token, Origin allowlist, JSON-only POSTs with an 8 MiB cap, no `Access-Control-Allow-Origin: *`; loopback default + wildcard-bind warning | **Shipped** (no TLS; §5.1) |
 | Unauthenticated Teams/Slack webhook notifications | `clientState` and signing-secret checks now required to start | **Shipped** (previously fail-open for Teams) |
 | Secrets in environment variables | Env-only, header-only, never logged or persisted | **Shipped**; no OS keychain integration |
 | Cross-project leakage (query in repo A pulling repo B nodes) | Query scoping defaults to current repo, `--scope all` gated | **Planned** |
@@ -509,7 +570,7 @@ status is labelled **shipped** or **planned**.
 
 - **Multi-tenant isolation.** chiton is single-user, single-machine.
 - **Network attackers on the MCP socket.** See §5.1 — loopback default, wildcard
-  warning, and **no authentication whatsoever**. Do not expose it.
+  warning, and a bearer token, but **no TLS**. Do not expose it.
 - **Malicious or substituted subprocesses.** The whisper CLI is auto-detected
   from `PATH`; `yt-dlp` and `git` are resolved the same way. chiton does not pin
   or verify them.

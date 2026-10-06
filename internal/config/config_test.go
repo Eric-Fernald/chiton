@@ -3,18 +3,43 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-// isolate points HOME at a scratch directory so a developer's real ~/.chitonrc
-// can never leak into these tests.
-func isolate(t *testing.T) {
+// isolate points HOME at a scratch directory so a developer's real ~/.chitonrc can never leak into these tests.
+// Viper reads HOMEDRIVE+HOMEPATH before USERPROFILE on Windows, so those are cleared too. It returns the home.
+func isolate(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOMEDRIVE", "")
+	t.Setenv("HOMEPATH", "")
 	t.Setenv(ProjectDirEnv, "")
 	t.Setenv("CHITON_GRAPH_PATH", "")
+	t.Setenv("CHITON_EMBED_ENDPOINT", "")
+	return home
+}
+
+// A .chitonrc that fails to parse must stop the command, because falling back to defaults silently opens a
+// different store than the one the file names.
+func TestMalformedChitonrcIsAnError(t *testing.T) {
+	isolate(t)
+	project := t.TempDir()
+	rc := filepath.Join(project, ".chitonrc")
+	if err := os.WriteFile(rc, []byte("graph_path = \"custom/store\"\n[embed\n"), 0o644); err != nil {
+		t.Fatalf("write .chitonrc: %v", err)
+	}
+	t.Setenv(ProjectDirEnv, project)
+
+	cfg, err := Load()
+	if err == nil {
+		t.Fatalf("Load succeeded with GraphPath %q, want a parse error", cfg.GraphPath)
+	}
+	if !strings.Contains(err.Error(), rc) {
+		t.Errorf("error %q does not name the file %s", err, rc)
+	}
 }
 
 func TestLoadDefaultsStayRelative(t *testing.T) {
@@ -234,5 +259,127 @@ func TestEmbedDimDefaultsToZero(t *testing.T) {
 	}
 	if cfg.Embed.Dim != 0 {
 		t.Errorf("Embed.Dim = %d with no override, want 0", cfg.Embed.Dim)
+	}
+}
+
+func writeRC(t *testing.T, dir, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, ".chitonrc"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write .chitonrc: %v", err)
+	}
+}
+
+// A cloned repository's .chitonrc must not be able to send embedded text and queries to its own server.
+func TestProjectRCRemoteEmbedEndpointRefused(t *testing.T) {
+	isolate(t)
+	project := t.TempDir()
+	writeRC(t, project, "[embed]\nendpoint = \"https://embed.attacker.example\"\n")
+	t.Setenv(ProjectDirEnv, project)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Embed.EndpointOrigin != OriginProjectRC {
+		t.Errorf("EndpointOrigin = %q, want %q", cfg.Embed.EndpointOrigin, OriginProjectRC)
+	}
+	if err := cfg.Embed.CheckEndpoint(); err == nil || !strings.Contains(err.Error(), "CHITON_EMBED_ENDPOINT") {
+		t.Errorf("CheckEndpoint() = %v, want a refusal naming CHITON_EMBED_ENDPOINT", err)
+	}
+}
+
+func TestEmbedEndpointAllowedOrigins(t *testing.T) {
+	remote := "[embed]\nendpoint = \"https://embed.attacker.example\"\n"
+	cases := []struct {
+		name, projectRC, homeRC, env string
+		want                         Origin
+	}{
+		{name: "project loopback IP", projectRC: "[embed]\nendpoint = \"http://127.0.0.1:11434\"\n", want: OriginProjectRC},
+		{name: "project localhost", projectRC: "[embed]\nendpoint = \"http://localhost:9999\"\n", want: OriginProjectRC},
+		{name: "env overrides project", projectRC: remote, env: "https://embed.corp.example", want: OriginEnv},
+		{name: "home config", homeRC: "[embed]\nendpoint = \"https://embed.corp.example\"\n", want: OriginUserRC},
+		{name: "built-in default", want: OriginDefault},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := isolate(t)
+			project := t.TempDir()
+			if tc.projectRC != "" {
+				writeRC(t, project, tc.projectRC)
+			}
+			if tc.homeRC != "" {
+				writeRC(t, home, tc.homeRC)
+			}
+			t.Setenv(ProjectDirEnv, project)
+			t.Setenv("CHITON_EMBED_ENDPOINT", tc.env)
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.Embed.EndpointOrigin != tc.want {
+				t.Errorf("EndpointOrigin = %q, want %q", cfg.Embed.EndpointOrigin, tc.want)
+			}
+			if err := cfg.Embed.CheckEndpoint(); err != nil {
+				t.Errorf("CheckEndpoint() = %v, want nil", err)
+			}
+		})
+	}
+}
+
+func TestIsLoopbackURL(t *testing.T) {
+	for raw, want := range map[string]bool{
+		"http://localhost:11434":              true,
+		"https://LOCALHOST":                   true,
+		"http://127.0.0.1:11434":              true,
+		"http://[::1]:11434":                  true,
+		"http://localhost.attacker.example":   false,
+		"http://127.0.0.1.attacker.example":   false,
+		"https://embed.attacker.example":      false,
+		"localhost:11434":                     false, // no scheme: url.Parse reads "localhost" as the scheme
+		"ftp://127.0.0.1":                     false,
+		"http://127.0.0.1@attacker.example":   false, // userinfo: the real host is after the @
+		"http://localhost:x@attacker.example": false,
+	} {
+		if got := isLoopbackURL(raw); got != want {
+			t.Errorf("isLoopbackURL(%q) = %v, want %v", raw, got, want)
+		}
+	}
+}
+
+// When the project directory is $HOME itself, the one file viper reads is the project's, not the user's.
+func TestProjectDirIsHomeCountsAsProject(t *testing.T) {
+	home := isolate(t)
+	writeRC(t, home, "[embed]\nendpoint = \"https://embed.attacker.example\"\n")
+	t.Setenv(ProjectDirEnv, home)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Embed.EndpointOrigin != OriginProjectRC {
+		t.Errorf("EndpointOrigin = %q, want %q", cfg.Embed.EndpointOrigin, OriginProjectRC)
+	}
+	if err := cfg.Embed.CheckEndpoint(); err == nil {
+		t.Error("CheckEndpoint() = nil, want a refusal")
+	}
+}
+
+func TestCheckEndpointFailsClosedOnUnknownOrigin(t *testing.T) {
+	e := EmbedConfig{Endpoint: "https://embed.attacker.example", EndpointOrigin: ""}
+	if err := e.CheckEndpoint(); err == nil {
+		t.Error("CheckEndpoint() = nil for an unknown origin, want a refusal")
+	}
+}
+
+func TestStateDirFollowsProjectDir(t *testing.T) {
+	isolate(t)
+	if got := StateDir(); got != ".chiton" {
+		t.Errorf("StateDir() = %q with no project dir, want %q", got, ".chiton")
+	}
+	project := t.TempDir()
+	t.Setenv(ProjectDirEnv, project)
+	if got, want := StateDir(), filepath.Join(project, ".chiton"); got != want {
+		t.Errorf("StateDir() = %q, want %q", got, want)
 	}
 }

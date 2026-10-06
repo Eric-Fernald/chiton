@@ -1,6 +1,8 @@
 package analyze
 
 import (
+	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -95,5 +97,30 @@ func TestBaselineEmptyDir(t *testing.T) {
 	}
 	if b != nil {
 		t.Fatal("expected nil baseline for empty dir")
+	}
+}
+
+// diff_findings resolves MCP-supplied refs through GitCommit, and an unguarded `git rev-parse --show-toplevel`
+// prints the repo path, which the tool then echoes back.
+func TestGitCommitRefusesOptionLikeRefs(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	root := t.TempDir()
+	for _, args := range [][]string{{"init", "-q"}, {"commit", "--allow-empty", "-q", "-m", "c"}} {
+		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	for _, ref := range []string{"--show-toplevel", "--git-dir", "--output=x"} {
+		if got := GitCommit(root, ref); got != "" {
+			t.Errorf("GitCommit(%q) = %q, want \"\"", ref, got)
+		}
+	}
+	if sha := GitCommit(root, "HEAD"); len(sha) != 40 {
+		t.Errorf("GitCommit(HEAD) = %q, want a 40-hex SHA", sha)
 	}
 }

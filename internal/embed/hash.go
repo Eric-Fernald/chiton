@@ -2,6 +2,7 @@ package embed
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"strings"
 	"unicode"
@@ -26,8 +27,10 @@ func NewHashEmbedder(dim int) *HashEmbedder {
 	return &HashEmbedder{dim: dim}
 }
 
-func (h *HashEmbedder) Dim() int      { return h.dim }
-func (h *HashEmbedder) Model() string { return "hash" }
+func (h *HashEmbedder) Dim() int { return h.dim }
+
+// Model includes the dimension, so changing embed.dim re-embeds instead of mixing vector sizes.
+func (h *HashEmbedder) Model() string { return fmt.Sprintf("hash-%d", h.dim) }
 
 // Embed returns one normalized vector per input text.
 func (h *HashEmbedder) Embed(_ context.Context, texts []string) ([][]float32, error) {

@@ -19,10 +19,12 @@ type Path struct {
 	Edges []model.Edge `json:"edges"`
 }
 
-// Embedding pairs a node ID with its embedding vector.
+// Embedding pairs a node ID with its embedding vector and what produced it.
 type Embedding struct {
-	NodeID string    `json:"node_id"`
-	Vec    []float32 `json:"vec"`
+	NodeID  string    `json:"node_id"`
+	Vec     []float32 `json:"vec"`
+	Model   string    `json:"model,omitempty"`    // embedder Model(); "" for a vector stored before models were recorded
+	TextSHA string    `json:"text_sha,omitempty"` // hex SHA-256 of the embedded text (embed.TextSHA)
 }
 
 // EmbeddingStore is an optional GraphStore capability that persists node embeddings outside the node JSON,
@@ -35,8 +37,28 @@ type EmbeddingStore interface {
 	AllEmbeddings(ctx context.Context) ([]Embedding, error)
 }
 
-// NodeDeleter is an optional capability for deleting nodes by ID with point lookups, O(K) instead of
-// DeleteBySourceURI's full scan. Callers type-assert it and fall back to DeleteBySourceURI without it.
+// EmbeddingMeta describes a stored embedding without its vector.
+type EmbeddingMeta struct {
+	NodeID  string
+	Model   string // "" when unknown (stored before models were recorded)
+	Dim     int
+	TextSHA string
+}
+
+// EmbeddingMetaLister is an optional EmbeddingStore capability listing embedding metadata without decoding
+// vectors. Callers use the EmbeddingMetas helper.
+type EmbeddingMetaLister interface {
+	EmbeddingMetas(ctx context.Context) ([]EmbeddingMeta, error)
+}
+
+// EmbeddingDeleter is an optional EmbeddingStore capability removing vectors while keeping their nodes.
+type EmbeddingDeleter interface {
+	// DeleteEmbeddings removes the embeddings of ids. Missing IDs are skipped.
+	DeleteEmbeddings(ctx context.Context, ids []string) error
+}
+
+// NodeDeleter is an optional capability for deleting nodes by ID with point lookups. Callers type-assert it and
+// fall back to DeleteBySourceURI without it.
 type NodeDeleter interface {
 	// DeleteByIDs deletes the given nodes plus their embeddings and adjacent
 	// edges. Missing IDs are skipped. Returns the number actually deleted.
@@ -66,6 +88,12 @@ type NodeGetter interface {
 // vectors. Callers use the EmbeddingIDs helper.
 type EmbeddingIDLister interface {
 	EmbeddingIDs(ctx context.Context) ([]string, error)
+}
+
+// KindCounter is an optional capability counting nodes and edges by kind without decoding values. Callers use
+// the CountByKind helper, which falls back to AllNodes/AllEdges without it.
+type KindCounter interface {
+	CountByKind(ctx context.Context) (nodes map[model.NodeKind]int, edges map[model.EdgeKind]int, err error)
 }
 
 // GraphStore is the central abstraction over the graph database. Packages depend on it, never on a
@@ -111,4 +139,27 @@ type GraphStore interface {
 
 	// Close flushes and releases all resources held by the store.
 	Close() error
+}
+
+// SourceUpdate is one source's complete new extraction for ReplaceSources. Nodes may include other sources'
+// nodes (pkg:// stubs, persons), which are only upserted.
+type SourceUpdate struct {
+	URI   string
+	Nodes []model.Node
+	Edges []model.Edge
+	Fresh bool // the caller knows no stored node has source_uri URI, so the prior-node lookup is skipped
+}
+
+// SourceReplacer is an optional capability replacing whole sources in one write batch while keeping edges other
+// sources attached to surviving nodes. Callers use the ReplaceSources helper.
+type SourceReplacer interface {
+	// ReplaceSources applies updates and returns, per update, how many stale nodes it deleted. Update URIs must be
+	// distinct: a repeated URI's prior nodes are diffed against each update separately.
+	ReplaceSources(ctx context.Context, updates []SourceUpdate) ([]int, error)
+}
+
+// Syncer is an optional capability that makes every write so far durable, so a sidecar saved afterwards never
+// records data the store could lose in a crash. Callers use the Sync helper.
+type Syncer interface {
+	Sync() error
 }

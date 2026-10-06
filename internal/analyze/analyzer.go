@@ -2,10 +2,11 @@ package analyze
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"io/fs"
+	"maps"
 	"os"
-	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,9 @@ type Analyzer struct {
 
 	fileRulesOnce sync.Once
 	fileRules     fileRuleSet // AnalyzeFile's rule list, which the fileRuleSet method builds lazily
+
+	rulesMu   sync.Mutex
+	rulesDone map[string]bool // rule node IDs this Analyzer has upserted; rule metadata never changes
 }
 
 // New returns an Analyzer wired to the given store and rule registry.
@@ -45,11 +49,32 @@ type Result struct {
 	RulesRun     int
 	Findings     []Finding
 	Duration     time.Duration
+	Skipped      []string // paths the walk or extractor could not read; the scan went on without them
+
+	rules     []Rule          // rule nodes Record upserts
+	scanned   map[string]bool // file URIs whose resolved findings Record prunes
+	ruleScope map[string]bool // rule IDs Record may prune; nil means every rule
+	prior     *PriorFindings  // prune candidates read before a re-sync; nil queries the store
 }
 
 // Analyze runs FileScope rules over each supported file under root, then GraphScope rules over
 // the whole extracted set, and upserts every finding plus the rules they violated.
 func (a *Analyzer) Analyze(ctx context.Context, root string) (*Result, error) {
+	start := a.now()
+	res, err := a.Scan(ctx, root)
+	if err != nil {
+		return nil, err
+	}
+	if err := a.Record(ctx, res); err != nil {
+		return nil, err
+	}
+	res.Duration = a.now().Sub(start)
+	return res, nil
+}
+
+// Scan is Analyze without the store: it runs every FileScope and GraphScope rule over the supported files
+// under root, stopping once ctx is done, and returns findings that Record can persist.
+func (a *Analyzer) Scan(ctx context.Context, root string) (*Result, error) {
 	start := a.now()
 	rules := a.registry.All()
 
@@ -68,26 +93,64 @@ func (a *Analyzer) Analyze(ctx context.Context, root string) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	findings := append(w.findings, a.matchGraphRules(ctx, graphRules, w.nodes, w.edges)...)
-
-	ids, err := a.persist(ctx, rules, findings)
+	graphFindings, err := a.matchGraphRules(ctx, graphRules, w.nodes, w.edges)
 	if err != nil {
 		return nil, err
 	}
-	// A full Analyze runs every rule, so all deterministic findings for the
-	// scanned files are in scope to prune (ruleScope nil = no restriction).
-	if err := a.pruneResolved(ctx, w.scannedURIs, ids, nil); err != nil {
-		return nil, err
-	}
-
 	return &Result{
 		FilesScanned: w.filesScanned,
 		// Count only rules actually executed here; LLM rules are dispatched
 		// separately via LLMService and are neither FileRule nor GraphRule.
 		RulesRun: len(fileRules) + len(graphRules),
-		Findings: findings,
+		Findings: append(w.findings, graphFindings...),
 		Duration: a.now().Sub(start),
+		Skipped:  w.skipped,
+		rules:    rules,
+		scanned:  w.scannedURIs, // every rule ran, so ruleScope stays nil
 	}, nil
+}
+
+// SourceFile is one file's path and content for ScanSources, such as a blob staged in the git index.
+type SourceFile struct {
+	Path    string
+	Content []byte
+}
+
+// ScanSources runs the FileScope rules over in-memory files without touching the store. GraphScope rules
+// need the whole corpus (a partial one reports live symbols as dead), so they are skipped.
+func (a *Analyzer) ScanSources(ctx context.Context, files []SourceFile) (*Result, error) {
+	start := a.now()
+	res := newFileResult()
+	for _, sf := range files {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		ex := extast.ForFile(sf.Path)
+		if ex == nil {
+			continue
+		}
+		nodes, edges, err := ex.ExtractSource(ctx, sf.Path, sf.Content)
+		if err != nil {
+			res.Skipped = append(res.Skipped, sf.Path)
+			continue
+		}
+		a.matchFile(ctx, newFileTarget(sf.Path, sf.Content, nodes, edges), res)
+	}
+	res.Duration = a.now().Sub(start)
+	return res, nil
+}
+
+// Record upserts res's rule nodes and findings, then deletes the findings of res's files, from the rules
+// res ran, that res no longer holds. The Analyzer needs a store.
+func (a *Analyzer) Record(ctx context.Context, res *Result) error {
+	if a.store == nil {
+		return errors.New("analyze: Record needs an Analyzer with a store")
+	}
+	ids, err := a.persist(ctx, res.rules, res.Findings)
+	if err != nil {
+		return err
+	}
+	return a.pruneResolved(ctx, res.scanned, ids, res.ruleScope, res.prior)
 }
 
 // walkResult accumulates the per-file outputs of walkAndMatch.
@@ -99,6 +162,7 @@ type walkResult struct {
 	// findings for other files alone.
 	scannedURIs  map[string]bool
 	filesScanned int
+	skipped      []string
 }
 
 // walkAndMatch walks root, extracts each supported source file, and runs the
@@ -109,17 +173,7 @@ func (a *Analyzer) walkAndMatch(ctx context.Context, root string, fileRules []Fi
 	for i, fr := range fileRules {
 		langs[i] = fr.Meta().Languages
 	}
-	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			// Skip common noise directories
-			if skipDir(d.Name()) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
+	skipped, walkErr := walkSources(ctx, root, func(path string) error {
 		ft, nodes, ok := loadFileTarget(ctx, path)
 		if !ok {
 			return nil
@@ -143,17 +197,21 @@ func (a *Analyzer) walkAndMatch(ctx context.Context, root string, fileRules []Fi
 	if walkErr != nil {
 		return nil, fmt.Errorf("walk: %w", walkErr)
 	}
+	w.skipped = skipped
 	return w, nil
 }
 
-// matchGraphRules runs the GraphScope rules over the full extracted set.
-func (a *Analyzer) matchGraphRules(ctx context.Context, graphRules []GraphRule, nodes []model.Node, edges []model.Edge) []Finding {
+// matchGraphRules runs the GraphScope rules over the full extracted set, stopping once ctx is done.
+func (a *Analyzer) matchGraphRules(ctx context.Context, graphRules []GraphRule, nodes []model.Node, edges []model.Edge) ([]Finding, error) {
 	gt := GraphTarget{Nodes: nodes, Edges: edges}
 	var findings []Finding
 	for _, gr := range graphRules {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		findings = append(findings, gr.MatchGraph(ctx, gt)...)
 	}
-	return findings
+	return findings, nil
 }
 
 // persist upserts rule nodes (so VIOLATES edges resolve), finding nodes, and VIOLATES and AFFECTS edges.
@@ -162,10 +220,13 @@ func (a *Analyzer) persist(ctx context.Context, rules []Rule, findings []Finding
 	now := a.now()
 
 	nodes := make([]model.Node, 0, len(rules)+len(findings))
-	ruleNodes := make(map[string]string, len(rules)) // maps rule ID to RuleNodeID
+	var fresh []string // rule nodes this call upserts for the first time
 	for _, r := range rules {
 		n := RuleAsNode(r.Meta(), now)
-		ruleNodes[n.Label] = n.ID
+		if a.rulePersisted(n.ID) {
+			continue
+		}
+		fresh = append(fresh, n.ID)
 		nodes = append(nodes, n)
 	}
 	edges := make([]model.Edge, 0, len(findings)*2)
@@ -173,12 +234,7 @@ func (a *Analyzer) persist(ctx context.Context, rules []Rule, findings []Finding
 	for _, f := range findings {
 		id := f.FindingID()
 		ids[id] = true
-		rule, ok := ruleNodes[f.RuleID]
-		if !ok {
-			rule = RuleNodeID(f.RuleID)
-			ruleNodes[f.RuleID] = rule
-		}
-		nodes, edges = f.appendGraph(nodes, edges, id, rule, now)
+		nodes, edges = f.appendGraph(nodes, edges, id, RuleNodeID(f.RuleID), now)
 	}
 	if err := a.store.UpsertNodes(ctx, nodes); err != nil {
 		return nil, fmt.Errorf("upsert nodes: %w", err)
@@ -186,21 +242,47 @@ func (a *Analyzer) persist(ctx context.Context, rules []Rule, findings []Finding
 	if err := a.store.UpsertEdges(ctx, edges); err != nil {
 		return nil, fmt.Errorf("upsert edges: %w", err)
 	}
+	a.markRulesPersisted(fresh)
 	return ids, nil
 }
 
+// rulePersisted reports whether this Analyzer already upserted rule node id.
+func (a *Analyzer) rulePersisted(id string) bool {
+	a.rulesMu.Lock()
+	defer a.rulesMu.Unlock()
+	return a.rulesDone[id]
+}
+
+func (a *Analyzer) markRulesPersisted(ids []string) {
+	a.rulesMu.Lock()
+	defer a.rulesMu.Unlock()
+	if a.rulesDone == nil {
+		a.rulesDone = make(map[string]bool, len(ids))
+	}
+	for _, id := range ids {
+		a.rulesDone[id] = true
+	}
+}
+
+// pruneByURIMax is the scanned-file count up to which pruneResolved queries findings per target_uri, so the
+// store's byte probe skips other files' records undecoded; larger passes load every finding once.
+const pruneByURIMax = 8
+
 // pruneResolved deletes a scanned file's deterministic findings that are missing from newIDs. LLM findings
-// are pruned separately. A non-nil ruleScope limits the delete to the rule IDs that ran.
-func (a *Analyzer) pruneResolved(ctx context.Context, scanned map[string]bool, newIDs map[string]bool, ruleScope map[string]bool) error {
+// are pruned separately. A non-nil ruleScope limits the delete to the rule IDs that ran, and a non-nil prior
+// supplies the candidates instead of a store query.
+func (a *Analyzer) pruneResolved(ctx context.Context, scanned, newIDs, ruleScope map[string]bool, prior *PriorFindings) error {
 	if len(scanned) == 0 {
 		return nil
 	}
-	findings, err := store.NodesMatching(ctx, a.store, store.NodeFilter{
-		Kinds: []model.NodeKind{model.KindFinding},
-		Attrs: map[string]string{"rule_provenance": string(ProvenanceDeterministic)},
-	})
-	if err != nil {
-		return fmt.Errorf("load nodes for prune: %w", err)
+	var findings []model.Node
+	if prior != nil {
+		findings = prior.nodes
+	} else {
+		var err error
+		if findings, err = a.deterministicFindings(ctx, scanned); err != nil {
+			return fmt.Errorf("load nodes for prune: %w", err)
+		}
 	}
 	var stale []model.Node
 	for _, n := range findings {
@@ -215,26 +297,34 @@ func (a *Analyzer) pruneResolved(ctx context.Context, scanned map[string]bool, n
 	return deleteFindingNodes(ctx, a.store, stale)
 }
 
-// deleteFindingNodes removes the nodes and their edges with NodeDeleter when available, else calls
-// DeleteBySourceURI per node. Finding source URIs are unique, so both paths delete exactly these nodes.
+// deterministicFindings loads the deterministic findings that may target a scanned file.
+func (a *Analyzer) deterministicFindings(ctx context.Context, scanned map[string]bool) ([]model.Node, error) {
+	filter := func(uri string) store.NodeFilter {
+		attrs := map[string]string{"rule_provenance": string(ProvenanceDeterministic)}
+		if uri != "" {
+			attrs["target_uri"] = uri
+		}
+		return store.NodeFilter{Kinds: []model.NodeKind{model.KindFinding}, Attrs: attrs}
+	}
+	if len(scanned) > pruneByURIMax {
+		return store.NodesMatching(ctx, a.store, filter(""))
+	}
+	var out []model.Node
+	for _, uri := range slices.Sorted(maps.Keys(scanned)) {
+		ns, err := store.NodesMatching(ctx, a.store, filter(uri))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ns...)
+	}
+	return out, nil
+}
+
+// deleteFindingNodes removes the nodes and their edges via store.DeleteNodes. Finding source URIs are unique, so
+// both of its paths delete exactly these nodes.
 func deleteFindingNodes(ctx context.Context, gs store.GraphStore, nodes []model.Node) error {
-	if len(nodes) == 0 {
-		return nil
-	}
-	if d, ok := gs.(store.NodeDeleter); ok {
-		ids := make([]string, len(nodes))
-		for i, n := range nodes {
-			ids[i] = n.ID
-		}
-		if _, err := d.DeleteByIDs(ctx, ids); err != nil {
-			return fmt.Errorf("prune findings: %w", err)
-		}
-		return nil
-	}
-	for _, n := range nodes {
-		if _, err := gs.DeleteBySourceURI(ctx, n.SourceURI); err != nil {
-			return fmt.Errorf("prune finding %s: %w", n.ID, err)
-		}
+	if _, err := store.DeleteNodes(ctx, gs, nodes); err != nil {
+		return fmt.Errorf("prune findings: %w", err)
 	}
 	return nil
 }

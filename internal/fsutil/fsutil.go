@@ -2,14 +2,43 @@
 package fsutil
 
 import (
+	"fmt"
 	"io/fs"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 )
+
+// ResolveWithin returns p (joined onto root when relative) as a clean absolute path, or an error when its
+// symlink-free form lies outside root's. It keeps p's spelling, so file URIs match those a build over root records.
+func ResolveWithin(root, p string) (string, error) {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	realRoot, err := filepath.EvalSymlinks(absRoot)
+	if err != nil {
+		return "", err
+	}
+	abs := p
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(absRoot, p)
+	}
+	abs = filepath.Clean(abs)
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(realRoot, real)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%s is outside the project root %s", p, absRoot)
+	}
+	return abs, nil
+}
 
 // WriteFileAtomic is os.WriteFile via a unique temp file, fsynced then renamed over path, so no crash or
 // concurrent writer leaves path half-written. The file gets perm minus the umask. path's directory must exist.

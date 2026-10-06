@@ -188,3 +188,16 @@ func TestQueryTokenBudgetTrims(t *testing.T) {
 		t.Fatal("budget trimmed everything; should keep at least one")
 	}
 }
+
+func TestTrimToBudget(t *testing.T) {
+	size := func(n int) int { return n }
+	if got := TrimToBudget([]int{4, 4, 4}, 2, size); len(got) != 2 {
+		t.Errorf("kept %d items in an 8-byte budget, want 2", len(got))
+	}
+	if got := TrimToBudget([]int{100, 1}, 1, size); len(got) != 1 {
+		t.Errorf("kept %d items, want just the first even though it is over budget", len(got))
+	}
+	if got := TrimToBudget([]int{1, 1}, 10, size); len(got) != 2 {
+		t.Errorf("kept %d items, want all when they fit", len(got))
+	}
+}

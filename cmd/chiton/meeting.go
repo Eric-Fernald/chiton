@@ -44,12 +44,9 @@ func meetingFileURI(path string) string {
 	return meeting.MeetingURI("file/" + abs)
 }
 
-// ingestTranscript replaces any prior version of the transcript and upserts its
-// meeting subgraph. Returns the number of nodes written.
+// ingestTranscript replaces any prior version of the transcript with its meeting subgraph, keeping linkage
+// edges on surviving nodes. Returns the number of nodes written.
 func ingestTranscript(ctx context.Context, gs store.GraphStore, tr *meeting.Transcript) (int, error) {
-	if _, err := gs.DeleteBySourceURI(ctx, tr.SourceURI); err != nil {
-		return 0, fmt.Errorf("replace prior meeting: %w", err)
-	}
 	return meeting.Upsert(ctx, gs, tr, time.Now(), "meeting")
 }
 
@@ -249,6 +246,7 @@ so the existing 'chiton extract' / pending_extractions flow extracts its concept
 				Kind:        kind,
 				Author:      author,
 				Contributor: contributor,
+				AllowLocal:  true, // the CLI user names the file; only MCP callers are held to http(s)
 			})
 			if err != nil {
 				return err

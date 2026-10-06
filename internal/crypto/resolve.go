@@ -15,13 +15,13 @@ func ResolveKeyfilePath(chitonDir string) string {
 	return filepath.Join(chitonDir, KeyfileName)
 }
 
-// ResolveKeyForGraph finds a keyfile in graphPath's directory, a .chiton beside that directory, or
-// ./.chiton, then derives the key via GetPassphrase. If none exists it returns (nil, nil, nil) for plaintext.
-func ResolveKeyForGraph(graphPath string) ([]byte, *KeyFile, error) {
+// ResolveKeyForGraph finds a keyfile beside graphPath, in a .chiton beside its directory, or in stateDir
+// (normally config.StateDir()), then derives the key via GetPassphrase. With no keyfile it returns (nil, nil, nil).
+func ResolveKeyForGraph(graphPath, stateDir string) ([]byte, *KeyFile, error) {
 	candidates := []string{
 		ResolveKeyfilePath(filepath.Dir(graphPath)),
 		ResolveKeyfilePath(filepath.Join(filepath.Dir(graphPath), "..", ".chiton")),
-		ResolveKeyfilePath(".chiton"),
+		ResolveKeyfilePath(stateDir),
 	}
 	var found string
 	var kf *KeyFile

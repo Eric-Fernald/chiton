@@ -145,6 +145,7 @@ func signSlack(secret, ts string, body []byte) string {
 func TestEventsURLVerification(t *testing.T) {
 	const secret = "shh"
 	h := NewEventsHandler(secret, nil, nil)
+	defer h.Close()
 	h.now = func() time.Time { return time.Unix(1735689600, 0) }
 
 	body := []byte(`{"type":"url_verification","challenge":"abc123"}`)
@@ -176,6 +177,7 @@ func TestEventsDispatchesMessage(t *testing.T) {
 	req.Header.Set("X-Slack-Signature", signSlack(secret, ts, body))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
+	h.Close() // runs the queued re-ingest
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("code=%d want 200", rec.Code)
@@ -197,6 +199,7 @@ func TestEventsRejectsBadSignature(t *testing.T) {
 	req.Header.Set("X-Slack-Signature", "v0=deadbeef")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
+	h.Close()
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("code=%d want 401", rec.Code)
@@ -219,6 +222,7 @@ func TestEventsRejectsStaleTimestamp(t *testing.T) {
 	req.Header.Set("X-Slack-Signature", signSlack(secret, staleTS, body))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
+	h.Close()
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("code=%d want 401 for stale ts", rec.Code)
@@ -240,6 +244,7 @@ func TestEventsFailsClosedWithoutSecret(t *testing.T) {
 	req.Header.Set("X-Slack-Signature", signSlack("", "1735689600", body))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
+	h.Close()
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("code=%d want 401 (fail closed when no secret configured)", rec.Code)
@@ -463,4 +468,157 @@ func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	b, _ := json.Marshal(v)
 	_, _ = w.Write(b)
+}
+
+// postEvent signs body as Slack would at 1735689600 and serves it, returning the status code.
+func postEvent(t *testing.T, h *EventsHandler, secret, body, retryNum string) int {
+	t.Helper()
+	const ts = "1735689600"
+	req := httptest.NewRequest(http.MethodPost, "/slack/events", strings.NewReader(body))
+	req.Header.Set("X-Slack-Request-Timestamp", ts)
+	req.Header.Set("X-Slack-Signature", signSlack(secret, ts, []byte(body)))
+	if retryNum != "" {
+		req.Header.Set("X-Slack-Retry-Num", retryNum)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec.Code
+}
+
+// TestEventsAcksBeforeIngest checks the 200 goes out while the ingest is still blocked, well inside Slack's 3s.
+func TestEventsAcksBeforeIngest(t *testing.T) {
+	const secret = "topsecret"
+	release := make(chan struct{})
+	h := NewEventsHandler(secret, func(context.Context, MessageEvent) error { <-release; return nil }, nil)
+	h.now = func() time.Time { return time.Unix(1735689600, 0) }
+	body := `{"type":"event_callback","event_id":"Ev1","event":{"type":"message","channel":"C1","user":"U1","text":"hi","ts":"1735689600.000100"}}`
+
+	done := make(chan int, 1)
+	go func() { done <- postEvent(t, h, secret, body, "") }()
+	select {
+	case code := <-done:
+		if code != http.StatusOK {
+			t.Errorf("code=%d want 200", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ServeHTTP blocked on the ingest; Slack retries anything not acked within 3s")
+	}
+	close(release)
+	h.Close()
+}
+
+// TestEventsCoalescesConversationBurst checks a burst in one thread becomes a single re-ingest of the newest event.
+func TestEventsCoalescesConversationBurst(t *testing.T) {
+	prev := eventDebounce
+	eventDebounce = time.Minute // only Close's drain runs the queue, so the burst surely coalesces
+	t.Cleanup(func() { eventDebounce = prev })
+	const secret = "topsecret"
+	var mu sync.Mutex
+	var got []MessageEvent
+	h := NewEventsHandler(secret, func(_ context.Context, ev MessageEvent) error {
+		mu.Lock()
+		defer mu.Unlock()
+		got = append(got, ev)
+		return nil
+	}, nil)
+	h.now = func() time.Time { return time.Unix(1735689600, 0) }
+	for i, ev := range []string{
+		`{"type":"message","channel":"C1","user":"U1","text":"a","ts":"1735689600.000200","thread_ts":"1735689600.000100"}`,
+		`{"type":"message","channel":"C1","user":"U2","text":"b","ts":"1735689600.000300","thread_ts":"1735689600.000100"}`,
+		`{"type":"message","channel":"C1","user":"U1","text":"c","ts":"1735689600.000400","thread_ts":"1735689600.000100"}`,
+		`{"type":"message","channel":"C2","user":"U1","text":"d","ts":"1735689600.000500"}`,
+	} {
+		body := `{"type":"event_callback","event_id":"Ev` + strconv.Itoa(i) + `","event":` + ev + `}`
+		if code := postEvent(t, h, secret, body, ""); code != http.StatusOK {
+			t.Fatalf("event %d: code=%d", i, code)
+		}
+	}
+	h.Close()
+
+	if len(got) != 2 {
+		t.Fatalf("re-ingests = %+v, want 2 (one per conversation)", got)
+	}
+	for _, ev := range got {
+		if ev.ChannelID == "C1" && (ev.Text != "c" || ev.Thread() != "1735689600.000100") {
+			t.Errorf("thread re-ingest used %+v, want the newest event of the thread", ev)
+		}
+	}
+}
+
+func TestEventsDropsRedeliveredEvent(t *testing.T) {
+	prev := eventDebounce
+	eventDebounce = time.Millisecond
+	t.Cleanup(func() { eventDebounce = prev })
+	const secret = "topsecret"
+	var calls atomic.Int32
+	ran := make(chan struct{}, 4)
+	h := NewEventsHandler(secret, func(context.Context, MessageEvent) error {
+		calls.Add(1)
+		ran <- struct{}{}
+		return nil
+	}, nil)
+	h.now = func() time.Time { return time.Unix(1735689600, 0) }
+	body := `{"type":"event_callback","event_id":"Ev1","event":{"type":"message","channel":"C1","user":"U1","text":"hi","ts":"1735689600.000100"}}`
+
+	postEvent(t, h, secret, body, "")
+	select {
+	case <-ran:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first delivery was never ingested")
+	}
+	if code := postEvent(t, h, secret, body, "1"); code != http.StatusOK {
+		t.Fatalf("retry code=%d want 200 (ack so Slack stops retrying)", code)
+	}
+	h.Close()
+	if n := calls.Load(); n != 1 {
+		t.Errorf("onMessage ran %d times, want 1 (the redelivery of Ev1 must be dropped)", n)
+	}
+}
+
+func TestRecentIDsEvictsOldest(t *testing.T) {
+	r := newRecentIDs(2)
+	if !r.add("a") || !r.add("b") || r.add("a") {
+		t.Fatal("a and b must be new once, then a seen")
+	}
+	if !r.add("c") || !r.add("a") {
+		t.Fatal("adding c must evict a, the oldest")
+	}
+	if !r.add("") || !r.add("") {
+		t.Fatal("an empty id is always new")
+	}
+}
+
+// TestEventsCloseCancelsStuckIngest checks Close aborts an ingest that outlives the grace period.
+func TestEventsCloseCancelsStuckIngest(t *testing.T) {
+	prev := closeGrace
+	closeGrace = 20 * time.Millisecond
+	prevDebounce := eventDebounce
+	eventDebounce = time.Millisecond
+	t.Cleanup(func() { closeGrace, eventDebounce = prev, prevDebounce })
+	const secret = "topsecret"
+	started := make(chan struct{})
+	aborted := make(chan error, 1)
+	h := NewEventsHandler(secret, func(ctx context.Context, _ MessageEvent) error {
+		close(started)
+		<-ctx.Done() // stands in for a 429 wait or a slow fetch
+		aborted <- ctx.Err()
+		return ctx.Err()
+	}, nil)
+	h.now = func() time.Time { return time.Unix(1735689600, 0) }
+	body := `{"type":"event_callback","event_id":"Ev1","event":{"type":"message","channel":"C1","user":"U1","text":"hi","ts":"1735689600.000100"}}`
+	postEvent(t, h, secret, body, "")
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the queued ingest never started")
+	}
+	h.Close() // the running ingest blocks until the grace period cancels it
+	select {
+	case err := <-aborted:
+		if err != context.Canceled {
+			t.Errorf("ingest ctx err = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close returned without aborting the stuck ingest")
+	}
 }

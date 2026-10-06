@@ -2,11 +2,14 @@ package mcpsrv
 
 import (
 	"context"
+	"fmt"
+	"slices"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	mcpsdk "github.com/mark3labs/mcp-go/server"
 
 	"github.com/Eric-Fernald/chiton/internal/extract/subagent"
+	"github.com/Eric-Fernald/chiton/internal/graph/model"
 	"github.com/Eric-Fernald/chiton/internal/graph/retrieve"
 )
 
@@ -51,7 +54,7 @@ func semanticSearchTool() mcplib.Tool {
 	)
 }
 
-func semanticSearchHandler(eng *retrieve.Engine) mcpsdk.ToolHandlerFunc {
+func semanticSearchHandler(eng *retrieve.Engine, r redactor) mcpsdk.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		if eng == nil {
 			return mcplib.NewToolResultText("semantic search unavailable — no embeddings indexed. Run 'chiton embed' then restart 'chiton serve'."), nil
@@ -72,25 +75,40 @@ func semanticSearchHandler(eng *retrieve.Engine) mcpsdk.ToolHandlerFunc {
 			return mcplib.NewToolResultErrorFromErr("semantic search failed", err), nil
 		}
 
-		// Lean output: strip embeddings and internal metadata the model doesn't need.
-		labels := make(map[string]string, len(res.Nodes))
-		for _, s := range res.Nodes {
-			labels[s.Node.ID] = s.Node.Label
-		}
+		// Lean output: strip embeddings and internal metadata, and drop nodes whose label names a person.
 		type scoredLean struct {
 			Score float32  `json:"score"`
 			Hop   int      `json:"hop"`
 			Node  leanNode `json:"node"`
 		}
-		nodes := make([]scoredLean, len(res.Nodes))
-		for i, s := range res.Nodes {
-			nodes[i] = scoredLean{Score: s.Score, Hop: s.Hop, Node: toLeanNode(s.Node)}
+		labels := make(map[string]string, len(res.Nodes))
+		nodes := make([]scoredLean, 0, len(res.Nodes))
+		for _, s := range res.Nodes {
+			if r.hidden(s.Node) {
+				continue
+			}
+			labels[s.Node.ID] = s.Node.Label
+			nodes = append(nodes, scoredLean{Score: s.Score, Hop: s.Hop, Node: r.node(s.Node)})
+		}
+		edges := slices.DeleteFunc(res.Edges, func(e model.Edge) bool {
+			_, src := labels[e.Src]
+			_, dst := labels[e.Dst]
+			return !src || !dst
+		})
+		// Recount after redaction, so the summary can't reveal that hidden nodes matched.
+		summary := res.Summary
+		switch {
+		case r.includePII || len(res.Nodes) == 0:
+		case len(nodes) == 0:
+			summary = "no semantic matches"
+		default:
+			summary = fmt.Sprintf("%d nodes, %d edges for %q", len(nodes), len(edges), query)
 		}
 		return jsonResult(struct {
 			Nodes   []scoredLean `json:"nodes"`
 			Edges   []leanEdge   `json:"edges"`
 			Summary string       `json:"summary"`
-		}{nodes, toLeanEdges(res.Edges, labels), res.Summary})
+		}{nodes, toLeanEdges(edges, labels), summary})
 	}
 }
 
@@ -130,7 +148,7 @@ func submitExtractionTool() mcplib.Tool {
 		mcplib.WithDescription("Ingest the results of one extraction task (from pending_extractions). Creates concept nodes and semantic edges tagged INFERRED (or AMBIGUOUS below the confidence threshold). Idempotent: re-submitting the same task is a no-op."),
 		mcplib.WithString("task_id",
 			mcplib.Required(),
-			mcplib.Description("The task spec's id (the source node ID from pending_extractions)"),
+			mcplib.Description("The task spec's id: a doc_section or image node ID from pending_extractions. Concepts that already exist are linked, never overwritten."),
 		),
 		mcplib.WithArray("concepts",
 			mcplib.Required(),

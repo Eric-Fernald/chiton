@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"maps"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -149,6 +150,114 @@ func TestEmbeddingIDsFallbackAgrees(t *testing.T) {
 		ids, err := store.EmbeddingIDs(ctx, es)
 		if err != nil || !slices.Equal(ids, []string{"a", "b"}) {
 			t.Errorf("%s EmbeddingIDs = %v, %v; want [a b]", name, ids, err)
+		}
+	}
+}
+
+func TestCountByKindFallbackAgrees(t *testing.T) {
+	ctx := context.Background()
+	gs := openStore(t)
+	if err := gs.UpsertNodes(ctx, []model.Node{
+		{ID: "a", Kind: model.KindSymbol}, {ID: "b", Kind: model.KindFile}, {ID: "c", Kind: model.KindSymbol},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gs.UpsertEdges(ctx, []model.Edge{
+		{ID: "ab", Src: "a", Dst: "b", Kind: model.EdgeCalls},
+		{ID: "cb", Src: "c", Dst: "b", Kind: model.EdgeReferences},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	wantNodes := map[model.NodeKind]int{model.KindSymbol: 2, model.KindFile: 1}
+	wantEdges := map[model.EdgeKind]int{model.EdgeCalls: 1, model.EdgeReferences: 1}
+	for name, s := range map[string]store.GraphStore{"counter": gs, "fallback": plain{gs}} {
+		nodes, edges, err := store.CountByKind(ctx, s)
+		if err != nil || !maps.Equal(nodes, wantNodes) || !maps.Equal(edges, wantEdges) {
+			t.Errorf("%s CountByKind = %v %v %v, want %v %v", name, nodes, edges, err, wantNodes, wantEdges)
+		}
+	}
+}
+
+// TestReplaceSourcesBatch replaces two sources in one call, one of them Fresh, through SourceReplacer and through
+// the DeleteBySourceURI fallback, which counts every prior node of the source as deleted, kept ones included.
+func TestReplaceSourcesBatch(t *testing.T) {
+	ctx := context.Background()
+	const x, y = "file:///x.go", "file:///y.go"
+	for name, tc := range map[string]struct {
+		wrap        func(store.GraphStore) store.GraphStore
+		wantDeleted []int
+	}{
+		"replacer": {func(gs store.GraphStore) store.GraphStore { return gs }, []int{1, 0}},
+		"fallback": {func(gs store.GraphStore) store.GraphStore { return plain{gs} }, []int{2, 0}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			gs := openStore(t)
+			s := tc.wrap(gs)
+			if _, err := store.ReplaceSources(ctx, s, store.SourceUpdate{URI: x, Nodes: []model.Node{
+				{ID: "xf", Kind: model.KindFile, SourceURI: x}, {ID: "old", Kind: model.KindSymbol, SourceURI: x},
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			deleted, err := store.ReplaceSources(ctx, s,
+				store.SourceUpdate{URI: x, Nodes: []model.Node{
+					{ID: "xf", Kind: model.KindFile, SourceURI: x}, {ID: "new", Kind: model.KindSymbol, SourceURI: x},
+				}},
+				store.SourceUpdate{URI: y, Fresh: true,
+					Nodes: []model.Node{{ID: "yf", Kind: model.KindFile, SourceURI: y}},
+					Edges: []model.Edge{{ID: "yx", Src: "yf", Dst: "new", Kind: model.EdgeReferences}}},
+			)
+			if err != nil || !slices.Equal(deleted, tc.wantDeleted) {
+				t.Fatalf("ReplaceSources = %v, %v; want %v", deleted, err, tc.wantDeleted)
+			}
+			nodes, err := gs.AllNodes(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ids []string
+			for _, n := range nodes {
+				ids = append(ids, n.ID)
+			}
+			slices.Sort(ids)
+			if want := []string{"new", "xf", "yf"}; !slices.Equal(ids, want) {
+				t.Errorf("nodes %v, want %v", ids, want)
+			}
+			if edges, err := gs.AllEdges(ctx); err != nil || len(edges) != 1 || edges[0].ID != "yx" {
+				t.Errorf("edges %v, %v; want only yx", edges, err)
+			}
+		})
+	}
+}
+
+func TestDeleteNodesFallbackAgrees(t *testing.T) {
+	ctx := context.Background()
+	for name, wrap := range map[string]func(*badger.Store) store.GraphStore{
+		"deleter":  func(s *badger.Store) store.GraphStore { return s },
+		"fallback": func(s *badger.Store) store.GraphStore { return plain{s} },
+	} {
+		gs := openStore(t)
+		nodes := []model.Node{{ID: "1", SourceURI: "u://1"}, {ID: "2", SourceURI: "u://2"}, {ID: "3", SourceURI: "u://3"}}
+		if err := gs.UpsertNodes(ctx, nodes); err != nil {
+			t.Fatal(err)
+		}
+		if n, err := store.DeleteNodes(ctx, wrap(gs), nodes[:2]); err != nil || n != 2 {
+			t.Errorf("%s DeleteNodes = %d, %v; want 2, nil", name, n, err)
+		}
+		if left, _ := gs.AllNodes(ctx); len(left) != 1 || left[0].ID != "3" {
+			t.Errorf("%s left %v, want only node 3", name, left)
+		}
+	}
+}
+
+func TestEmbeddingMetasFallbackAgrees(t *testing.T) {
+	ctx := context.Background()
+	gs := openStore(t)
+	if err := gs.UpsertEmbeddings(ctx, []store.Embedding{{NodeID: "b", Vec: []float32{1}, Model: "m"}, {NodeID: "a", Vec: []float32{2, 3}}}); err != nil {
+		t.Fatal(err)
+	}
+	want := []store.EmbeddingMeta{{NodeID: "a", Dim: 2}, {NodeID: "b", Model: "m", Dim: 1}}
+	for name, es := range map[string]store.EmbeddingStore{"lister": gs, "fallback": plainEmb{gs}} {
+		if got, err := store.EmbeddingMetas(ctx, es); err != nil || !slices.Equal(got, want) {
+			t.Errorf("%s EmbeddingMetas = %+v, %v; want %+v", name, got, err, want)
 		}
 	}
 }

@@ -4,15 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"math/rand"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -24,7 +25,6 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/config"
 	chitoncrypto "github.com/Eric-Fernald/chiton/internal/crypto"
 	"github.com/Eric-Fernald/chiton/internal/embed"
-	extast "github.com/Eric-Fernald/chiton/internal/extract/ast"
 	"github.com/Eric-Fernald/chiton/internal/extract/meeting"
 	"github.com/Eric-Fernald/chiton/internal/extract/subagent"
 	"github.com/Eric-Fernald/chiton/internal/graph/cluster"
@@ -33,6 +33,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
 	badgerstore "github.com/Eric-Fernald/chiton/internal/graph/store/badger"
 	"github.com/Eric-Fernald/chiton/internal/hooks"
+	"github.com/Eric-Fernald/chiton/internal/ingest"
 	urlingest "github.com/Eric-Fernald/chiton/internal/ingest/url"
 	"github.com/Eric-Fernald/chiton/internal/install"
 	mcpsrv "github.com/Eric-Fernald/chiton/internal/mcp"
@@ -71,8 +72,8 @@ so they spend fewer tokens navigating architecture, docs, and prior tool calls.`
 	return root
 }
 
-// newEmbedder constructs the configured embedding provider, with optional
-// provider/model overrides from CLI flags (empty = use config).
+// newEmbedder constructs the configured embedding provider, with optional provider/model overrides from CLI flags
+// (empty = use config). It refuses an Ollama endpoint that the project's .chitonrc points off-device.
 func newEmbedder(cfg *config.Config, providerOverride, modelOverride string) (embed.Embedder, error) {
 	provider := cfg.Embed.Provider
 	if providerOverride != "" {
@@ -81,6 +82,12 @@ func newEmbedder(cfg *config.Config, providerOverride, modelOverride string) (em
 	model := cfg.Embed.Model
 	if modelOverride != "" {
 		model = modelOverride
+	}
+	// Only the hash provider never contacts Endpoint, so every other provider is checked.
+	if strings.ToLower(strings.TrimSpace(provider)) != "hash" {
+		if err := cfg.Embed.CheckEndpoint(); err != nil {
+			return nil, err
+		}
 	}
 	return embed.New(embed.Config{
 		Provider: provider,
@@ -251,7 +258,7 @@ func initCmd() *cobra.Command {
 Run this once at the root of each repository you want to index with chiton.
 After init, run "chiton build ." to populate the graph.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			chitonDir := filepath.Join(dir, ".chiton")
+			chitonDir := filepath.Join(dir, config.StateDirName)
 			out := cmd.OutOrStdout()
 
 			created := 0
@@ -288,6 +295,7 @@ After init, run "chiton build ." to populate the graph.`,
 
 			if !encrypt {
 				fmt.Fprintln(out, "init: note: encryption disabled (--encrypt=false); graph will be stored in plaintext")
+				fmt.Fprintf(out, "init: note: set %s=1 to hide the per-command plaintext notice\n", plaintextOKEnv)
 				fmt.Fprintf(out, "init: done - %d file(s) created, %d skipped\n", created, skipped)
 				fmt.Fprintf(out, "init: next step: chiton build .\n")
 				return nil
@@ -305,18 +313,21 @@ After init, run "chiton build ." to populate the graph.`,
 				if err != nil {
 					return err
 				}
+				// Derive before saving so the keyfile carries a verifier: a later typo then fails clearly instead
+				// of creating the store under the wrong key. Argon2id at 64 MiB takes about a second.
+				key, err := kf.DeriveKey(passphrase)
+				if err != nil {
+					return fmt.Errorf("derive key: %w", err)
+				}
+				kf.SetVerifier(key)
 				if err := kf.Save(keyfilePath, false); err != nil {
 					return err
-				}
-				// Derive once to surface any KDF issues immediately and warm
-				// the password-derivation path (Argon2id at 64 MiB takes ~1s).
-				if _, err := kf.DeriveKey(passphrase); err != nil {
-					return fmt.Errorf("derive key: %w", err)
 				}
 				fmt.Fprintf(out, "init: created %s\n", keyfilePath)
 				fmt.Fprintln(out, "init: passphrase set. Subsequent commands read CHITON_PASSPHRASE from the environment or prompt interactively.")
 				created++
 			}
+			fmt.Fprintf(out, "init: note: an assistant-launched 'chiton serve --stdio' cannot prompt; set %s in the environment that starts your assistant or its MCP connection will fail\n", chitoncrypto.EnvVarPassphrase)
 
 			fmt.Fprintf(out, "init: done - %d file(s) created, %d skipped\n", created, skipped)
 			fmt.Fprintf(out, "init: next step: chiton build .\n")
@@ -329,22 +340,126 @@ After init, run "chiton build ." to populate the graph.`,
 	return cmd
 }
 
+// storeKeyInfo is a graph's resolved encryption; every field is nil for a plaintext store.
+type storeKeyInfo struct {
+	key     []byte                // Badger store key
+	fileKey []byte                // seals sidecar files, derived from key
+	kf      *chitoncrypto.KeyFile // the keyfile key came from
+}
+
+// storeKeys memoises resolveStoreKey by graph path.
+var storeKeys sync.Map
+
+// resolveStoreKey derives graphPath's keys once per process, so opening the store and its cluster sidecar
+// prompts for the passphrase, and runs Argon2id, only once.
+func resolveStoreKey(graphPath string) (storeKeyInfo, error) {
+	if v, ok := storeKeys.Load(graphPath); ok {
+		return v.(storeKeyInfo), nil
+	}
+	key, kf, err := chitoncrypto.ResolveKeyForGraph(graphPath, config.StateDir())
+	if err != nil {
+		return storeKeyInfo{}, passphraseHint(err)
+	}
+	info := storeKeyInfo{key: key, kf: kf}
+	if key != nil {
+		if info.fileKey, err = chitoncrypto.FileKey(key); err != nil {
+			return storeKeyInfo{}, err
+		}
+	}
+	storeKeys.Store(graphPath, info)
+	return info, nil
+}
+
 // openGraphStore opens the badger store with encryption if a keyfile is
 // detected next to it. readOnly chooses between Open and OpenReadOnly.
 func openGraphStore(graphPath string, readOnly bool) (*badgerstore.Store, error) {
-	key, _, err := chitoncrypto.ResolveKeyForGraph(graphPath)
+	info, err := resolveStoreKey(graphPath)
 	if err != nil {
 		return nil, fmt.Errorf("open store: resolve encryption key: %w", err)
+	}
+	if info.key == nil {
+		if msg := plaintextNotice(graphPath); msg != "" {
+			fmt.Fprintln(os.Stderr, msg)
+		}
 	}
 	open := badgerstore.OpenWith
 	if readOnly {
 		open = badgerstore.OpenReadOnlyWith
 	}
-	gs, err := open(graphPath, badgerstore.Options{EncryptionKey: key})
+	gs, err := open(graphPath, badgerstore.Options{EncryptionKey: info.key})
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w", err)
 	}
+	// Badger rejects a wrong key for an existing store, so a pre-verifier keyfile can now record one.
+	if info.kf != nil {
+		if err := info.kf.RecordVerifier(info.key); err != nil {
+			fmt.Fprintf(os.Stderr, "chiton: warning: could not add a passphrase verifier to the keyfile: %v\n", err)
+		}
+	}
+	if !readOnly {
+		if err := ensureOutGitignore(filepath.Dir(graphPath)); err != nil {
+			gs.Close()
+			return nil, fmt.Errorf("open store: %w", err)
+		}
+	}
 	return gs, nil
+}
+
+// plaintextOKEnv silences the notice openGraphStore prints for a store with no keyfile.
+const plaintextOKEnv = "CHITON_PLAINTEXT_OK"
+
+// plaintextNotice returns the one-line notice for opening graphPath unencrypted, or "" when plaintextOKEnv is set.
+func plaintextNotice(graphPath string) string {
+	if os.Getenv(plaintextOKEnv) != "" {
+		return ""
+	}
+	return fmt.Sprintf("chiton: note: graph store %s is not encrypted (no keyfile found); docs/SECURITY.md section 2 explains how to encrypt it. Set %s=1 to hide this note.", graphPath, plaintextOKEnv)
+}
+
+// ensureOutGitignore writes a "*" .gitignore into outDir when missing, so the graph is never committed. Only a
+// directory named chiton-out is touched, since a custom graph_path may share its directory with tracked files.
+func ensureOutGitignore(outDir string) error {
+	if filepath.Base(outDir) != "chiton-out" {
+		return nil
+	}
+	p := filepath.Join(outDir, ".gitignore")
+	if _, err := os.Stat(p); err == nil {
+		return nil
+	}
+	if err := os.WriteFile(p, []byte("*\n"), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", p, err)
+	}
+	return nil
+}
+
+// loadClusterSidecar reads graphPath's cluster sidecar, unsealing it when the store is encrypted. A missing
+// sidecar is (nil, nil).
+func loadClusterSidecar(graphPath string) (*cluster.Results, error) {
+	info, err := resolveStoreKey(graphPath)
+	if err != nil {
+		return nil, err
+	}
+	return cluster.LoadSidecar(cluster.SidecarPath(graphPath), info.fileKey)
+}
+
+// writeClusterSidecar writes r beside graphPath, sealed when the store is encrypted, and returns the sidecar path.
+func writeClusterSidecar(graphPath string, r *cluster.Results) (string, error) {
+	info, err := resolveStoreKey(graphPath)
+	if err != nil {
+		return "", err
+	}
+	path := cluster.SidecarPath(graphPath)
+	return path, cluster.WriteSidecar(path, r, info.fileKey)
+}
+
+// passphraseHint adds the fix for a missing passphrase, which an assistant-launched server hits because it has
+// no terminal to prompt on. Other errors pass through unchanged.
+func passphraseHint(err error) error {
+	if !errors.Is(err, chitoncrypto.ErrNoPassphrase) {
+		return err
+	}
+	return fmt.Errorf("%w\n  fix: set %s in the environment that starts your assistant (for example your shell profile), "+
+		"then restart the assistant. Never put the passphrase in .mcp.json or any file in the repository", err, chitoncrypto.EnvVarPassphrase)
 }
 
 // loadStore loads the config and opens its graph store. The caller must Close the store.
@@ -360,11 +475,15 @@ func loadStore(readOnly bool) (*config.Config, *badgerstore.Store, error) {
 	return cfg, gs, nil
 }
 
-// loadBuildCache loads the content-hash cache that build and sync share beside the graph store.
-func loadBuildCache(graphPath string) (*cache.Cache, error) {
-	ch, err := cache.Load(filepath.Join(filepath.Dir(graphPath), "cache.json"))
+// loadBuildCache loads the content-hash cache that build and sync share beside the graph store, noting on
+// errOut when it belonged to another store and every file will be re-extracted.
+func loadBuildCache(graphPath, storeEpoch string, errOut io.Writer) (*cache.Cache, error) {
+	ch, err := cache.Load(filepath.Join(filepath.Dir(graphPath), "cache.json"), storeEpoch)
 	if err != nil {
 		return nil, fmt.Errorf("open cache: %w", err)
+	}
+	if ch.Discarded() {
+		fmt.Fprintln(errOut, "chiton: the content cache was written for a different graph store; re-extracting every file")
 	}
 	return ch, nil
 }
@@ -431,7 +550,8 @@ func errLogf(cmd *cobra.Command) func(format string, args ...any) {
 }
 
 func buildCmd() *cobra.Command {
-	return &cobra.Command{
+	var prune bool
+	cmd := &cobra.Command{
 		Use:   "build <path>",
 		Short: "Walk a directory and extract its graph",
 		Args:  cobra.ExactArgs(1),
@@ -451,79 +571,27 @@ func buildCmd() *cobra.Command {
 			}
 			defer gs.Close()
 
-			ch, err := loadBuildCache(cfg.GraphPath)
+			ch, err := loadBuildCache(cfg.GraphPath, gs.Epoch(), cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}
 
+			// Build is SyncDir without re-embed, re-analyze, or re-cluster. The analyzer only prunes a deleted
+			// file's findings; with Reanalyze off it never re-runs rules.
 			start := time.Now()
-			var scanned, skipped, totalNodes, totalEdges int
-			ctx := cmd.Context()
-
-			walkErr := filepath.WalkDir(args[0], func(path string, d fs.DirEntry, err error) error {
-				// Stop promptly on Ctrl-C (root context cancelled) so the
-				// deferred store close and the cache save below still run.
-				if cerr := ctx.Err(); cerr != nil {
-					return cerr
-				}
-				if err != nil {
-					// A traversal error (e.g. permission denied) shouldn't abort the build and
-					// discard cache progress. Log it and keep indexing.
-					fmt.Fprintf(os.Stderr, "chiton: skip %s: %v\n", path, err)
-					return nil
-				}
-				ex := extast.ForFile(path)
-				if d.IsDir() || ex == nil {
-					return nil
-				}
-				scanned++
-
-				content, err := os.ReadFile(path)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "chiton: skip %s: %v\n", path, err)
-					return nil
-				}
-				hexSum := model.ContentSHA(content)
-				uri := model.FileURI(path)
-
-				if !ch.Changed(uri, hexSum) {
-					skipped++
-					return nil
-				}
-
-				nodes, edges, err := ex.ExtractSource(ctx, path, content)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "chiton: skip %s: %v\n", path, err)
-					return nil
-				}
-
-				if err := gs.UpsertNodes(ctx, nodes); err != nil {
-					return fmt.Errorf("upsert nodes for %s: %w", path, err)
-				}
-				if err := gs.UpsertEdges(ctx, edges); err != nil {
-					return fmt.Errorf("upsert edges for %s: %w", path, err)
-				}
-
-				ch.Mark(uri, hexSum)
-				totalNodes += len(nodes)
-				totalEdges += len(edges)
-				return nil
-			})
-			// Persist cache progress even if the walk aborted (e.g. an upsert
-			// error), so a partial build still skips files already indexed.
-			saveErr := ch.Save()
-			if walkErr != nil {
-				return walkErr
+			eng := ingest.New(gs, ch, ingest.Config{GraphPath: cfg.GraphPath, NoRecluster: true}, nil,
+				analyze.New(gs, nil), errLogf(cmd))
+			sum, err := eng.SyncDir(cmd.Context(), args[0], prune)
+			if err != nil {
+				return err
 			}
-			if saveErr != nil {
-				return fmt.Errorf("save cache: %w", saveErr)
-			}
-
 			fmt.Fprintf(out, "build: done - %d files scanned, %d skipped (unchanged), %d nodes, %d edges [%s]\n",
-				scanned, skipped, totalNodes, totalEdges, time.Since(start).Round(time.Millisecond))
+				sum.Scanned, sum.Unchanged, sum.Nodes, sum.Edges, time.Since(start).Round(time.Millisecond))
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&prune, "prune", true, "Delete nodes for files under the tree that no longer exist")
+	return cmd
 }
 
 func queryCmd() *cobra.Command {
@@ -792,9 +860,10 @@ func clusterCmd() *cobra.Command {
 		Short: "Run Leiden community detection and betweenness metrics on the graph",
 		Long: `Run Leiden community detection and betweenness metrics on the graph.
 
-Results are written to a JSON sidecar file (chiton-out/cluster.json) so this
-command can run while chiton serve is active - no write lock on the store is
-needed. Restart chiton serve after clustering to load the new results.`,
+Results are written to a JSON sidecar file (chiton-out/cluster.json). The
+store opens read-only, so this runs beside a read-only 'chiton serve', but not
+while a writer ('sync watch', 'build', 'serve --writable') holds the store.
+Restart chiton serve after clustering to load the new results.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := config.Load()
 			if err != nil {
@@ -803,7 +872,7 @@ needed. Restart chiton serve after clustering to load the new results.`,
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "cluster: reading graph at %s\n", cfg.GraphPath)
 
-			// Open read-only so this command can run while chiton serve is active.
+			// Open read-only so this runs beside a read-only chiton serve.
 			gs, err := openGraphStore(cfg.GraphPath, true)
 			if err != nil {
 				return err
@@ -824,8 +893,8 @@ needed. Restart chiton serve after clustering to load the new results.`,
 			start := time.Now()
 			results := cluster.Full(nodes, edges, resolution, rand.New(rand.NewSource(seed)))
 
-			sidecarPath := cluster.SidecarPath(cfg.GraphPath)
-			if err := cluster.WriteSidecar(sidecarPath, results); err != nil {
+			sidecarPath, err := writeClusterSidecar(cfg.GraphPath, results)
+			if err != nil {
 				return err
 			}
 
@@ -863,21 +932,32 @@ func serveCmd() *cobra.Command {
 	var unixPath string
 	var writable bool
 	var graphPath string
+	var allowOrigins []string
+	var includePII bool
 
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the MCP server",
-		Long: `Start the MCP server over one of three transports (identical tool surface):
-  --stdio        assistant-launched (the assistant starts/stops the process)
+		Long: `Start the MCP server. stdio is the default; --http or --unix runs a shared
+daemon instead (identical tool surface):
+  --stdio        assistant-launched (the default; kept for existing configs)
   --http <addr>  HTTP + SSE — a shared daemon across sessions, or for debugging
-                 (default 127.0.0.1:7474; non-loopback binds print a warning)
+                 (e.g. 127.0.0.1:7474; non-loopback binds print a warning).
+                 Clients send 'Authorization: Bearer <token>'; the token is
+                 written to <graph dir>/mcp-token at start (or pinned with
+                 CHITON_MCP_TOKEN). Browser origins are refused unless listed
+                 with --allow-origin.
   --unix <path>  a Unix domain socket — low-latency shared daemon (Linux/macOS)
 
-By default the store opens read-only so 'chiton build', 'embed', and 'cluster'
-can run concurrently; the read tools (semantic_search, pending_extractions)
-work in this mode. Pass --writable to allow the submit_extraction write tool
-over MCP (this takes the store's write lock, so concurrent build/embed cannot
-run). The 'chiton extract submit' CLI is the alternative write path.
+By default the store opens read-only, and other read-only commands (query,
+cluster, search, report) run beside it; the read tools (semantic_search,
+pending_extractions) work in this mode. Writers (build, embed, sync, analyze,
+the CLI submit commands) may run beside a read-only server on Linux/macOS,
+which keeps serving its startup snapshot until restarted; on Windows they fail
+fast with "in use by another chiton process" until the server exits. The
+server itself fails fast while a writer holds the store. Pass --writable to
+allow the submit_* write tools over MCP; the server then holds the store
+exclusively. The 'chiton extract submit' CLI is the alternative write path.
 
 Pass --graph to point at a specific store; this is what 'chiton install'
 records in the MCP config so the server uses the same store as 'chiton build'.`,
@@ -898,36 +978,40 @@ records in the MCP config so the server uses the same store as 'chiton build'.`,
 			}
 			defer gs.Close()
 
-			clusterResults, err := cluster.LoadSidecar(cluster.SidecarPath(cfg.GraphPath))
+			clusterResults, err := loadClusterSidecar(cfg.GraphPath)
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "serve: warning: could not load cluster sidecar: %v\n", err)
 			}
 
 			deps := buildSemanticDeps(cmd, cfg, gs, clusterResults)
+			deps.IncludePII = includePII
 			s := mcpsrv.New(gs, clusterResults, deps)
 
 			// All three transports expose the same tool set.
-			switch {
-			case stdio:
-				return mcpsdk.ServeStdio(s)
-			case unixPath != "":
+			switch transportFor(stdio, unixPath, cmd.Flags().Changed("http")) {
+			case "unix":
 				return serveUnix(cmd, mcpsdk.NewSSEServer(s), unixPath)
+			case "http":
+				// No TLS, so warn without blocking on a wildcard bind.
+				warnIfNonLoopback(cmd.ErrOrStderr(), addr,
+					"the MCP server over plain HTTP — its bearer token and the entire graph (code, meetings, emails, PII) would cross the network unencrypted")
+				return serveHTTP(cmd, s, addr, serveTokenPath(cfg.GraphPath), allowOrigins)
 			default:
-				// The MCP server has no authentication, so warn without blocking on a wildcard bind.
-				warnIfNonLoopback(cmd.ErrOrStderr(),
-					addr, "the MCP server, which has NO authentication — the entire graph (code, meetings, emails, PII) would be readable by anyone on the network")
-				sse := mcpsdk.NewSSEServer(s)
-				fmt.Fprintf(cmd.OutOrStdout(), "serve: listening on %s (SSE)\n", addr)
-				return serveUntilDone(cmd.Context(), func() error { return sse.Start(addr) }, sse.Shutdown)
+				if !stdio {
+					fmt.Fprintln(cmd.ErrOrStderr(), "serve: speaking MCP over stdio (the default); pass --http 127.0.0.1:7474 to run the HTTP daemon")
+				}
+				return mcpsdk.ServeStdio(s)
 			}
 		},
 	}
 
-	cmd.Flags().BoolVar(&stdio, "stdio", false, "serve over stdio (for MCP assistants)")
-	cmd.Flags().StringVar(&addr, "http", "127.0.0.1:7474", "HTTP/SSE listen address (loopback by default; shared daemon / debug)")
+	cmd.Flags().BoolVar(&stdio, "stdio", false, "serve over stdio (the default; kept for existing configs)")
+	cmd.Flags().StringVar(&addr, "http", "127.0.0.1:7474", "serve HTTP/SSE on this address instead of stdio, e.g. 127.0.0.1:7474 (shared daemon / debug)")
 	cmd.Flags().StringVar(&unixPath, "unix", "", "serve over a Unix domain socket at this path (Linux/macOS shared daemon)")
-	cmd.Flags().BoolVar(&writable, "writable", false, "open the store read-write so submit_extraction works over MCP (disables concurrent build/embed)")
+	cmd.Flags().BoolVar(&writable, "writable", false, "open the store read-write so the submit_* tools work over MCP (no other chiton process can open the store meanwhile)")
 	cmd.Flags().StringVar(&graphPath, "graph", "", "Graph store path to serve (default: configured/built-in graph_path)")
+	cmd.Flags().StringSliceVar(&allowOrigins, "allow-origin", nil, "browser Origin allowed to call the HTTP transport, e.g. http://localhost:5173 (repeatable; default none)")
+	cmd.Flags().BoolVar(&includePII, "include-pii", false, "return people's names and email addresses from the generic graph tools (redacted by default)")
 	return cmd
 }
 
@@ -938,16 +1022,19 @@ func buildSemanticDeps(cmd *cobra.Command, cfg *config.Config, gs store.GraphSto
 
 	// Wire the store-only services first so a misconfigured embedder can't disable them.
 	var deps mcpsrv.Deps
-	deps.LLM = analyze.NewLLMService(gs, nil, cfg.Semantic.ConfidenceThreshold, chitonDir)
-	deps.BaselineDir = analyze.BaselineDir(chitonDir)
+	deps.LLM = analyze.NewLLMService(gs, nil, cfg.Semantic.ConfidenceThreshold, config.StateDir())
+	deps.BaselineDir = analyze.BaselineDir(config.StateDir())
 	// Phase 4: meeting→code linkage (read pending always; submit guarded by the
 	// store's read-only flag) and URL ingest (add_url; also read-only-guarded).
 	deps.MeetingLinker = meeting.NewLinkService(gs, cfg.Semantic.ConfidenceThreshold)
 	deps.URLIngester = urlingest.New(gs)
+	deps.ProjectRoot = config.ProjectDir()
 
 	emb, err := newEmbedder(cfg, "", "")
 	if err != nil {
+		// Extraction needs no embedder, so a refused endpoint disables only embeddings.
 		fmt.Fprintf(errOut, "serve: warning: embeddings disabled: %v\n", err)
+		deps.Extractor = subagent.New(gs, nil, cfg.Semantic.ConfidenceThreshold)
 		return deps
 	}
 	deps.Extractor = subagent.New(gs, emb, cfg.Semantic.ConfidenceThreshold)
@@ -961,12 +1048,13 @@ func buildSemanticDeps(cmd *cobra.Command, cfg *config.Config, gs store.GraphSto
 		fmt.Fprintf(errOut, "serve: warning: could not load embeddings: %v\n", err)
 		return deps
 	}
-	if len(embs) == 0 {
-		fmt.Fprintln(errOut, "serve: note: no embeddings indexed — semantic_search disabled (run 'chiton embed')")
+	logf := func(format string, args ...any) { fmt.Fprintf(errOut, format+"\n", args...) }
+	if embs = keepModel(embs, emb.Model(), "serve", logf); len(embs) == 0 {
+		fmt.Fprintln(errOut, "serve: note: no embeddings for the configured model — semantic_search disabled (run 'chiton embed')")
 		return deps
 	}
-	logf := func(format string, args ...any) { fmt.Fprintf(errOut, format+"\n", args...) }
-	idx, _, err := serveIndex(cmd.Context(), cfg.Vector, embs, es.AllEmbeddings, savedIndexFor(cfg.GraphPath, gs), logf)
+	reload := modelEmbeddings(es, emb.Model())
+	idx, _, err := serveIndex(cmd.Context(), cfg.Vector, embs, reload, savedIndexFor(cfg.GraphPath, gs), logf)
 	if err != nil {
 		fmt.Fprintf(errOut, "serve: warning: semantic_search disabled: %v\n", err)
 		return deps
@@ -992,7 +1080,7 @@ Requires a prior 'chiton cluster' run.`,
 				return err
 			}
 
-			clusterResults, err := cluster.LoadSidecar(cluster.SidecarPath(cfg.GraphPath))
+			clusterResults, err := loadClusterSidecar(cfg.GraphPath)
 			if err != nil {
 				return fmt.Errorf("load cluster sidecar: %w", err)
 			}
@@ -1167,8 +1255,12 @@ func hooksRunCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Run one hook stage (invoked by the installed git hook script)",
-		Long: `Read .chiton/hooks.yaml, run the analyzer over the workspace, and exit
-non-zero if any finding crosses the stage's block-on threshold.
+		Long: `Read .chiton/hooks.yaml and gate one stage in memory: pre-commit checks the
+content staged for the commit (file rules only), pre-push scans the whole tree.
+It exits non-zero only when a finding crosses the stage's block-on threshold. A
+bad policy file falls back to the defaults, and a timeout (timeout-seconds), a
+git error, or an unusable graph store prints a warning and lets the commit or
+push through. Findings are recorded when the store opens without prompting.
 
 This is what the installed .git/hooks/pre-commit and pre-push scripts call.
 You usually don't invoke it directly.`,
@@ -1177,19 +1269,14 @@ You usually don't invoke it directly.`,
 			if !slices.Contains(hooks.Stages(), stage) {
 				return fmt.Errorf("unknown stage %q - supported: pre-commit, pre-push", stageRaw)
 			}
+			errOut := cmd.ErrOrStderr()
 
-			hooksYaml := filepath.Join(dir, ".chiton", "hooks.yaml")
-			cfg, err := hooks.Load(hooksYaml)
+			// Load falls back to the default policy on a bad file, so warn and carry on with it.
+			cfg, err := hooks.Load(filepath.Join(dir, config.StateDirName, "hooks.yaml"))
 			if err != nil {
-				return err
+				fmt.Fprintf(errOut, "chiton %s: warning: %v; using the default policy\n", stage, err)
 			}
 			stageCfg := cfg.For(stage)
-
-			_, gs, err := loadStore(false)
-			if err != nil {
-				return err
-			}
-			defer gs.Close()
 
 			ctx := cmd.Context()
 			if stageCfg.TimeoutSeconds > 0 {
@@ -1198,15 +1285,17 @@ You usually don't invoke it directly.`,
 				defer cancel()
 			}
 
-			res, err := hooks.Run(ctx, gs, hooks.RunOptions{
-				Stage:  stage,
-				Config: stageCfg,
-				Root:   dir,
-			})
+			res, err := hooks.Run(ctx, hooks.RunOptions{Stage: stage, Config: stageCfg, Root: dir})
 			if err != nil {
-				return err
+				// Only a finding may block a commit or push; a broken or slow analysis warns and lets it through.
+				if errors.Is(err, context.DeadlineExceeded) {
+					err = fmt.Errorf("analysis exceeded timeout-seconds (%d)", stageCfg.TimeoutSeconds)
+				}
+				fmt.Fprintf(errOut, "chiton %s: warning: %v; not blocking\n", stage, err)
+				return nil
 			}
 			hooks.FormatResult(cmd.OutOrStdout(), res)
+			recordHookScan(ctx, errOut, stage, res.Scan)
 			if res.Blocks() {
 				return fmt.Errorf("chiton %s: blocked by %d finding(s) at or above %q",
 					res.Stage, res.BlockingCount, res.BlockingMin)
@@ -1217,6 +1306,27 @@ You usually don't invoke it directly.`,
 	cmd.Flags().StringVar(&dir, "dir", ".", "Repository root")
 	cmd.Flags().StringVar(&stageRaw, "stage", "pre-commit", "Hook stage to execute")
 	return cmd
+}
+
+// recordHookScan persists a hook's findings when the store opens without creating it or prompting. A missing,
+// locked, or passphrase-protected store only prints a note, since the gate already ran in memory.
+func recordHookScan(ctx context.Context, w io.Writer, stage hooks.Stage, scan *analyze.Result) {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(w, "chiton %s: note: findings not recorded (%v)\n", stage, err)
+		return
+	}
+	if _, err := os.Stat(cfg.GraphPath); err != nil {
+		return // no graph yet, and a hook must not create one
+	}
+	gs, err := openGraphStore(cfg.GraphPath, false)
+	if err == nil {
+		defer gs.Close()
+		err = analyze.New(gs, nil).Record(ctx, scan)
+	}
+	if err != nil {
+		fmt.Fprintf(w, "chiton %s: note: findings not recorded (%v)\n", stage, err)
+	}
 }
 
 func parseStages(raw []string) ([]hooks.Stage, error) {

@@ -5,6 +5,7 @@ package url
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -32,10 +33,18 @@ type Ingester struct {
 // New builds an Ingester over the given store using the default HTTP/file
 // fetcher (which shells out to yt-dlp for YouTube URLs when present).
 func New(s store.GraphStore) *Ingester {
+	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second, Control: dialControl}
 	client := &http.Client{
 		Timeout: 30 * time.Second,
-		// Block redirects to private, loopback, and link-local hosts. add_url is reachable over MCP, so a
-		// hostile page could otherwise redirect into the internal network (e.g. cloud metadata at 169.254.169.254).
+		// No Proxy: through a proxy, dialControl would vet the proxy's address instead of the target's.
+		Transport: &http.Transport{
+			DialContext:           dialer.DialContext,
+			ForceAttemptHTTP2:     true,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 20 * time.Second,
+			IdleConnTimeout:       90 * time.Second,
+		},
+		// Fail fast on a redirect to a literal private IP; dialControl still vets every named host at connect time.
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return fmt.Errorf("stopped after 10 redirects")
@@ -58,6 +67,8 @@ type AddOptions struct {
 	Author       string
 	Contributor  string
 	MaxTextBytes int // per-section cap; 0 = default
+	// AllowLocal permits bare paths and file:// URLs. The CLI sets it; the MCP add_url tool never does.
+	AllowLocal bool
 }
 
 // Report summarises one Add.
@@ -81,6 +92,11 @@ func (ing *Ingester) Add(ctx context.Context, rawURL string, opts AddOptions) (R
 	if store.IsReadOnly(ing.store) {
 		return Report{}, fmt.Errorf("add-url: store is read-only — restart 'chiton serve --writable' or use the 'chiton add-url' CLI")
 	}
+	if !opts.AllowLocal {
+		if err := requireRemote(rawURL); err != nil {
+			return Report{}, err
+		}
+	}
 
 	fr, err := ing.fetcher.fetch(ctx, rawURL)
 	if err != nil {
@@ -102,11 +118,6 @@ func (ing *Ingester) Add(ctx context.Context, rawURL string, opts AddOptions) (R
 	uri := fr.canonicalURL
 	if uri == "" {
 		uri = rawURL
-	}
-
-	// Replace any prior version of this URL.
-	if _, err := ing.store.DeleteBySourceURI(ctx, uri); err != nil {
-		return Report{}, fmt.Errorf("replace prior %s: %w", uri, err)
 	}
 
 	now := ing.now()
@@ -182,13 +193,9 @@ func (ing *Ingester) Add(ctx context.Context, rawURL string, opts AddOptions) (R
 		})
 	}
 
-	if err := ing.store.UpsertNodes(ctx, nodes); err != nil {
-		return Report{}, fmt.Errorf("upsert url nodes: %w", err)
-	}
-	if len(edges) > 0 {
-		if err := ing.store.UpsertEdges(ctx, edges); err != nil {
-			return Report{}, fmt.Errorf("upsert url edges: %w", err)
-		}
+	// Replace any prior version of this URL, keeping concept edges on sections that survive.
+	if _, err := store.ReplaceSources(ctx, ing.store, store.SourceUpdate{URI: uri, Nodes: nodes, Edges: edges}); err != nil {
+		return Report{}, fmt.Errorf("replace %s: %w", uri, err)
 	}
 
 	return Report{

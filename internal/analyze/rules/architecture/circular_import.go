@@ -3,6 +3,9 @@ package architecture
 
 import (
 	"context"
+	"maps"
+	"path"
+	"slices"
 	"sort"
 	"strings"
 
@@ -10,8 +13,9 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
-// CircularImport detects cycles in the IMPORTS graph. It ignores edges into external package nodes
-// (external=true), since they cannot close a cycle.
+// CircularImport detects cycles in the IMPORTS graph. Extractors point every import at an external package
+// node, so the rule resolves relative imports back to the scanned file they name; other external targets
+// cannot close a cycle.
 type CircularImport struct{}
 
 func (CircularImport) Meta() analyze.Meta {
@@ -28,20 +32,27 @@ func (CircularImport) Meta() analyze.Meta {
 
 func (CircularImport) MatchGraph(_ context.Context, t analyze.GraphTarget) []analyze.Finding {
 	nodes := indexNodesByID(t.Nodes)
+	files := indexFilesByPath(t.Nodes)
 	adj := map[string][]string{}
 	for _, e := range t.Edges {
 		if e.Kind != model.EdgeImports {
 			continue
 		}
 		src, dst := nodes[e.Src], nodes[e.Dst]
-		// Both endpoints must be ingested nodes, and external packages cannot close a cycle.
 		if src == nil || dst == nil {
-			continue
+			continue // both endpoints must be ingested nodes
 		}
-		if isExternal(*dst) {
-			continue
+		target := e.Dst
+		if model.IsExternal(*dst) {
+			id, ok := files.resolve(src.SourceURI, dst.Label)
+			if !ok {
+				continue
+			}
+			target = id
 		}
-		adj[e.Src] = append(adj[e.Src], e.Dst)
+		if target != e.Src {
+			adj[e.Src] = append(adj[e.Src], target)
+		}
 	}
 
 	var out []analyze.Finding
@@ -70,11 +81,56 @@ func (CircularImport) MatchGraph(_ context.Context, t analyze.GraphTarget) []ana
 	return out
 }
 
-func isExternal(n model.Node) bool {
-	if v, ok := n.Attrs["external"].(bool); ok {
-		return v
+// fileIndex maps each scanned file's slash path (its file:// URI minus the scheme) to its node ID.
+type fileIndex map[string]string
+
+func indexFilesByPath(ns []model.Node) fileIndex {
+	idx := fileIndex{}
+	for _, n := range ns {
+		if p, ok := strings.CutPrefix(n.SourceURI, "file://"); ok && n.Kind == model.KindFile {
+			idx[p] = n.ID
+		}
 	}
-	return false
+	return idx
+}
+
+// jsImportExts are the extensions, in resolution order, a JS/TS relative import may omit.
+var jsImportExts = []string{".ts", ".tsx", ".js", ".jsx"}
+
+// resolve maps a relative import spec in fromURI to the scanned file it names: JS/TS "./x", "../x" (extension or
+// index file omitted) and Python ".x" / "..x.y". Go has none, and its toolchain already rejects import cycles.
+func (idx fileIndex) resolve(fromURI, spec string) (string, bool) {
+	from, ok := strings.CutPrefix(fromURI, "file://")
+	if !ok {
+		return "", false
+	}
+	dir := path.Dir(from)
+	var candidates []string
+	switch ext := analyze.FileExt(from); {
+	case slices.Contains([]string{"js", "jsx", "ts", "tsx"}, ext) && (strings.HasPrefix(spec, "./") || strings.HasPrefix(spec, "../")):
+		base := path.Join(dir, spec)
+		candidates = append(candidates, base)
+		for _, e := range jsImportExts {
+			candidates = append(candidates, base+e, base+"/index"+e)
+		}
+	case ext == "py" && strings.HasPrefix(spec, "."):
+		rest := strings.TrimLeft(spec, ".")
+		for range len(spec) - len(rest) - 1 { // one dot is this package; each further dot goes up one
+			dir = path.Dir(dir)
+		}
+		if rest == "" {
+			candidates = append(candidates, dir+"/__init__.py")
+		} else {
+			base := path.Join(dir, strings.ReplaceAll(rest, ".", "/"))
+			candidates = append(candidates, base+".py", base+"/__init__.py")
+		}
+	}
+	for _, c := range candidates {
+		if id, ok := idx[c]; ok {
+			return id, true
+		}
+	}
+	return "", false
 }
 
 func indexNodesByID(ns []model.Node) map[string]*model.Node {
@@ -86,7 +142,7 @@ func indexNodesByID(ns []model.Node) map[string]*model.Node {
 }
 
 // findCycles uses Tarjan's algorithm to return the members of each strongly-connected component in adj
-// with more than one node, sorted by ID so the reported cycle is stable across runs.
+// with more than one node. Members and components are sorted by ID, so the output is stable across runs.
 func findCycles(adj map[string][]string) [][]string {
 	index := 0
 	indices := map[string]int{}
@@ -133,11 +189,13 @@ func findCycles(adj map[string][]string) [][]string {
 		}
 	}
 
-	for v := range adj {
+	for _, v := range slices.Sorted(maps.Keys(adj)) {
 		if _, ok := indices[v]; !ok {
 			strongconnect(v)
 		}
 	}
+	// Components are disjoint, so their smallest (first) IDs differ.
+	slices.SortFunc(sccs, func(a, b []string) int { return strings.Compare(a[0], b[0]) })
 	return sccs
 }
 

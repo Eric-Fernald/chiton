@@ -21,6 +21,9 @@ Every path below needs the `chiton` binary, and none of them ships it — not ev
 the plugin. The repository is private and the license proprietary, so each route
 requires repository access.
 
+Git 2.30 or newer is needed at runtime for `chiton sync git`, the git hooks, and
+`analyze --diff` / `diff_findings` ref resolution (they pass `--end-of-options`).
+
 **Build from source** (needs a Go toolchain):
 
 ```sh
@@ -198,6 +201,7 @@ anyone running `chiton install` already has a working binary.
 `--assistant` names, the config files written, and per-installer caveats. Paths
 shown as `~/...` are user-global; the rest are relative to `--dir` (your repo
 root). The MCP entry is always registered under the key `chiton`.
+Config writes keep an existing file's permissions and write through a symlink, so the link survives and a dangling link is an error. A newly created MCP config is owner-only (`0600`) because these files often hold other servers' API keys.
 
 | Assistant | install name | MCP config file (project) | MCP config (user-scope) | Rules file | Notes |
 |---|---|---|---|---|---|
@@ -228,15 +232,15 @@ written into any assistant config.
 
 | Transport | Flag | Default | Use |
 |---|---|---|---|
-| stdio | `--stdio` | off | Assistant-launched MCP server. This is what every installer records. |
-| HTTP / SSE | `--http <addr>` | `127.0.0.1:7474` | Shared daemon across sessions / debugging (default transport when neither `--stdio` nor `--unix` is given). |
+| stdio | `--stdio` | default | Assistant-launched MCP server; the default when no transport flag is given. This is what every installer records. |
+| HTTP / SSE | `--http <addr>` | unset | Shared daemon across sessions / debugging (only when `--http <addr>` is given). Every request needs the bearer token (`Authorization: Bearer <token>`). |
 | Unix socket | `--unix <path>` | *(empty)* | Low-latency shared daemon over a Unix domain socket (Linux/macOS). |
 
 Other `serve` flags:
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--writable` | `false` | Open the store read-write so the `submit_*` write tools work over MCP. This takes the store's write lock, so concurrent `build`/`embed` cannot run. |
+| `--writable` | `false` | Open the store read-write so the `submit_*` write tools work over MCP. The server then holds the store exclusively: no other chiton process (`build`, `embed`, `cluster`, `query`) can open it until the server exits. |
 | `--graph` | *(empty)* | Graph store path to serve. Overrides the configured/built-in `graph_path`; this is what `chiton install --graph <path>` records so the server resolves the intended store regardless of its working directory. |
 
 The exact argv the installers record is `serve --stdio` (plus `--graph <path>`
@@ -266,9 +270,11 @@ back to the right workspace.
 
 | Variable | Used by | Meaning |
 |---|---|---|
-| `CHITON_PROJECT_DIR` | every command | Anchor directory: `.chitonrc` is read from here and a relative `graph_path` resolves against it. The plugin sets it to `${CLAUDE_PROJECT_DIR}`. Unset = the process working directory. |
+| `CHITON_PROJECT_DIR` | every command | Anchor directory: `.chitonrc` is read from here and a relative `graph_path` resolves against it. The plugin sets it to `${CLAUDE_PROJECT_DIR}`. `.chiton/` state (baselines, LLM-rule state, keyfile lookup) resolves here too. Unset = the process working directory. |
 | `CHITON_GRAPH_PATH` | every command | Overrides `graph_path` from `.chitonrc` (the config layer maps any `CHITON_*` name onto its key, e.g. `CHITON_EMBED_PROVIDER`, `CHITON_EMBED_DIM`, `CHITON_SEMANTIC_CONFIDENCE_THRESHOLD`, `CHITON_VECTOR_INDEX`). |
-| `CHITON_PASSPHRASE` | encrypted stores | Passphrase for an encrypted graph (`chiton init` encrypts by default; `--encrypt=false` opts out). Without it, commands prompt interactively — which an assistant-launched server cannot do. |
+| `CHITON_PASSPHRASE` | encrypted stores | Passphrase for an encrypted graph (`chiton init` encrypts by default; `--encrypt=false` opts out). Without it, commands prompt interactively — which an assistant-launched server cannot do. `chiton init` prints this reminder. |
+| `CHITON_PLAINTEXT_OK` | every command that opens a store | Set to `1` to hide the notice printed when a store has no keyfile. |
+| `CHITON_MCP_TOKEN` | `chiton serve --http` | Pins the bearer token (at least 16 characters) instead of a fresh one per start written to `<graph dir>/mcp-token`. |
 | `CHITON_BIN` | plugin `bin/chiton` shim | Explicit path to the real binary, checked before `PATH`. |
 | `CHITON_VERSION`, `CHITON_INSTALL_DIR`, `GITHUB_TOKEN` | `scripts/install-chiton.{sh,ps1}` | Release tag to fetch, install directory, and the token the private repo needs. |
 
@@ -277,11 +283,11 @@ back to the right workspace.
 | Variable | Meaning |
 |---|---|
 | `CHITON_SLACK_TOKEN` | Bot/user OAuth token (`xoxb-…`). Needs `channels:history` / `groups:history`, plus `users:read` to resolve author names. Required by both subcommands. |
-| `CHITON_SLACK_SIGNING_SECRET` | Slack app signing secret, used to verify every Events API request. `chiton slack serve-events` **refuses to start** without it (or `--signing-secret`). |
+| `CHITON_SLACK_SIGNING_SECRET` | Slack app signing secret, used to verify every Events API request. `chiton slack serve-events` **refuses to start** without it (or a file named by `--signing-secret-file`). |
 
 `serve-events` binds `127.0.0.1:8445` by default and warns loudly if `--addr`
 points at a wildcard address; Slack needs a public HTTPS Request URL, so put a
-tunnel or reverse proxy in front rather than binding wide.
+tunnel or reverse proxy in front rather than binding wide. The receiver acks each request immediately and ingests on a single background worker, so Slack's 3-second ack deadline is always met; on Ctrl-C it finishes queued ingests for up to 10 seconds, then cancels what is still running.
 
 **Microsoft Teams** (`chiton teams …` — requires a `-tags msgraph` build)
 
@@ -289,10 +295,10 @@ tunnel or reverse proxy in front rather than binding wide.
 |---|---|
 | `CHITON_TEAMS_TENANT_ID`, `CHITON_TEAMS_CLIENT_ID`, `CHITON_TEAMS_CLIENT_SECRET` | App-only Graph credentials. |
 | `CHITON_TEAMS_USER_ID` | The meeting organizer whose meetings to read (app-only auth has no `/me`). |
-| `CHITON_TEAMS_CLIENT_STATE` | Shared secret validating Graph change notifications. `chiton teams serve-webhook` **refuses to start** without it (or `--client-state`) rather than accepting unauthenticated notifications. |
+| `CHITON_TEAMS_CLIENT_STATE` | Shared secret validating Graph change notifications. `chiton teams serve-webhook` **refuses to start** without it (or a file named by `--client-state-file`) rather than accepting unauthenticated notifications. |
 
 `serve-webhook` binds `127.0.0.1:8444` by default, with the same wildcard
-warning as the Slack receiver.
+warning as the Slack receiver. The receiver acks each request immediately and ingests on a single background worker, so Graph's 3-second ack deadline is always met; on Ctrl-C it finishes queued ingests for up to 10 seconds, then cancels what is still running.
 
 **Email**
 
@@ -349,15 +355,19 @@ different store than the one `chiton build` wrote.
 
 ### `submit_*` tools fail: read-only vs `--writable`
 
-By default `chiton serve` opens the store **read-only** so `chiton build`,
-`embed`, and `cluster` can run concurrently. The read tools work in this mode,
-but the write tools (`submit_extraction`, `submit_analysis`,
-`submit_meeting_links`, `add_url`) need a writable store. Either:
+By default `chiton serve` opens the store **read-only** so other read-only
+commands can run beside it (and, on Linux/macOS, writers such as
+`build`/`embed`; on Windows a writer fails fast while the server runs). The read
+tools work in this mode, but the write tools (`submit_extraction`,
+`submit_analysis`, `submit_meeting_links`, `add_url`) need a writable store.
+Either:
 
-- start the server with `chiton serve --writable` (this takes the write lock, so
-  concurrent `build`/`embed` cannot run), **or**
+- start the server with `chiton serve --writable` (the server then holds the
+  store exclusively), **or**
 - use the CLI write path instead, e.g. `chiton extract submit <file>`,
   `chiton analyze submit <file>`, `chiton meeting submit <file>`.
+
+On Windows the CLI path needs the read-only server stopped first.
 
 ### Reading `chiton doctor` output
 

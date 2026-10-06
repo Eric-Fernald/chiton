@@ -59,7 +59,7 @@ subtree and --max-nodes to cap dense graphs.`,
 
 			// Cluster overlay is optional; a missing sidecar just means no
 			// community colours and community "none" on every finding.
-			overlay, err := cluster.LoadSidecar(cluster.SidecarPath(cfg.GraphPath))
+			overlay, err := loadClusterSidecar(cfg.GraphPath)
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "dashboard: warning: could not load cluster sidecar: %v\n", err)
 			}

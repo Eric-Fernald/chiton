@@ -3,10 +3,14 @@
 package git
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -72,10 +76,10 @@ func firstParent(root string) (string, bool) {
 // RangeChanges returns the files that differ between two refs (e.g. the old and
 // new HEAD a post-checkout hook receives).
 func RangeChanges(root, from, to string) ([]Change, error) {
-	if err := validateRef(from); err != nil {
+	if err := ValidateRef(from); err != nil {
 		return nil, err
 	}
-	if err := validateRef(to); err != nil {
+	if err := ValidateRef(to); err != nil {
 		return nil, err
 	}
 	out, err := run(root, "diff", "--name-status", "--end-of-options", from, to)
@@ -87,7 +91,7 @@ func RangeChanges(root, from, to string) ([]Change, error) {
 
 // ChangedSince returns the files that differ between ref and the current HEAD.
 func ChangedSince(root, ref string) ([]Change, error) {
-	if err := validateRef(ref); err != nil {
+	if err := ValidateRef(ref); err != nil {
 		return nil, err
 	}
 	out, err := run(root, "diff", "--name-status", "--end-of-options", ref, "HEAD")
@@ -97,9 +101,9 @@ func ChangedSince(root, ref string) ([]Change, error) {
 	return parseNameStatus(root, out), nil
 }
 
-// validateRef rejects option-like refs, since one such as "--output=evil" would turn `git diff` into an
+// ValidateRef rejects option-like refs, since one such as "--output=evil" would turn `git diff` into an
 // arbitrary file write. Valid ref names never start with '-', and callers also pass --end-of-options.
-func validateRef(ref string) error {
+func ValidateRef(ref string) error {
 	if ref == "" {
 		return fmt.Errorf("git: empty ref")
 	}
@@ -110,17 +114,97 @@ func validateRef(ref string) error {
 }
 
 func run(root string, args ...string) (string, error) {
+	out, err := runBytes(context.Background(), root, nil, args...)
+	return string(out), err
+}
+
+// runBytes runs git in root with stdin (nil for none) and returns stdout; ctx ending kills git.
+func runBytes(ctx context.Context, root string, stdin io.Reader, args ...string) ([]byte, error) {
 	// core.quotepath=false stops git octal-escaping non-ASCII paths (e.g. "caf\303\251.go"), which
 	// would otherwise skip or mis-delete UTF-8-named files.
 	full := append([]string{"-C", root, "-c", "core.quotepath=false"}, args...)
-	cmd := exec.Command("git", full...)
+	cmd := exec.CommandContext(ctx, "git", full...)
+	cmd.Stdin = stdin
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+		if cerr := ctx.Err(); cerr != nil {
+			return nil, cerr
+		}
+		return nil, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
-	return stdout.String(), nil
+	return stdout.Bytes(), nil
+}
+
+// StagedFile is one path's content as staged in the index.
+type StagedFile struct {
+	Path    string // absolute
+	Content []byte
+}
+
+// StagedFiles returns the index content of each added, copied, modified, or renamed path keep accepts,
+// read through one `git cat-file --batch`, so a pre-commit gate checks exactly what the commit records.
+func StagedFiles(ctx context.Context, root string, keep func(path string) bool) ([]StagedFile, error) {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	names, err := runBytes(ctx, root, nil, "diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR")
+	if err != nil {
+		return nil, err
+	}
+	var files []StagedFile
+	var req bytes.Buffer
+	for rel := range strings.SplitSeq(string(names), "\x00") {
+		// cat-file --batch reads one object name per line, so a path holding a newline can't be requested.
+		if rel == "" || strings.ContainsRune(rel, '\n') {
+			continue
+		}
+		if p := abs(absRoot, rel); keep(p) {
+			files = append(files, StagedFile{Path: p})
+			req.WriteString(":" + rel + "\n")
+		}
+	}
+	if len(files) == 0 {
+		return nil, nil
+	}
+	blobs, err := runBytes(ctx, root, &req, "cat-file", "--batch")
+	if err != nil {
+		return nil, err
+	}
+	r := bufio.NewReader(bytes.NewReader(blobs))
+	for i := range files {
+		if files[i].Content, err = readBatchObject(r); err != nil {
+			return nil, fmt.Errorf("git cat-file: %w", err)
+		}
+	}
+	return files, nil
+}
+
+// readBatchObject reads one `git cat-file --batch` record, "<oid> <type> <size>\n<content>\n". A missing
+// object ("<name> missing\n") yields nil content.
+func readBatchObject(r *bufio.Reader) ([]byte, error) {
+	header, err := r.ReadString('\n')
+	if err != nil {
+		return nil, err
+	}
+	if strings.HasSuffix(header, " missing\n") {
+		return nil, nil
+	}
+	fields := strings.Fields(header)
+	if len(fields) != 3 {
+		return nil, fmt.Errorf("unexpected header %q", header)
+	}
+	size, err := strconv.Atoi(fields[2])
+	if err != nil {
+		return nil, fmt.Errorf("unexpected header %q", header)
+	}
+	buf := make([]byte, size+1) // the content plus its trailing LF
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return nil, err
+	}
+	return buf[:size], nil
 }
 
 // parseNameStatus parses `git diff --name-status` output into Changes with absolute paths. A rename

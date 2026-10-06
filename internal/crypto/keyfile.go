@@ -1,9 +1,11 @@
-// Package crypto handles chiton's at-rest encryption. It derives an Argon2id key from a passphrase and
-// seals files with AES-256-GCM. The keyfile stores only salt and params, so the same inputs reopen BadgerDB.
+// Package crypto handles chiton's at-rest encryption. It derives an Argon2id key from a passphrase and seals
+// files with AES-256-GCM. The keyfile holds salt, params and a verifier tag, never the key or passphrase.
 package crypto
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -34,13 +36,56 @@ const (
 // persisted. Defaults follow OWASP 2024 Argon2id guidance: 64 MiB, 3 iterations, parallelism 4.
 type KeyFile struct {
 	Version     int    `json:"version"`
-	KDF         string `json:"kdf"`         // "argon2id"
-	SaltHex     string `json:"salt_hex"`    // 16-byte salt, hex-encoded
-	MemoryKiB   uint32 `json:"memory_kib"`  // Argon2id memory cost
-	Iterations  uint32 `json:"iterations"`  // Argon2id time cost
-	Parallelism uint8  `json:"parallelism"` // Argon2id parallelism
-	KeyLength   uint32 `json:"key_length"`  // bytes (32 for AES-256)
-	Cipher      string `json:"cipher"`      // "AES-256-GCM"
+	KDF         string `json:"kdf"`                // "argon2id"
+	SaltHex     string `json:"salt_hex"`           // 16-byte salt, hex-encoded
+	MemoryKiB   uint32 `json:"memory_kib"`         // Argon2id memory cost
+	Iterations  uint32 `json:"iterations"`         // Argon2id time cost
+	Parallelism uint8  `json:"parallelism"`        // Argon2id parallelism
+	KeyLength   uint32 `json:"key_length"`         // bytes (32 for AES-256)
+	Cipher      string `json:"cipher"`             // "AES-256-GCM"
+	Verifier    string `json:"verifier,omitempty"` // hex HMAC-SHA256(key, verifierLabel); empty in pre-verifier keyfiles
+
+	path string // where the keyfile was loaded from or saved to, for RecordVerifier
+}
+
+// ErrWrongPassphrase means the derived key does not match the keyfile's verifier.
+var ErrWrongPassphrase = errors.New("wrong passphrase: it does not match the one chosen at 'chiton init'")
+
+// verifierLabel is the HMAC message whose tag under the derived key is stored as the verifier.
+const verifierLabel = "chiton-verifier"
+
+func verifierMAC(key []byte) []byte {
+	m := hmac.New(sha256.New, key)
+	m.Write([]byte(verifierLabel))
+	return m.Sum(nil)
+}
+
+// SetVerifier records key's verifier so later derivations detect a mistyped passphrase.
+func (kf *KeyFile) SetVerifier(key []byte) { kf.Verifier = hex.EncodeToString(verifierMAC(key)) }
+
+// RecordVerifier adds key's verifier to a keyfile saved before verifiers existed and rewrites it in place.
+// It is a no-op when the keyfile already has one.
+func (kf *KeyFile) RecordVerifier(key []byte) error {
+	if kf.Verifier != "" {
+		return nil
+	}
+	if kf.path == "" {
+		return errors.New("keyfile: RecordVerifier on a keyfile that was never loaded or saved")
+	}
+	kf.SetVerifier(key)
+	return kf.Save(kf.path, true)
+}
+
+// checkKey returns ErrWrongPassphrase when kf has a verifier that key does not match.
+func (kf *KeyFile) checkKey(key []byte) error {
+	if kf.Verifier == "" {
+		return nil
+	}
+	want, _ := hex.DecodeString(kf.Verifier) // validate checked the format
+	if !hmac.Equal(verifierMAC(key), want) {
+		return ErrWrongPassphrase
+	}
+	return nil
 }
 
 // DefaultKeyFile returns a KeyFile with a fresh random salt and chiton's
@@ -96,11 +141,16 @@ func (kf *KeyFile) validate() error {
 	if len(salt) < minSaltBytes {
 		return fmt.Errorf("salt must be >= %d bytes, got %d", minSaltBytes, len(salt))
 	}
+	if kf.Verifier != "" {
+		if b, err := hex.DecodeString(kf.Verifier); err != nil || len(b) != sha256.Size {
+			return fmt.Errorf("verifier must be %d hex-encoded bytes", sha256.Size)
+		}
+	}
 	return nil
 }
 
-// DeriveKey runs Argon2id over the passphrase and the keyfile's parameters.
-// Returns a key of length kf.KeyLength.
+// DeriveKey runs Argon2id over the passphrase and the keyfile's parameters. It returns ErrWrongPassphrase when
+// the keyfile's verifier does not match the derived key.
 func (kf *KeyFile) DeriveKey(passphrase string) ([]byte, error) {
 	if err := kf.validate(); err != nil {
 		return nil, fmt.Errorf("keyfile: %w", err)
@@ -109,14 +159,11 @@ func (kf *KeyFile) DeriveKey(passphrase string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return argon2.IDKey(
-		[]byte(passphrase),
-		salt,
-		kf.Iterations,
-		kf.MemoryKiB,
-		kf.Parallelism,
-		kf.KeyLength,
-	), nil
+	key := argon2.IDKey([]byte(passphrase), salt, kf.Iterations, kf.MemoryKiB, kf.Parallelism, kf.KeyLength)
+	if err := kf.checkKey(key); err != nil {
+		return nil, err
+	}
+	return key, nil
 }
 
 // Save atomically writes the keyfile to path with mode 0600. It keeps an existing file unless force is set,
@@ -134,6 +181,7 @@ func (kf *KeyFile) Save(path string, force bool) error {
 	if err := fsutil.WriteFileAtomic(path, append(b, '\n'), 0o600); err != nil {
 		return fmt.Errorf("write keyfile: %w", err)
 	}
+	kf.path = path
 	return nil
 }
 
@@ -157,5 +205,6 @@ func LoadKeyFile(path string) (*KeyFile, error) {
 	if err := kf.validate(); err != nil {
 		return nil, fmt.Errorf("keyfile %s: %w", path, err)
 	}
+	kf.path = path
 	return &kf, nil
 }

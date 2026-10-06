@@ -1,10 +1,12 @@
 package browser
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
@@ -29,6 +31,9 @@ type DetectedDB struct {
 type Ingester struct {
 	store store.GraphStore
 	now   func() time.Time
+
+	mu     sync.Mutex
+	purged bool // purgeUnredacted has run for this Ingester
 }
 
 // New builds an Ingester over the given graph store.
@@ -40,19 +45,22 @@ func New(s store.GraphStore) *Ingester {
 type Options struct {
 	Limit     int       // max rows per DB; 0 → defaultLimit
 	Since     time.Time // only visits at/after this time
-	MinVisits int       // skip URLs visited fewer than this many times (noise filter)
+	MinVisits int       // skip history rows visited fewer than this many times (applied before rows merge)
+	KeepQuery bool      // keep query strings and #fragments, which can carry OAuth codes and signed-URL tokens
 }
 
 // Report summarises one History database's ingest.
 type Report struct {
 	Browser       string `json:"browser"`
 	DB            string `json:"db"`
-	Visits        int    `json:"visits"`
-	NodesUpserted int    `json:"nodes_upserted"`
+	Visits        int    `json:"visits"`           // web history rows read
+	NodesUpserted int    `json:"nodes_upserted"`   // pages, after rows sharing a redacted URL merge
+	Purged        int    `json:"purged,omitempty"` // nodes an earlier ingest stored under an unredacted URL
 }
 
 // IngestDB reads one History database and upserts a url node per visited web page, skipping non-web URLs.
-// IDs derive from the URL alone, so a re-run refreshes visit counts and titles in place without duplicates.
+// Unless opts.KeepQuery, URLs lose userinfo, query and fragment, and rows that then match merge into one node.
+// IDs derive from that URL, so a re-run refreshes visit counts and titles in place without duplicates.
 func (ing *Ingester) IngestDB(ctx context.Context, dbPath, browser string, opts Options) (Report, error) {
 	if store.IsReadOnly(ing.store) {
 		return Report{}, fmt.Errorf("browser: store is read-only — use the 'chiton browser ingest' CLI or restart 'chiton serve --writable'")
@@ -68,25 +76,47 @@ func (ing *Ingester) IngestDB(ctx context.Context, dbPath, browser string, opts 
 	if err != nil {
 		return Report{}, err
 	}
+	purged, err := ing.purgeUnredacted(ctx, opts.KeepQuery)
+	if err != nil {
+		return Report{}, fmt.Errorf("purge unredacted history nodes: %w", err)
+	}
+	nodes, rows := historyNodes(visits, browser, opts.KeepQuery, ing.now())
+	if len(nodes) > 0 {
+		if err := ing.store.UpsertNodes(ctx, nodes); err != nil {
+			return Report{}, fmt.Errorf("upsert history nodes: %w", err)
+		}
+	}
+	return Report{Browser: browser, DB: dbPath, Visits: rows, NodesUpserted: len(nodes), Purged: purged}, nil
+}
 
-	now := ing.now()
-	nodes := make([]model.Node, 0, len(visits))
+// historyNodes builds one url node per page URL and counts the web rows. Rows arrive newest-first, so a page's
+// first row supplies its title and last visit, and every row adds its visit count.
+func historyNodes(visits []Visit, browser string, keepQuery bool, now time.Time) (nodes []model.Node, rows int) {
+	index := map[string]int{}
 	for _, v := range visits {
-		if !isWebURL(v.URL) {
+		u, ok := parseWebURL(v.URL)
+		if !ok {
 			continue
 		}
-		label := strings.TrimSpace(v.Title)
-		if label == "" {
-			label = v.URL
+		rows++
+		page := redactURL(u, keepQuery)
+		if i, seen := index[page]; seen {
+			prev, _ := nodes[i].Attrs["visit_count"].(int)
+			nodes[i].Attrs["visit_count"] = prev + v.VisitCount
+			continue
 		}
-		// Key on the stable URL, not the mutable title, so a re-ingest after a title change
-		// refreshes the same node instead of orphaning it.
-		uri := historyURIScheme + v.URL
+		index[page] = len(nodes)
+		// Key on the stable URL, not the mutable title, so a re-ingest after a title change refreshes the same node.
+		uri := historyURIScheme + page
+		title := v.Title
+		if !keepQuery {
+			title = redactTitle(title, v.URL, u, page)
+		}
 		attrs := map[string]any{
 			"kind":        "history",
 			"source":      "browser",
-			"url":         v.URL,
-			"title":       v.Title,
+			"url":         page,
+			"title":       title,
 			"visit_count": v.VisitCount,
 		}
 		if browser != "" {
@@ -96,9 +126,9 @@ func (ing *Ingester) IngestDB(ctx context.Context, dbPath, browser string, opts 
 			attrs["last_visit"] = v.LastVisit.UTC().Format(time.RFC3339)
 		}
 		nodes = append(nodes, model.Node{
-			ID:         model.NewNodeID(uri, v.URL),
+			ID:         model.NewNodeID(uri, page),
 			Kind:       model.KindURL,
-			Label:      label,
+			Label:      cmp.Or(strings.TrimSpace(title), page),
 			SourceURI:  uri,
 			Attrs:      attrs,
 			Provenance: model.ProvExtracted,
@@ -107,13 +137,39 @@ func (ing *Ingester) IngestDB(ctx context.Context, dbPath, browser string, opts 
 			UpdatedAt:  now,
 		})
 	}
+	return nodes, rows
+}
 
-	if len(nodes) > 0 {
-		if err := ing.store.UpsertNodes(ctx, nodes); err != nil {
-			return Report{}, fmt.Errorf("upsert history nodes: %w", err)
+// purgeUnredacted deletes, on this Ingester's first redacting run, history nodes an earlier chiton stored under a
+// URL with userinfo, a query or a fragment, so their secrets leave the graph.
+func (ing *Ingester) purgeUnredacted(ctx context.Context, keepQuery bool) (int, error) {
+	ing.mu.Lock()
+	defer ing.mu.Unlock()
+	if keepQuery || ing.purged {
+		return 0, nil
+	}
+	nodes, err := store.NodesMatching(ctx, ing.store, store.NodeFilter{
+		Kinds: []model.NodeKind{model.KindURL},
+		Attrs: map[string]string{"source": "browser"},
+	})
+	if err != nil {
+		return 0, err
+	}
+	var stale []model.Node
+	for _, n := range nodes {
+		raw, ok := strings.CutPrefix(n.SourceURI, historyURIScheme)
+		if !ok {
+			continue
+		}
+		if u, ok := parseWebURL(raw); ok && (u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.RawFragment != "") {
+			stale = append(stale, n)
 		}
 	}
-	return Report{Browser: browser, DB: dbPath, Visits: len(nodes), NodesUpserted: len(nodes)}, nil
+	deleted, err := store.DeleteNodes(ctx, ing.store, stale)
+	if err == nil {
+		ing.purged = true
+	}
+	return deleted, err
 }
 
 // IngestAuto detects every installed browser's History file and ingests each.
@@ -133,17 +189,43 @@ func (ing *Ingester) IngestAuto(ctx context.Context, opts Options) ([]Report, er
 	return reports, nil
 }
 
-// isWebURL reports whether raw is an http(s) URL with a host, excluding the
-// browser-internal schemes (chrome://, about:, file://, chrome-extension://...).
-func isWebURL(raw string) bool {
+// parseWebURL parses raw and reports whether it is an http(s) URL with a host, excluding the browser-internal
+// schemes (chrome://, about:, file://, chrome-extension://...).
+func parseWebURL(raw string) (*url.URL, bool) {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return false
+		return nil, false
 	}
 	switch strings.ToLower(u.Scheme) {
 	case "http", "https":
-		return u.Host != ""
+		return u, u.Host != ""
 	default:
-		return false
+		return nil, false
 	}
+}
+
+// redactURL renders u without userinfo and, unless keepQuery, without query or fragment. History URLs carry
+// OAuth codes, reset tokens and signed-URL signatures there.
+func redactURL(u *url.URL, keepQuery bool) string {
+	c := *u
+	c.User = nil
+	if !keepQuery {
+		c.RawQuery, c.ForceQuery, c.Fragment, c.RawFragment = "", false, "", ""
+	}
+	return c.String()
+}
+
+// redactTitle returns page when title embeds any part of the raw URL that redaction removed. Chromium often
+// stores an untitled page's title as its URL, so the secrets would survive in title and label otherwise.
+func redactTitle(title, raw string, u *url.URL, page string) string {
+	secrets := []string{raw, strings.TrimPrefix(raw, u.Scheme+":"), u.RawQuery, u.Fragment, u.RawFragment}
+	if u.User != nil {
+		secrets = append(secrets, u.User.String())
+	}
+	for _, s := range secrets {
+		if s != "" && strings.Contains(title, s) {
+			return page
+		}
+	}
+	return title
 }
