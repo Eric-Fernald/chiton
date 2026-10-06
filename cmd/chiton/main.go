@@ -1190,6 +1190,7 @@ You usually don't invoke it directly.`,
 func recordHookScan(ctx context.Context, w io.Writer, stage hooks.Stage, scan *analyze.Result) {
 	cfg, err := config.Load()
 	if err != nil {
+		fmt.Fprintf(w, "chiton %s: note: findings not recorded (%v)\n", stage, err)
 		return
 	}
 	if _, err := os.Stat(cfg.GraphPath); err != nil {

@@ -1,6 +1,9 @@
 package config
 
 import (
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -100,8 +103,14 @@ func LoadFrom(dir string) (*Config, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
-	// Config file is optional.
-	_ = v.ReadInConfig()
+	// The config file is optional, but one that exists and fails to read or parse must stop the command,
+	// since falling back to defaults would silently open a different store than the file names.
+	if err := v.ReadInConfig(); err != nil {
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFound) && !errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("read config %s: %w", v.ConfigFileUsed(), err)
+		}
+	}
 
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {

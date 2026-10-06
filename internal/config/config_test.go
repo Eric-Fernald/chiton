@@ -3,18 +3,42 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-// isolate points HOME at a scratch directory so a developer's real ~/.chitonrc
-// can never leak into these tests.
-func isolate(t *testing.T) {
+// isolate points HOME at a scratch directory so a developer's real ~/.chitonrc can never leak into these tests.
+// Viper reads HOMEDRIVE+HOMEPATH before USERPROFILE on Windows, so those are cleared too. It returns the home.
+func isolate(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOMEDRIVE", "")
+	t.Setenv("HOMEPATH", "")
 	t.Setenv(ProjectDirEnv, "")
 	t.Setenv("CHITON_GRAPH_PATH", "")
+	return home
+}
+
+// A .chitonrc that fails to parse must stop the command, because falling back to defaults silently opens a
+// different store than the one the file names.
+func TestMalformedChitonrcIsAnError(t *testing.T) {
+	isolate(t)
+	project := t.TempDir()
+	rc := filepath.Join(project, ".chitonrc")
+	if err := os.WriteFile(rc, []byte("graph_path = \"custom/store\"\n[embed\n"), 0o644); err != nil {
+		t.Fatalf("write .chitonrc: %v", err)
+	}
+	t.Setenv(ProjectDirEnv, project)
+
+	cfg, err := Load()
+	if err == nil {
+		t.Fatalf("Load succeeded with GraphPath %q, want a parse error", cfg.GraphPath)
+	}
+	if !strings.Contains(err.Error(), rc) {
+		t.Errorf("error %q does not name the file %s", err, rc)
+	}
 }
 
 func TestLoadDefaultsStayRelative(t *testing.T) {
