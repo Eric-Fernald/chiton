@@ -7,14 +7,14 @@ import (
 
 const fileScheme = "file://"
 
-// FileURI returns the canonical file:// source URI for path, made absolute with forward slashes.
-// If path can't be made absolute, FileURI uses it as given.
+// FileURI returns the canonical file:// source URI for path: absolute, forward slashes, and on Windows the
+// on-disk case of every existing component (see canonicalPath). If path can't be made absolute, it is used as given.
 func FileURI(path string) string {
 	abs, err := filepath.Abs(path)
 	if err != nil {
-		abs = path
+		return fileScheme + filepath.ToSlash(path)
 	}
-	return fileScheme + filepath.ToSlash(abs)
+	return fileScheme + filepath.ToSlash(canonicalPath(abs))
 }
 
 // PathFromFileURI inverts FileURI into an OS path. ok is false (and path "") when uri isn't a file:// URI.

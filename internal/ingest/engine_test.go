@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -785,5 +786,32 @@ func TestSyncDirWritesSharedStubsOnce(t *testing.T) {
 		if got := cs.nodeWrites[id]; got != 1 {
 			t.Errorf("stub %s written %d times, want 1", id, got)
 		}
+	}
+}
+
+// TestSyncDirPrunesCaseAliases checks a cache entry an older build left under a lower-cased URI is dropped
+// once the file is re-indexed under its canonical URI.
+func TestSyncDirPrunesCaseAliases(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("path case aliases only arise on case-insensitive Windows paths")
+	}
+	h := newHarness(t, false, false)
+	ctx := context.Background()
+	p := h.write(t, "a.go", "package src\nfunc A() {}\n")
+	alias := "file://" + filepath.ToSlash(strings.ToLower(p))
+	if err := h.gs.UpsertNodes(ctx, []model.Node{{ID: model.NewNodeID(alias, alias), Kind: model.KindFile,
+		Label: "a.go", SourceURI: alias}}); err != nil {
+		t.Fatal(err)
+	}
+	h.cache.Mark(alias, "stale")
+
+	if _, err := h.eng.SyncDir(ctx, h.dir, true); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(h.nodesForURI(t, alias)); n != 0 {
+		t.Errorf("alias %s kept %d node(s)", alias, n)
+	}
+	if len(h.nodesForURI(t, model.FileURI(p))) == 0 {
+		t.Error("the canonical URI should be indexed")
 	}
 }

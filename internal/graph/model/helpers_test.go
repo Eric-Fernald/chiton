@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -59,6 +60,12 @@ func TestFileURI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if runtime.GOOS == "windows" {
+		// FileURI reports on-disk case, which the working directory's spelling may not match.
+		if wd, err = filepath.EvalSymlinks(wd); err != nil {
+			t.Fatal(err)
+		}
+	}
 	cases := map[string]string{
 		"a/b.go":   "file://" + filepath.ToSlash(filepath.Join(wd, "a", "b.go")),
 		"./x/../y": "file://" + filepath.ToSlash(filepath.Join(wd, "y")),
@@ -76,7 +83,8 @@ func TestFileURI(t *testing.T) {
 		}
 		// Round trip back to the cleaned absolute path.
 		abs, _ := filepath.Abs(in)
-		if p, ok := PathFromFileURI(FileURI(in)); !ok || p != abs {
+		p, ok := PathFromFileURI(FileURI(in))
+		if same := p == abs || (runtime.GOOS == "windows" && strings.EqualFold(p, abs)); !ok || !same {
 			t.Errorf("PathFromFileURI(FileURI(%q)) = %q, %v; want %q", in, p, ok, abs)
 		}
 	}

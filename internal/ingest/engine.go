@@ -483,18 +483,29 @@ func (e *Engine) logSkip(out Outcome) {
 	}
 }
 
-// prune deletes indexed files under root that the walk did not see and that are gone from disk. A file the walk
-// excluded (ignored dir, unsupported type, narrower root) but still present survives.
+// underURI reports whether uri is dirURI or a file:// URI beneath it.
+func underURI(uri, dirURI string) bool {
+	return uri == dirURI || strings.HasPrefix(uri, strings.TrimSuffix(dirURI, "/")+"/")
+}
+
+// prune deletes indexed files under root that the walk did not see and that are gone from disk, plus
+// non-canonical aliases (older builds kept the input path's case on Windows) of files this walk re-indexed.
+// A file the walk excluded (ignored dir, unsupported type, narrower root) but still present survives.
 func (e *Engine) prune(ctx context.Context, root string, seen map[string]bool, sum *BatchSummary) error {
 	rootURI := model.FileURI(root)
 	for _, uri := range e.cache.URIs() {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if (uri != rootURI && !strings.HasPrefix(uri, rootURI+"/")) || seen[uri] {
+		p, ok := model.PathFromFileURI(uri)
+		if !ok || seen[uri] {
 			continue
 		}
-		if p, ok := model.PathFromFileURI(uri); ok {
+		canon := model.FileURI(p)
+		if !underURI(canon, rootURI) {
+			continue
+		}
+		if canon == uri || !seen[canon] {
 			// Only a file known to be gone is pruned: a stat error such as EACCES says nothing about whether it exists.
 			if _, err := e.stat(p); !errors.Is(err, fs.ErrNotExist) {
 				if err != nil {
@@ -585,7 +596,7 @@ func (e *Engine) pruneDir(ctx context.Context, dir string) int {
 	prefix := model.FileURI(dir)
 	pruned := 0
 	for _, uri := range e.cache.URIs() {
-		if uri == prefix || strings.HasPrefix(uri, prefix+"/") {
+		if underURI(uri, prefix) {
 			if _, err := e.deleteURI(ctx, uri); err != nil {
 				e.log("sync: prune %s failed: %v", uri, err)
 				continue
