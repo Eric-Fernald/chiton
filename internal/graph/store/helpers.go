@@ -218,3 +218,11 @@ func DeleteNodes(ctx context.Context, gs GraphStore, nodes []model.Node) (int, e
 	}
 	return total, nil
 }
+
+// Sync flushes gs's writes to stable storage when gs is a Syncer; otherwise it does nothing.
+func Sync(gs GraphStore) error {
+	if s, ok := gs.(Syncer); ok {
+		return s.Sync()
+	}
+	return nil
+}

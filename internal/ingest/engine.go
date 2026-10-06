@@ -765,9 +765,13 @@ func (e *Engine) flush(ctx context.Context, sum *BatchSummary) {
 	sum.Reclustered = haveSidecar
 }
 
-// persistCache saves the content cache. It is the one place the cache reaches disk, so a store sync that must
-// precede the save (making the writes the cache vouches for durable) belongs here.
+// persistCache makes the store's writes durable, then saves the content cache, so after a crash the cache never
+// vouches for data the store lost. It is the one place the cache reaches disk; on a failed store sync the
+// previous cache stays, and the next run re-extracts what this one wrote.
 func (e *Engine) persistCache() error {
+	if err := store.Sync(e.store); err != nil {
+		return fmt.Errorf("store sync failed, cache not saved: %w", err)
+	}
 	if err := e.cache.Save(); err != nil {
 		return fmt.Errorf("save cache: %w", err)
 	}

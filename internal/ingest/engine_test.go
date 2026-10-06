@@ -46,7 +46,7 @@ func newHarness(t *testing.T, reembed, reanalyze bool) *harness {
 	}
 	t.Cleanup(func() { gs.Close() })
 
-	ch, err := cache.Load(filepath.Join(graphDir, "cache.json"))
+	ch, err := cache.Load(filepath.Join(graphDir, "cache.json"), gs.Epoch())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -415,7 +415,7 @@ func TestWatchGracefulShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	ch, err := cache.Load(filepath.Join(root, "chiton-out", "cache.json"))
+	ch, err := cache.Load(filepath.Join(root, "chiton-out", "cache.json"), gs.Epoch())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -865,5 +865,37 @@ func TestRescanAfterOverflow(t *testing.T) {
 	}
 	if len(h.nodesForURI(t, model.FileURI(pc))) == 0 {
 		t.Error("new c.go not indexed")
+	}
+}
+
+// syncFails is a store whose Sync always fails.
+type syncFails struct{ store.GraphStore }
+
+func (syncFails) Sync() error { return errors.New("disk gone") }
+
+// TestCacheNotSavedWhenStoreSyncFails checks the cache is never persisted ahead of an unsynced store.
+func TestCacheNotSavedWhenStoreSyncFails(t *testing.T) {
+	h := newHarness(t, false, false)
+	eng := New(syncFails{h.gs}, h.cache, Config{GraphPath: filepath.Join(h.graphDir, "graph")}, nil, nil, nil)
+	p := h.write(t, "a.go", "package a\n\nfunc A() {}\n")
+	if _, err := eng.SyncChanges(context.Background(), []Change{{Path: p, Op: OpUpsert}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(h.graphDir, "cache.json")); !os.IsNotExist(err) {
+		t.Fatalf("cache.json written although the store sync failed (stat err %v)", err)
+	}
+}
+
+// TestSyncDirReportsStoreSyncFailure checks the build path (SyncDir) also skips the cache save and returns the
+// store sync error rather than reporting success.
+func TestSyncDirReportsStoreSyncFailure(t *testing.T) {
+	h := newHarness(t, false, false)
+	eng := New(syncFails{h.gs}, h.cache, Config{GraphPath: filepath.Join(h.graphDir, "graph"), NoRecluster: true}, nil, nil, nil)
+	h.write(t, "a.go", "package a\n\nfunc A() {}\n")
+	if _, err := eng.SyncDir(context.Background(), h.dir, true); err == nil || !strings.Contains(err.Error(), "disk gone") {
+		t.Fatalf("SyncDir err = %v, want the store sync failure", err)
+	}
+	if _, err := os.Stat(filepath.Join(h.graphDir, "cache.json")); !os.IsNotExist(err) {
+		t.Fatalf("cache.json written although the store sync failed (stat err %v)", err)
 	}
 }

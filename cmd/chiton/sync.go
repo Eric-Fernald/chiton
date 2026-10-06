@@ -67,7 +67,7 @@ func openSyncEngine(cmd *cobra.Command, f *syncEngineFlags) (*ingest.Engine, fun
 	if err != nil {
 		return nil, nil, err
 	}
-	ch, err := loadBuildCache(cfg.GraphPath)
+	ch, err := loadBuildCache(cfg.GraphPath, gs.Epoch(), cmd.ErrOrStderr())
 	if err != nil {
 		gs.Close()
 		return nil, nil, err

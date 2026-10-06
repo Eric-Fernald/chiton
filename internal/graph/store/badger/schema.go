@@ -1,6 +1,7 @@
 package badger
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"strconv"
@@ -20,6 +21,7 @@ const (
 	pfxMeta    = "m:"
 	metaSchema = pfxMeta + "schema" // decimal layout version
 	metaSeal   = pfxMeta + "seal"   // Badger version at the last clean close (see sealed)
+	metaEpoch  = pfxMeta + "epoch"  // random store identity (see Store.Epoch)
 )
 
 // ErrSchemaTooNew reports a store written by a newer chiton, which this binary must not read or write.
@@ -121,6 +123,19 @@ func migrate(db *badgerdb.DB, from, to int, steps map[int]func(*badgerdb.DB) err
 		}
 	}
 	return nil
+}
+
+// loadEpoch returns the store's random identity, minting one on a writable store that has none.
+func loadEpoch(db *badgerdb.DB, readOnly bool) (string, error) {
+	var epoch string
+	if err := db.View(func(txn *badgerdb.Txn) (err error) {
+		epoch, err = getMeta(txn, metaEpoch)
+		return err
+	}); err != nil || epoch != "" || readOnly {
+		return epoch, err
+	}
+	epoch = rand.Text()
+	return epoch, setMeta(db, metaEpoch, epoch)
 }
 
 // getMeta returns the metadata value under key, or "" when it is absent.

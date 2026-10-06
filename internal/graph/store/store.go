@@ -157,3 +157,9 @@ type SourceReplacer interface {
 	// distinct: a repeated URI's prior nodes are diffed against each update separately.
 	ReplaceSources(ctx context.Context, updates []SourceUpdate) ([]int, error)
 }
+
+// Syncer is an optional capability that makes every write so far durable, so a sidecar saved afterwards never
+// records data the store could lose in a crash. Callers use the Sync helper.
+type Syncer interface {
+	Sync() error
+}

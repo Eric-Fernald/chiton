@@ -385,11 +385,15 @@ func loadStore(readOnly bool) (*config.Config, *badgerstore.Store, error) {
 	return cfg, gs, nil
 }
 
-// loadBuildCache loads the content-hash cache that build and sync share beside the graph store.
-func loadBuildCache(graphPath string) (*cache.Cache, error) {
-	ch, err := cache.Load(filepath.Join(filepath.Dir(graphPath), "cache.json"))
+// loadBuildCache loads the content-hash cache that build and sync share beside the graph store, noting on
+// errOut when it belonged to another store and every file will be re-extracted.
+func loadBuildCache(graphPath, storeEpoch string, errOut io.Writer) (*cache.Cache, error) {
+	ch, err := cache.Load(filepath.Join(filepath.Dir(graphPath), "cache.json"), storeEpoch)
 	if err != nil {
 		return nil, fmt.Errorf("open cache: %w", err)
+	}
+	if ch.Discarded() {
+		fmt.Fprintln(errOut, "chiton: the content cache was written for a different graph store; re-extracting every file")
 	}
 	return ch, nil
 }
@@ -477,7 +481,7 @@ func buildCmd() *cobra.Command {
 			}
 			defer gs.Close()
 
-			ch, err := loadBuildCache(cfg.GraphPath)
+			ch, err := loadBuildCache(cfg.GraphPath, gs.Epoch(), cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}

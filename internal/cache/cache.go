@@ -11,18 +11,26 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/fsutil"
 )
 
-// Cache maps source_uri to the SHA256 hex string last seen for that file.
+// Cache maps source_uri to the SHA256 hex string last seen for that file, for one store epoch.
 type Cache struct {
-	path string
+	path      string
+	epoch     string
+	discarded bool
 
 	mu      sync.RWMutex
 	entries map[string]string
 }
 
-// Load opens the cache file at path, creating an empty cache if the file does
-// not yet exist. Returns an error only on genuine I/O or parse failures.
-func Load(path string) (*Cache, error) {
-	c := &Cache{path: path, entries: map[string]string{}}
+// fileFormat is cache.json's layout. Entries are only valid for the store whose epoch recorded them.
+type fileFormat struct {
+	StoreEpoch string            `json:"store_epoch"`
+	Entries    map[string]string `json:"entries"`
+}
+
+// Load opens the cache at path for the store identified by storeEpoch. It starts empty when the file is
+// missing or was written for another store (or before epochs), so a replaced store is fully re-extracted.
+func Load(path, storeEpoch string) (*Cache, error) {
+	c := &Cache{path: path, epoch: storeEpoch, entries: map[string]string{}}
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return c, nil
@@ -30,11 +38,22 @@ func Load(path string) (*Cache, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := json.Unmarshal(data, &c.entries); err != nil {
+	var f fileFormat
+	if err := json.Unmarshal(data, &f); err != nil {
 		return nil, err
+	}
+	if f.StoreEpoch != storeEpoch {
+		c.discarded = true
+		return c, nil
+	}
+	if f.Entries != nil {
+		c.entries = f.Entries
 	}
 	return c, nil
 }
+
+// Discarded reports whether Load dropped entries recorded for a different store.
+func (c *Cache) Discarded() bool { return c.discarded }
 
 // Changed reports whether uri is new or its sha256 differs from the cached value.
 func (c *Cache) Changed(uri, sha256 string) bool {
@@ -70,11 +89,11 @@ func (c *Cache) URIs() []string {
 	return out
 }
 
-// Save writes the cache to disk, creating the parent directory if needed. It writes atomically, so a crash
-// mid-write leaves the previous cache intact and concurrent Saves never share a temp file.
+// Save writes the cache and its store epoch to disk, creating the parent directory if needed. It writes
+// atomically, so a crash mid-write leaves the previous cache intact and concurrent Saves never share a temp file.
 func (c *Cache) Save() error {
 	c.mu.RLock()
-	data, err := json.MarshalIndent(c.entries, "", "  ")
+	data, err := json.MarshalIndent(fileFormat{StoreEpoch: c.epoch, Entries: c.entries}, "", "  ")
 	c.mu.RUnlock()
 	if err != nil {
 		return err

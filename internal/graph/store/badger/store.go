@@ -45,6 +45,7 @@ type Store struct {
 	key      []byte
 	lock     *storeLock                   // chiton.lock; nil for a reader once holdReaderLock lets it go
 	labels   func() ([]labelEntry, error) // read-only stores: lowercased labels in key order, loaded on first search
+	epoch    string                       // random identity minted with the store; see Epoch
 }
 
 // Compile-time checks that Store satisfies the store interfaces.
@@ -60,6 +61,7 @@ var (
 	_ store.EmbeddingDeleter    = (*Store)(nil)
 	_ store.SourceReplacer      = (*Store)(nil)
 	_ store.KindCounter         = (*Store)(nil)
+	_ store.Syncer              = (*Store)(nil)
 )
 
 // ReadOnly reports whether the store was opened read-only, so callers can fail writes early
@@ -159,10 +161,14 @@ func openReadOnly(path string, opts Options) (*Store, error) {
 	return s, nil
 }
 
-// prepare readies a just-opened store: it checks, and when writable stamps or migrates, the key layout; a
-// read-only store also gets its lazy label index.
+// prepare readies a just-opened store: it checks, and when writable stamps or migrates, the key layout, loads
+// the store epoch, and gives a read-only store its lazy label index.
 func (s *Store) prepare() error {
 	if err := prepareSchema(s.db, s.readOnly); err != nil {
+		return err
+	}
+	var err error
+	if s.epoch, err = loadEpoch(s.db, s.readOnly); err != nil {
 		return err
 	}
 	if s.readOnly {
@@ -170,6 +176,14 @@ func (s *Store) prepare() error {
 	}
 	return nil
 }
+
+// Epoch returns the store's random identity, minted the first time the store is opened writable, so a sidecar
+// can tell that the store was replaced underneath it. It is empty only for a store opened read-only that no
+// writer has minted one for yet.
+func (s *Store) Epoch() string { return s.epoch }
+
+// Sync makes every write so far durable; it is a no-op on a read-only store. Implements store.Syncer.
+func (s *Store) Sync() error { return s.db.Sync() }
 
 // abandon closes a store whose open failed after Badger opened, dropping close errors so the caller reports
 // the open's.
