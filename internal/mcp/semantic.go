@@ -2,6 +2,7 @@ package mcpsrv
 
 import (
 	"context"
+	"fmt"
 	"slices"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
@@ -94,11 +95,20 @@ func semanticSearchHandler(eng *retrieve.Engine, r redactor) mcpsdk.ToolHandlerF
 			_, dst := labels[e.Dst]
 			return !src || !dst
 		})
+		// Recount after redaction, so the summary can't reveal that hidden nodes matched.
+		summary := res.Summary
+		switch {
+		case r.includePII || len(res.Nodes) == 0:
+		case len(nodes) == 0:
+			summary = "no semantic matches"
+		default:
+			summary = fmt.Sprintf("%d nodes, %d edges for %q", len(nodes), len(edges), query)
+		}
 		return jsonResult(struct {
 			Nodes   []scoredLean `json:"nodes"`
 			Edges   []leanEdge   `json:"edges"`
 			Summary string       `json:"summary"`
-		}{nodes, toLeanEdges(edges, labels), res.Summary})
+		}{nodes, toLeanEdges(edges, labels), summary})
 	}
 }
 

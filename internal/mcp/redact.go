@@ -1,12 +1,14 @@
 package mcpsrv
 
 import (
+	"context"
 	"maps"
 	"strings"
 
 	"github.com/Eric-Fernald/chiton/internal/extract/meeting"
 	"github.com/Eric-Fernald/chiton/internal/graph/cluster"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
+	"github.com/Eric-Fernald/chiton/internal/graph/store"
 )
 
 const (
@@ -47,16 +49,23 @@ func (r redactor) label(n model.Node) string {
 // hidden reports whether a label lookup must skip n, because matching its label would itself reveal a name.
 func (r redactor) hidden(n model.Node) bool { return r.label(n) != n.Label }
 
+// sourceURI is n's source URI, with a person's identity URI replaced by person://[redacted].
+func (r redactor) sourceURI(n model.Node) string {
+	if !r.includePII && isPerson(n) {
+		return meeting.PersonURIScheme + redactedName
+	}
+	return n.SourceURI
+}
+
 // node projects n to its lean shape, redacted.
 func (r redactor) node(n model.Node) leanNode {
 	ln := leanNode{
-		Kind: n.Kind, Label: r.label(n), SourceURI: n.SourceURI, Span: n.Span,
+		Kind: n.Kind, Label: r.label(n), SourceURI: r.sourceURI(n), Span: n.Span,
 		Attrs: n.Attrs, Provenance: n.Provenance, Confidence: n.Confidence,
 	}
 	switch {
 	case r.includePII:
 	case isPerson(n):
-		ln.SourceURI = meeting.PersonURIScheme + redactedName
 		ln.Attrs = map[string]any{"pii": true}
 	default:
 		ln.Attrs = redactAttrs(n.Attrs)
@@ -82,9 +91,39 @@ func (r redactor) labels(nodes []model.Node) map[string]string {
 	return m
 }
 
-// overlayLabel is a cluster result's label, hidden for a person (recognised by its person:// source URI).
-func (r redactor) overlayLabel(nr cluster.NodeResult) string {
-	if !r.includePII && strings.HasPrefix(nr.SourceURI, meeting.PersonURIScheme) {
+// redactedLabels maps the ID of each node whose label names a person to its redacted label.
+func (r redactor) redactedLabels(nodes []model.Node) map[string]string {
+	m := make(map[string]string)
+	for _, n := range nodes {
+		if r.hidden(n) {
+			m[n.ID] = r.label(n)
+		}
+	}
+	return m
+}
+
+// loadRedactedLabels is redactedLabels over the stored nodes with these IDs. It loads nothing when redaction is off.
+func (r redactor) loadRedactedLabels(ctx context.Context, gs store.GraphStore, ids []string) (map[string]string, error) {
+	if r.includePII {
+		return nil, nil
+	}
+	nodes, err := store.GetNodes(ctx, gs, ids)
+	if err != nil {
+		return nil, err
+	}
+	return r.redactedLabels(nodes), nil
+}
+
+// overlayLabel names cluster result nr (node id): its stored node's redacted label from redacted, else nr's own
+// label, hidden when its person:// source URI marks a person no longer stored.
+func (r redactor) overlayLabel(id string, nr cluster.NodeResult, redacted map[string]string) string {
+	if r.includePII {
+		return nr.Label
+	}
+	if l, ok := redacted[id]; ok {
+		return l
+	}
+	if strings.HasPrefix(nr.SourceURI, meeting.PersonURIScheme) {
 		return redactedPerson
 	}
 	return nr.Label

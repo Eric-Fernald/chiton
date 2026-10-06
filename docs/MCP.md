@@ -149,16 +149,20 @@ Names of meeting speakers, Slack authors, and email participants all land on
 `semantic_search`, `graph_summary`, `god_nodes`) redact them:
 
 - A person appears as `[redacted person]` with source URI `person://[redacted]`
-  and no attrs beyond `pii`. Edge endpoints and cluster labels use the same
-  placeholder.
+  and no attrs beyond `pii`. Edge endpoints use the same placeholder.
 - Other nodes drop the attrs that identify people: `participants`, `speaker`,
   `person_id`, email `from`/`from_name`/`to`/`cc`, `email` addresses, and
   action-item assignees. Meetings keep a `participant_count`.
 - Speaker prefixes in transcript text and speaker names in turn labels become
   `[redacted]`.
+- `god_nodes` and `graph_summary` label each cluster entry from its stored
+  node, so people and speaker-named turns are redacted there too.
 - Label lookups never match a node whose label names a person. `get_node`,
   `get_node_neighborhood`, `query_graph` and `shortest_path` report no match,
-  and `semantic_search` leaves such nodes (and their edges) out.
+  and `semantic_search` leaves such nodes (and their edges) out of both the
+  results and its summary counts.
+- `graph_summary`'s `scope` is matched against the redacted source URI, so
+  `scope: "person://alice"` counts nothing.
 
 `chiton serve --include-pii` turns redaction off. The meeting tools
 (`search_meetings`, `decisions_about`) keep their own per-call `include_pii`,

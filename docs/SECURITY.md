@@ -337,15 +337,22 @@ Redaction happens at two levels.
 `semantic_search`, `graph_summary` and `god_nodes` hide who people are:
 
 - A `person` node (or any node tagged `pii`) comes back as `[redacted person]`
-  with source URI `person://[redacted]` and no `attrs.email`. Edge endpoints and
-  cluster labels use the same placeholder.
+  with source URI `person://[redacted]` and no `attrs.email`. Edge endpoints use
+  the same placeholder.
 - Other nodes lose the attrs that name or address people: meeting
   `participants` (replaced by `participant_count`), turn `speaker`,
   `person_id`, email `from`/`from_name`/`to`/`cc`, and action-item assignees.
   Speaker prefixes in transcript text and speaker-named turn labels become
   `[redacted]`.
+- `god_nodes` and `graph_summary` take each cluster entry's label from its
+  stored node and redact it the same way. An entry whose node is no longer
+  stored keeps its cluster label, except that a `person://` entry is still
+  hidden; re-run `chiton cluster` after deleting meetings.
 - Label lookups skip a node whose label names a person, so `query_graph "alice"`
   reports no match rather than confirming that Alice is in the graph.
+  `semantic_search` drops such nodes and recounts its summary.
+- `graph_summary`'s `scope` is matched against the redacted source URI, so a
+  `person://<name>` scope can't be used to test whether someone is in the graph.
 
 `chiton serve --include-pii` turns this off for the whole server.
 

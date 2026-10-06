@@ -53,7 +53,7 @@ func New(gs store.GraphStore, overlay *cluster.Results, deps Deps) *mcpsdk.MCPSe
 	s.AddTool(neighborhoodTool(), neighborhoodHandler(gs, r))
 	s.AddTool(queryTool(), queryHandler(gs, r))
 	s.AddTool(shortestPathTool(), shortestPathHandler(gs, r))
-	s.AddTool(godNodesTool(), godNodesHandler(overlay, r))
+	s.AddTool(godNodesTool(), godNodesHandler(gs, overlay, r))
 	s.AddTool(graphSummaryTool(), graphSummaryHandler(gs, overlay, r))
 	s.AddTool(listFindingsTool(), listFindingsHandler(gs))
 	s.AddTool(explainFindingTool(), explainFindingHandler(gs))
@@ -388,8 +388,8 @@ func godNodesTool() mcplib.Tool {
 	)
 }
 
-func godNodesHandler(overlay *cluster.Results, r redactor) mcpsdk.ToolHandlerFunc {
-	return func(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func godNodesHandler(gs store.GraphStore, overlay *cluster.Results, r redactor) mcpsdk.ToolHandlerFunc {
+	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		if overlay == nil {
 			return mcplib.NewToolResultText("no cluster data available — run 'chiton cluster' then restart chiton serve"), nil
 		}
@@ -404,22 +404,22 @@ func godNodesHandler(overlay *cluster.Results, r redactor) mcpsdk.ToolHandlerFun
 			Degree      int     `json:"degree"`
 		}
 
-		var candidates []cluster.NodeResult
-		for _, nr := range overlay.Nodes {
-			if filterComm >= 0 && nr.CommunityID != filterComm {
-				continue
-			}
-			candidates = append(candidates, nr)
+		ids := rankedIDs(overlay, func(_ string, nr cluster.NodeResult) bool {
+			return filterComm < 0 || nr.CommunityID == filterComm
+		})
+		if limit > 0 && len(ids) > limit {
+			ids = ids[:limit]
 		}
-		sortByBetweenness(candidates)
-		if limit > 0 && len(candidates) > limit {
-			candidates = candidates[:limit]
+		redacted, err := r.loadRedactedLabels(ctx, gs, ids)
+		if err != nil {
+			return mcplib.NewToolResultErrorFromErr("failed to load nodes", err), nil
 		}
 
-		out := make([]godNode, len(candidates))
-		for i, nr := range candidates {
+		out := make([]godNode, len(ids))
+		for i, id := range ids {
+			nr := overlay.Nodes[id]
 			out[i] = godNode{
-				Label:       r.overlayLabel(nr),
+				Label:       r.overlayLabel(id, nr, redacted),
 				Community:   nr.CommunityID,
 				Betweenness: nr.Betweenness,
 				Degree:      nr.Degree,
@@ -468,7 +468,8 @@ func graphSummaryHandler(gs store.GraphStore, overlay *cluster.Results, r redact
 		byNodeKind := make(map[model.NodeKind]int)
 		for _, n := range allNodes {
 			if scope != "" {
-				if !strings.Contains(strings.ToLower(n.SourceURI), scopeLower) {
+				// Match the redacted URI, so a person:// scope can't probe for a name.
+				if !strings.Contains(strings.ToLower(r.sourceURI(n)), scopeLower) {
 					continue
 				}
 				inScope[n.ID] = true
@@ -502,18 +503,13 @@ func graphSummaryHandler(gs store.GraphStore, overlay *cluster.Results, r redact
 		var godNodes []godNodeSummary
 
 		if overlay != nil {
-			var candidates []cluster.NodeResult
-			for id, nr := range overlay.Nodes {
-				if scope != "" && !inScope[id] {
-					continue
-				}
-				candidates = append(candidates, nr)
-			}
-			// Sort first so each community's top_nodes are its highest-betweenness members.
-			sortByBetweenness(candidates)
+			// Rank first so each community's top_nodes are its highest-betweenness members.
+			ids := rankedIDs(overlay, func(id string, _ cluster.NodeResult) bool { return scope == "" || inScope[id] })
+			redacted := r.redactedLabels(allNodes)
 
 			commIdx := make(map[int]int) // maps a community ID to its index in communities
-			for _, nr := range candidates {
+			for _, id := range ids {
+				nr := overlay.Nodes[id]
 				i, ok := commIdx[nr.CommunityID]
 				if !ok {
 					i = len(communities)
@@ -523,16 +519,17 @@ func graphSummaryHandler(gs store.GraphStore, overlay *cluster.Results, r redact
 				c := &communities[i]
 				c.NodeCount++
 				if len(c.TopNodes) < 5 {
-					c.TopNodes = append(c.TopNodes, r.overlayLabel(nr))
+					c.TopNodes = append(c.TopNodes, r.overlayLabel(id, nr, redacted))
 				}
 			}
 			slices.SortFunc(communities, func(a, b commSummary) int {
 				return cmp.Or(cmp.Compare(b.NodeCount, a.NodeCount), cmp.Compare(a.ID, b.ID))
 			})
 
-			for _, nr := range candidates[:min(10, len(candidates))] {
+			for _, id := range ids[:min(10, len(ids))] {
+				nr := overlay.Nodes[id]
 				godNodes = append(godNodes, godNodeSummary{
-					Label:       r.overlayLabel(nr),
+					Label:       r.overlayLabel(id, nr, redacted),
 					CommunityID: nr.CommunityID,
 					Betweenness: nr.Betweenness,
 					Degree:      nr.Degree,
@@ -569,8 +566,20 @@ func graphSummaryHandler(gs store.GraphStore, overlay *cluster.Results, r redact
 	}
 }
 
-// sortByBetweenness orders cluster results with cluster.CompareByBetweenness, the shared god-node ranking.
-func sortByBetweenness(rs []cluster.NodeResult) { slices.SortFunc(rs, cluster.CompareByBetweenness) }
+// rankedIDs returns the IDs of the overlay results keep accepts, ranked by cluster.CompareByBetweenness (the
+// shared god-node order), then by ID.
+func rankedIDs(overlay *cluster.Results, keep func(id string, nr cluster.NodeResult) bool) []string {
+	var ids []string
+	for id, nr := range overlay.Nodes {
+		if keep(id, nr) {
+			ids = append(ids, id)
+		}
+	}
+	slices.SortFunc(ids, func(a, b string) int {
+		return cmp.Or(cluster.CompareByBetweenness(overlay.Nodes[a], overlay.Nodes[b]), cmp.Compare(a, b))
+	})
+	return ids
+}
 
 // pendingResult renders a pending-task listing. It reports "<tool, spaced> failed" on error, the empty
 // message when there are no specs, and the specs as JSON otherwise.
