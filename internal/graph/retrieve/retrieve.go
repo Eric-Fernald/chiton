@@ -242,22 +242,27 @@ func (e *Engine) community(id string) *int {
 	return nil
 }
 
-// budgetTrim keeps the highest-ranked nodes whose cumulative serialized size
-// fits within maxTokens (~4 chars per token). Always keeps at least one node.
-func budgetTrim(scored []Scored, maxTokens int) []Scored {
+// TrimToBudget keeps the longest prefix of items whose summed cost (in bytes) fits maxTokens at ~4 bytes per
+// token. It always keeps the first item.
+func TrimToBudget[T any](items []T, maxTokens int, cost func(T) int) []T {
 	budget := maxTokens * 4
 	used := 0
-	kept := scored[:0]
-	for i, s := range scored {
-		b, _ := json.Marshal(s.Node)
-		cost := len(b)
-		if i > 0 && used+cost > budget {
-			break
+	for i, it := range items {
+		c := cost(it)
+		if i > 0 && used+c > budget {
+			return items[:i]
 		}
-		used += cost
-		kept = append(kept, s)
+		used += c
 	}
-	return kept
+	return items
+}
+
+// budgetTrim keeps the highest-ranked nodes whose cumulative serialized size fits within maxTokens.
+func budgetTrim(scored []Scored, maxTokens int) []Scored {
+	return TrimToBudget(scored, maxTokens, func(s Scored) int {
+		b, _ := json.Marshal(s.Node)
+		return len(b)
+	})
 }
 
 // pruneEdges drops edges whose endpoints are not both in the kept node set.

@@ -99,7 +99,8 @@ is served by the tools above.
 ## Response shape
 
 Most read tools return a JSON document built from two lean types that strip
-internal metadata (IDs, embeddings, timestamps) the model does not need.
+internal metadata (IDs, embeddings, timestamps) the model does not need. Responses are
+compact JSON without HTML escaping; the examples here are pretty-printed for reading.
 
 A **lean node** (`leanNode`):
 
@@ -228,6 +229,8 @@ over grep or file-read for architecture questions.
 | `depth` | integer | default `2`, min `1`, max `5` | Hop depth. |
 | `edge_kinds` | string[] | optional | Filter to these edge types, e.g. `["CALLS","IMPORTS"]`. Empty = all kinds. |
 | `source_prefix` | string | optional | Only return neighbor nodes whose `source_uri` contains this substring. |
+| `max_nodes` | integer | default `100`, min `1`, max `500` | Max nodes to return, nearest hops first. |
+| `max_tokens` | integer | default `4000`, min `500`, max `16000` | Approximate token budget for the returned nodes and edges. |
 
 **Request**
 
@@ -261,6 +264,8 @@ over grep or file-read for architecture questions.
   "summary": "1 nodes, 1 edges within depth 1 of \"FetchAll\""
 }
 ```
+
+`truncated: true` (and a hint in `summary`) means more nodes were reachable than returned. When `source_prefix` is set, the seed is always included in `nodes`.
 
 ## query_graph
 

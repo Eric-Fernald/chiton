@@ -91,6 +91,7 @@ dated section.
 
 ### Changed
 
+- `get_node_neighborhood` takes `max_nodes`/`max_tokens` (defaults 100 / 4000) and reports `truncated`; all MCP tool results are compact JSON (no indentation or HTML escaping). `god_nodes` clamps `limit` to 1-100.
 - **`chiton embed` no longer embeds label-only external package stubs, and the next run prunes their vectors**; this cuts `serve` memory on large Go graphs. The in-memory vector index stores all vectors in one contiguous slab.
 - **Stored embeddings record their model and a hash of the embedded text.** `chiton embed` re-embeds nodes whose text or model changed and prunes vectors of deleted nodes, and `serve`/`search` exclude vectors from a different model with a warning. Existing vectors read as 'unknown model', so the first `chiton embed` after upgrading re-embeds them once.
 - **The missing-passphrase error now says how to fix it for an assistant**, and `chiton init` warns that an assistant-launched `serve --stdio` needs `CHITON_PASSPHRASE`.

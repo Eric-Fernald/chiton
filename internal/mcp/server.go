@@ -2,6 +2,7 @@
 package mcpsrv
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -116,6 +117,18 @@ func neighborhoodTool() mcplib.Tool {
 		mcplib.WithString("source_prefix",
 			mcplib.Description("Optional filter: only return neighbor nodes whose source_uri contains this substring (e.g. \"Go_Projects\" to scope to one corpus)"),
 		),
+		mcplib.WithInteger("max_nodes",
+			mcplib.DefaultNumber(100),
+			mcplib.Description("Max nodes to return, nearest hops first (default 100, max 500). The result sets truncated when more were reachable."),
+			mcplib.Min(1),
+			mcplib.Max(500),
+		),
+		mcplib.WithInteger("max_tokens",
+			mcplib.DefaultNumber(4000),
+			mcplib.Description("Approximate token budget for the returned nodes and edges (default 4000, max 16000)."),
+			mcplib.Min(500),
+			mcplib.Max(16000),
+		),
 		mcplib.WithReadOnlyHintAnnotation(true),
 	)
 }
@@ -201,38 +214,97 @@ func neighborhoodHandler(gs store.GraphStore, r redactor) mcpsdk.ToolHandlerFunc
 		if err != nil {
 			return mcplib.NewToolResultError(err.Error()), nil
 		}
-		prefix := req.GetString("source_prefix", "")
 		depth := clampInt(req.GetInt("depth", 2), 1, 5)
+		maxNodes := clampInt(req.GetInt("max_nodes", 100), 1, 500)
+		maxTokens := clampInt(req.GetInt("max_tokens", 4000), 500, 16000)
 
 		seed, errRes := lookupNode(ctx, gs, r, label, req.GetString("file", ""))
 		if errRes != nil {
 			return errRes, nil
 		}
-
 		sub, err := gs.Neighbors(ctx, seed.ID, depth, parseEdgeKinds(req))
 		if err != nil {
 			return mcplib.NewToolResultErrorFromErr("neighbors failed", err), nil
 		}
-
-		labels := r.labels(sub.Nodes)
-		labels[seed.ID] = r.label(seed)
-		leanNodes, leanEdges := filterByPrefix(labels[seed.ID],
-			r.nodes(sub.Nodes), toLeanEdges(sub.Edges, labels), prefix)
+		reachable := keepPrefix(seed.ID, sub.Nodes, req.GetString("source_prefix", ""), r)
+		nodes, edges := capNeighborhood(reachable, sub.Edges, maxNodes, maxTokens, r)
 
 		type result struct {
-			Seed    leanNode   `json:"seed"`
-			Nodes   []leanNode `json:"nodes"`
-			Edges   []leanEdge `json:"edges"`
-			Summary string     `json:"summary"`
+			Seed      leanNode   `json:"seed"`
+			Nodes     []leanNode `json:"nodes"`
+			Edges     []leanEdge `json:"edges"`
+			Truncated bool       `json:"truncated,omitempty"`
+			Summary   string     `json:"summary"`
 		}
-		return jsonResult(result{
-			Seed:  r.node(seed),
-			Nodes: leanNodes,
-			Edges: leanEdges,
-			Summary: fmt.Sprintf("%d nodes, %d edges within depth %d of %q",
-				len(leanNodes), len(leanEdges), depth, labels[seed.ID]),
-		})
+		res := result{
+			Seed:      r.node(seed),
+			Nodes:     nodes,
+			Edges:     edges,
+			Truncated: len(nodes) < len(reachable),
+			Summary:   fmt.Sprintf("%d nodes, %d edges within depth %d of %q", len(nodes), len(edges), depth, r.label(seed)),
+		}
+		if res.Truncated {
+			res.Summary += fmt.Sprintf(" (truncated from %d reachable nodes; raise max_nodes/max_tokens or narrow edge_kinds/source_prefix)", len(reachable))
+		}
+		return jsonResult(res)
 	}
+}
+
+// keepPrefix keeps the seed and the nodes whose redacted source_uri contains prefix (case-insensitive).
+func keepPrefix(seedID string, nodes []model.Node, prefix string, r redactor) []model.Node {
+	if prefix == "" {
+		return nodes
+	}
+	lower := strings.ToLower(prefix)
+	var out []model.Node
+	for _, n := range nodes {
+		if n.ID == seedID || strings.Contains(strings.ToLower(r.sourceURI(n)), lower) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// capNeighborhood keeps the longest BFS-order prefix of nodes within maxNodes and maxTokens, pricing each node
+// as its lean JSON plus its edges back to earlier nodes, and returns that prefix with the edges among it.
+func capNeighborhood(nodes []model.Node, edges []model.Edge, maxNodes, maxTokens int, r redactor) ([]leanNode, []leanEdge) {
+	pos := make(map[string]int, len(nodes))
+	for i, n := range nodes {
+		pos[n.ID] = i
+	}
+	labels := r.labels(nodes)
+	lean := r.nodes(nodes)
+	cost := make([]int, len(nodes))
+	for i := range lean {
+		cost[i] = jsonLen(lean[i])
+	}
+	var within []model.Edge
+	for _, e := range edges {
+		i, okSrc := pos[e.Src]
+		j, okDst := pos[e.Dst]
+		if okSrc && okDst {
+			within = append(within, e)
+			cost[max(i, j)] += jsonLen(toLeanEdge(e, labels))
+		}
+	}
+	idx := make([]int, min(len(nodes), maxNodes))
+	for i := range idx {
+		idx[i] = i
+	}
+	kept := len(retrieve.TrimToBudget(idx, maxTokens, func(i int) int { return cost[i] }))
+	keptEdges := []leanEdge{}
+	for _, e := range within {
+		if pos[e.Src] < kept && pos[e.Dst] < kept {
+			keptEdges = append(keptEdges, toLeanEdge(e, labels))
+		}
+	}
+	return lean[:kept], keptEdges
+}
+
+// jsonLen is v's compact JSON size, the unit token budgets are priced in (~4 bytes per token).
+func jsonLen(v any) int {
+	b, _ := json.Marshal(v)
+	return len(b)
 }
 
 func queryHandler(gs store.GraphStore, r redactor) mcpsdk.ToolHandlerFunc {
@@ -340,30 +412,6 @@ func toLeanEdges(edges []model.Edge, labels map[string]string) []leanEdge {
 	return out
 }
 
-// filterByPrefix keeps neighbor nodes whose source_uri contains prefix and edges whose endpoints
-// both survive. The seed always survives, so its edges are kept.
-func filterByPrefix(seedLabel string, nodes []leanNode, edges []leanEdge, prefix string) ([]leanNode, []leanEdge) {
-	if prefix == "" {
-		return nodes, edges
-	}
-	lower := strings.ToLower(prefix)
-	kept := map[string]bool{seedLabel: true}
-	var filteredNodes []leanNode
-	for _, n := range nodes {
-		if strings.Contains(strings.ToLower(n.SourceURI), lower) {
-			filteredNodes = append(filteredNodes, n)
-			kept[n.Label] = true
-		}
-	}
-	var filteredEdges []leanEdge
-	for _, e := range edges {
-		if kept[e.From] && kept[e.To] {
-			filteredEdges = append(filteredEdges, e)
-		}
-	}
-	return filteredNodes, filteredEdges
-}
-
 func toLeanEdge(e model.Edge, labels map[string]string) leanEdge {
 	return leanEdge{
 		Kind:  e.Kind,
@@ -395,7 +443,7 @@ func godNodesHandler(gs store.GraphStore, overlay *cluster.Results, r redactor) 
 			return mcplib.NewToolResultText("no cluster data available — run 'chiton cluster' then restart chiton serve"), nil
 		}
 
-		limit := req.GetInt("limit", 10)
+		limit := clampInt(req.GetInt("limit", 10), 1, 100)
 		filterComm := req.GetInt("community_id", -1)
 
 		type godNode struct {
@@ -408,7 +456,7 @@ func godNodesHandler(gs store.GraphStore, overlay *cluster.Results, r redactor) 
 		ids := rankedIDs(overlay, func(_ string, nr cluster.NodeResult) bool {
 			return filterComm < 0 || nr.CommunityID == filterComm
 		})
-		if limit > 0 && len(ids) > limit {
+		if len(ids) > limit {
 			ids = ids[:limit]
 		}
 		stored, err := r.loadLabels(ctx, gs, ids)
@@ -611,10 +659,14 @@ func bindAndSubmit[R, Rep any](ctx context.Context, req mcplib.CallToolRequest, 
 	return jsonResult(rep)
 }
 
+// jsonResult renders v as compact JSON. HTML escaping is off, so code like "<-ch" or "a && b" stays readable
+// and doesn't grow into < / & sequences that cost tokens.
 func jsonResult(v any) (*mcplib.CallToolResult, error) {
-	b, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
 		return mcplib.NewToolResultErrorFromErr("marshal failed", err), nil
 	}
-	return mcplib.NewToolResultText(string(b)), nil
+	return mcplib.NewToolResultText(strings.TrimSuffix(buf.String(), "\n")), nil
 }
