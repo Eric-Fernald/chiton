@@ -71,7 +71,9 @@ than an error:
 
 - `semantic_search` requires a prior `chiton embed`; without embeddings it
   replies `semantic search unavailable — no embeddings indexed. Run 'chiton
-  embed' then restart 'chiton serve'.`
+  embed' then restart 'chiton serve'.` Vectors made by a different embedding
+  model than the server's are left out of the index, and serve logs a warning
+  on stderr; re-run `chiton embed`.
 - `god_nodes` requires a prior `chiton cluster`; without cluster data it replies
   `no cluster data available — run 'chiton cluster' then restart chiton serve`.
 

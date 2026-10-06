@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"slices"
 	"strings"
@@ -32,8 +33,10 @@ func embedCmd() *cobra.Command {
 		Use:   "embed",
 		Short: "Embed symbol/doc/concept nodes for semantic search",
 		Long: `Compute embeddings for every embeddable node (symbols with docstrings,
-doc sections, concepts) and store them alongside the graph. Only nodes without
-an embedding are processed unless --all is given.
+doc sections, concepts) and store them alongside the graph. Nodes without a
+vector, or whose text or embedding model changed since their vector was written,
+are (re-)embedded; vectors of deleted or no-longer-embeddable nodes are pruned.
+--all re-embeds everything.
 
 The default provider is local Ollama (no data leaves the machine). Use
 --provider hash for an offline, dependency-free embedder (lower quality; good
@@ -69,27 +72,18 @@ for CI and demos). Restart 'chiton serve' afterwards to load the new vectors.`,
 				return fmt.Errorf("load nodes: %w", err)
 			}
 
-			existing := map[string]bool{}
-			if !all {
-				have, err := store.EmbeddingIDs(ctx, es)
-				if err != nil {
-					return fmt.Errorf("load existing embeddings: %w", err)
-				}
-				for _, id := range have {
-					existing[id] = true
-				}
+			metas, err := store.EmbeddingMetas(ctx, es)
+			if err != nil {
+				return fmt.Errorf("load existing embeddings: %w", err)
 			}
-
-			// work holds the embeddable nodes (non-empty TextFor) still lacking a vector. Building texts per
-			// batch keeps only one batch of doc-section text, which can be large, live at a time.
-			var work []model.Node
-			for _, n := range nodes {
-				if (all || !existing[n.ID]) && embed.TextFor(n) != "" {
-					work = append(work, n)
-				}
+			// work holds the embeddable nodes without a current vector. Building texts per batch keeps only one
+			// batch of doc-section text, which can be large, live at a time.
+			work, stale := embed.Plan(nodes, metas, emb.Model(), all)
+			if err := pruneEmbeddings(ctx, es, stale, out); err != nil {
+				return err
 			}
 			if len(work) == 0 {
-				fmt.Fprintln(out, "embed: nothing to embed (all embeddable nodes already have vectors; use --all to re-embed)")
+				fmt.Fprintln(out, "embed: nothing to embed (every embeddable node has a current vector; use --all to re-embed)")
 			} else {
 				fmt.Fprintf(out, "embed: %d node(s) to embed\n", len(work))
 			}
@@ -118,13 +112,13 @@ for CI and demos). Restart 'chiton serve' afterwards to load the new vectors.`,
 			// Save the HNSW index serve loads, so it never builds one at startup. The vectors are already
 			// stored, so a failure here only costs serve that build.
 			logf := func(format string, args ...any) { fmt.Fprintf(out, format+"\n", args...) }
-			idx, err := saveIndex(ctx, cfg.Vector, es, savedIndexFor(cfg.GraphPath, gs), logf)
+			idx, err := saveIndex(ctx, cfg.Vector, es, emb.Model(), savedIndexFor(cfg.GraphPath, gs), logf)
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "embed: warning: hnsw index not saved: %v\n", err)
 			}
 
 			if linkSimilar {
-				n, err := linkSimilarNodes(ctx, gs, es, float32(similarThreshold), cfg.Vector, exact, idx)
+				n, err := linkSimilarNodes(ctx, gs, es, emb.Model(), float32(similarThreshold), cfg.Vector, exact, idx)
 				if err != nil {
 					return fmt.Errorf("link-similar: %w", err)
 				}
@@ -138,7 +132,7 @@ for CI and demos). Restart 'chiton serve' afterwards to load the new vectors.`,
 
 	cmd.Flags().StringVar(&provider, "provider", "", "Embedding provider override (ollama|hash)")
 	cmd.Flags().StringVar(&modelName, "model", "", "Embedding model override")
-	cmd.Flags().BoolVar(&all, "all", false, "Re-embed every embeddable node, not just those missing a vector")
+	cmd.Flags().BoolVar(&all, "all", false, "Re-embed every embeddable node, even those with a current vector")
 	cmd.Flags().BoolVar(&linkSimilar, "link-similar", false, "Also add SIMILAR_TO edges between highly-similar nodes")
 	cmd.Flags().Float64Var(&similarThreshold, "similar-threshold", 0.85, "Cosine threshold for --link-similar edges")
 	cmd.Flags().BoolVar(&exact, "exact", false,
@@ -146,12 +140,12 @@ for CI and demos). Restart 'chiton serve' afterwards to load the new vectors.`,
 	return cmd
 }
 
-// linkSimilarNodes indexes all embeddings and adds a SIMILAR_TO edge (INFERRED, confidence=score) for each
-// pair above threshold. Large stores get an approximate index, which can miss a few pairs; exact forces Flat.
-// A non-nil built index over the same embeddings is used instead of building one, unless exact is set.
-func linkSimilarNodes(ctx context.Context, gs store.GraphStore, es store.EmbeddingStore, threshold float32,
-	vcfg config.VectorConfig, exact bool, built vector.Index) (int, error) {
-	embs, err := es.AllEmbeddings(ctx)
+// linkSimilarNodes indexes the embeddings made by modelID and adds a SIMILAR_TO edge (INFERRED, confidence=score)
+// for each pair above threshold. Large stores get an approximate index, which can miss a few pairs; exact forces
+// Flat. A non-nil built index over the same embeddings is used instead of building one, unless exact is set.
+func linkSimilarNodes(ctx context.Context, gs store.GraphStore, es store.EmbeddingStore, modelID string,
+	threshold float32, vcfg config.VectorConfig, exact bool, built vector.Index) (int, error) {
+	embs, err := modelEmbeddings(es, modelID)(ctx) // never link vectors from different models
 	if err != nil {
 		return 0, err
 	}
@@ -199,6 +193,19 @@ func linkSimilarNodes(ctx context.Context, gs store.GraphStore, es store.Embeddi
 	return len(edges), nil
 }
 
+// pruneEmbeddings deletes the stale vectors embed.Plan found, when the store can delete vectors on their own.
+func pruneEmbeddings(ctx context.Context, es store.EmbeddingStore, stale []string, out io.Writer) error {
+	d, ok := es.(store.EmbeddingDeleter)
+	if !ok || len(stale) == 0 {
+		return nil
+	}
+	if err := d.DeleteEmbeddings(ctx, stale); err != nil {
+		return fmt.Errorf("prune stale embeddings: %w", err)
+	}
+	fmt.Fprintf(out, "embed: pruned %d vector(s) of deleted or no-longer-embeddable nodes\n", len(stale))
+	return nil
+}
+
 // searchCmd runs hybrid retrieval from the command line.
 func searchCmd() *cobra.Command {
 	var k, hops, maxTokens int
@@ -225,13 +232,14 @@ func searchCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load embeddings: %w", err)
 			}
-			if len(embs) == 0 {
-				fmt.Fprintln(out, "search: no embeddings indexed — run 'chiton embed' first")
-				return nil
-			}
 			emb, err := newEmbedder(cfg, "", "")
 			if err != nil {
 				return err
+			}
+			logf := func(format string, args ...any) { fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", args...) }
+			if embs = keepModel(embs, emb.Model(), "search", logf); len(embs) == 0 {
+				fmt.Fprintln(out, "search: no embeddings for the configured model — run 'chiton embed' first")
+				return nil
 			}
 			clusterResults, _ := cluster.LoadSidecar(cluster.SidecarPath(cfg.GraphPath))
 			idx, _, err := buildIndex(cfg.Vector, embs, oneShotExact(cfg.Vector))

@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/Eric-Fernald/chiton/internal/config"
+	"github.com/Eric-Fernald/chiton/internal/embed"
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
 	"github.com/Eric-Fernald/chiton/internal/vector"
 )
@@ -114,6 +117,37 @@ func serveIndex(ctx context.Context, cfg config.VectorConfig, embs []store.Embed
 	return sw, ready, nil
 }
 
+// modelEmbeddings returns a loader of es's embeddings made by modelID (see embed.KeepModel). It reports
+// nothing; keepModel logs the exclusions once.
+func modelEmbeddings(es store.EmbeddingStore, modelID string) func(context.Context) ([]store.Embedding, error) {
+	return func(ctx context.Context) ([]store.Embedding, error) {
+		embs, err := es.AllEmbeddings(ctx)
+		if err != nil {
+			return nil, err
+		}
+		embs, _ = embed.KeepModel(embs, modelID)
+		return embs, nil
+	}
+}
+
+// keepModel filters embs to those made by modelID (see embed.KeepModel) and logs, prefixed by who, what it
+// left out, since cosine scores across models are meaningless.
+func keepModel(embs []store.Embedding, modelID, who string, logf func(string, ...any)) []store.Embedding {
+	kept, rep := embed.KeepModel(embs, modelID)
+	for _, m := range slices.Sorted(maps.Keys(rep.Other)) {
+		logf("%s: warning: skipped %d embedding(s) made with model %q, not the configured %q — run 'chiton embed' to re-embed",
+			who, rep.Other[m], m, modelID)
+	}
+	if rep.WrongDim > 0 {
+		logf("%s: warning: skipped %d embedding(s) whose dimension differs from the rest — run 'chiton embed'", who, rep.WrongDim)
+	}
+	if rep.Legacy > 0 {
+		logf("%s: note: %d embedding(s) predate model tracking and are assumed to be %q — run 'chiton embed' to verify",
+			who, rep.Legacy, modelID)
+	}
+	return kept
+}
+
 // loadFailure says why serve or embed could not use the saved index.
 func loadFailure(err error) string {
 	switch {
@@ -125,12 +159,13 @@ func loadFailure(err error) string {
 	return fmt.Sprintf("the saved hnsw index is unreadable (%v)", err)
 }
 
-// saveIndex makes sure the HNSW index serve would use for es is saved, building and saving it when the
-// saved one is missing or stale, and returns it. A store small enough for serve to search exactly needs
-// no index, so saveIndex returns nil for it.
-func saveIndex(ctx context.Context, cfg config.VectorConfig, es store.EmbeddingStore, saved savedIndex,
+// saveIndex makes sure the HNSW index serve would use for es's modelID vectors is saved, building and saving
+// it when the saved one is missing or stale, and returns it. A store small enough for serve to search exactly
+// needs no index, so saveIndex returns nil for it.
+func saveIndex(ctx context.Context, cfg config.VectorConfig, es store.EmbeddingStore, modelID string, saved savedIndex,
 	logf func(string, ...any)) (vector.Index, error) {
-	embs, err := es.AllEmbeddings(ctx)
+	load := modelEmbeddings(es, modelID)
+	embs, err := load(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +180,7 @@ func saveIndex(ctx context.Context, cfg config.VectorConfig, es store.EmbeddingS
 	}
 	logf("embed: %s; building it", loadFailure(err))
 	if took {
-		if embs, err = es.AllEmbeddings(ctx); err != nil {
+		if embs, err = load(ctx); err != nil {
 			return nil, err
 		}
 	}
@@ -243,7 +278,7 @@ func buildIndex(cfg config.VectorConfig, embs []store.Embedding, exact bool) (ve
 // hnswConfig is the HNSW configuration cfg selects for embs.
 func hnswConfig(cfg config.VectorConfig, embs []store.Embedding) vector.HNSWConfig {
 	return vector.HNSWConfig{
-		Dim:            majorityDim(embs),
+		Dim:            embed.MajorityDim(embs),
 		M:              cfg.HNSWM,
 		EfSearch:       cfg.HNSWEfSearch,
 		EfConstruction: cfg.HNSWEfConstruction,
@@ -260,22 +295,4 @@ func fingerprint(hcfg vector.HNSWConfig, embs []store.Embedding) [sha256.Size]by
 			}
 		}
 	})
-}
-
-// majorityDim returns the most common non-zero vector length in embs, the larger on a tie, so an HNSW
-// index keeps the bulk of a store whose embedder changed and skips the stragglers. Flat ignores it.
-func majorityDim(embs []store.Embedding) int {
-	counts := map[int]int{}
-	best := 0
-	for _, e := range embs {
-		d := len(e.Vec)
-		if d == 0 {
-			continue
-		}
-		counts[d]++
-		if c, b := counts[d], counts[best]; c > b || (c == b && d > best) {
-			best = d
-		}
-	}
-	return best
 }

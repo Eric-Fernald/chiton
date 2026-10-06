@@ -91,6 +91,7 @@ dated section.
 
 ### Changed
 
+- **Stored embeddings record their model and a hash of the embedded text.** `chiton embed` re-embeds nodes whose text or model changed and prunes vectors of deleted nodes, and `serve`/`search` exclude vectors from a different model with a warning. Existing vectors read as 'unknown model', so the first `chiton embed` after upgrading re-embeds them once.
 - **The missing-passphrase error now says how to fix it for an assistant**, and `chiton init` warns that an assistant-launched `serve --stdio` needs `CHITON_PASSPHRASE`.
 - **Fewer duplicate writes.** The Go extractor emits each node and edge once per file, and a `build`/`sync once` run writes each shared `pkg://` stub once; `build`'s node and edge counts drop accordingly.
 

@@ -163,7 +163,8 @@ func (f *fakeEmbeddings) AllEmbeddings(context.Context) ([]store.Embedding, erro
 	f.loads++
 	out := make([]store.Embedding, len(f.embs))
 	for i, e := range f.embs {
-		out[i] = store.Embedding{NodeID: e.NodeID, Vec: slices.Clone(e.Vec)}
+		out[i] = e
+		out[i].Vec = slices.Clone(e.Vec)
 	}
 	return out, nil
 }
@@ -188,11 +189,11 @@ func TestSavedIndexServesWithoutBuilding(t *testing.T) {
 	var logs []string
 	logf := func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }
 
-	built, err := saveIndex(context.Background(), cfg, es, saved, logf)
+	built, err := saveIndex(context.Background(), cfg, es, "hash", saved, logf)
 	if err != nil || built == nil || vector.BackendName(built) != "hnsw" {
 		t.Fatalf("saveIndex = %v, %v", built, err)
 	}
-	if again, err := saveIndex(context.Background(), cfg, es, saved, logf); err != nil || again == nil ||
+	if again, err := saveIndex(context.Background(), cfg, es, "hash", saved, logf); err != nil || again == nil ||
 		!strings.Contains(logs[len(logs)-1], "is current") {
 		t.Fatalf("second saveIndex = %v, %v, logs %q; want the saved index reused", again, err, logs)
 	}
@@ -222,11 +223,47 @@ func TestSavedIndexServesWithoutBuilding(t *testing.T) {
 	}
 }
 
+// TestSavedIndexLeavesOutOtherModels checks embed saves an index over the configured model's vectors only, and
+// that serve, filtering the same way, loads it instead of rebuilding and warns about the rest.
+func TestSavedIndexLeavesOutOtherModels(t *testing.T) {
+	cfg := config.VectorConfig{Index: "auto", HNSWThreshold: 100}
+	mine, theirs := randomEmbs(300, 16), randomEmbs(40, 16)
+	for i := range mine {
+		mine[i].Model = "m"
+	}
+	for i := range theirs {
+		theirs[i].NodeID, theirs[i].Model = fmt.Sprintf("other:%04d", i), "x"
+	}
+	es := &fakeEmbeddings{embs: append(mine, theirs...)}
+	saved := savedIndex{Path: filepath.Join(t.TempDir(), "hnsw.idx")}
+	if built, err := saveIndex(context.Background(), cfg, es, "m", saved, func(string, ...any) {}); err != nil || built.Len() != 300 {
+		t.Fatalf("saveIndex = %v, %v; want 300 vectors of model m", built, err)
+	}
+
+	var logs []string
+	logf := func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }
+	all, _ := es.AllEmbeddings(context.Background())
+	embs := keepModel(all, "m", "serve", logf)
+	reload := func(context.Context) ([]store.Embedding, error) {
+		t.Fatal("serve rebuilt despite a current saved index")
+		return nil, nil
+	}
+	idx, ready, err := serveIndex(context.Background(), cfg, embs, reload, saved, logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-ready
+	if idx.Len() != 300 || len(logs) != 2 || !strings.Contains(logs[0], `40 embedding(s) made with model "x"`) ||
+		!strings.Contains(logs[1], "loaded") {
+		t.Fatalf("Len %d, logs %q", idx.Len(), logs)
+	}
+}
+
 func TestStaleSavedIndexFallsBackToBackgroundBuild(t *testing.T) {
 	cfg := config.VectorConfig{Index: "hnsw"}
 	es := &fakeEmbeddings{embs: randomEmbs(50, 8)}
 	saved := savedIndex{Path: filepath.Join(t.TempDir(), "hnsw.idx")}
-	if _, err := saveIndex(context.Background(), cfg, es, saved, func(string, ...any) {}); err != nil {
+	if _, err := saveIndex(context.Background(), cfg, es, "hash", saved, func(string, ...any) {}); err != nil {
 		t.Fatal(err)
 	}
 	es.embs[10].Vec[0] += 1 // the store changed after the save
@@ -251,7 +288,7 @@ func TestUnreadableSavedIndexReloadsForFlat(t *testing.T) {
 	cfg := config.VectorConfig{Index: "hnsw"}
 	es := &fakeEmbeddings{embs: randomEmbs(40, 8)}
 	saved := savedIndex{Path: filepath.Join(t.TempDir(), "hnsw.idx")}
-	if _, err := saveIndex(context.Background(), cfg, es, saved, func(string, ...any) {}); err != nil {
+	if _, err := saveIndex(context.Background(), cfg, es, "hash", saved, func(string, ...any) {}); err != nil {
 		t.Fatal(err)
 	}
 	// Truncate the topology after the header: the fingerprint matches, so the load takes vectors and then fails.
@@ -277,7 +314,7 @@ func TestUnreadableSavedIndexReloadsForFlat(t *testing.T) {
 func TestSaveIndexSkipsSmallStores(t *testing.T) {
 	es := &fakeEmbeddings{embs: randomEmbs(10, 4)}
 	saved := savedIndex{Path: filepath.Join(t.TempDir(), "hnsw.idx")}
-	idx, err := saveIndex(context.Background(), config.VectorConfig{Index: "auto", HNSWThreshold: 100}, es, saved,
+	idx, err := saveIndex(context.Background(), config.VectorConfig{Index: "auto", HNSWThreshold: 100}, es, "hash", saved,
 		func(string, ...any) {})
 	if err != nil || idx != nil {
 		t.Fatalf("saveIndex = %v, %v; want nothing for a store under the threshold", idx, err)

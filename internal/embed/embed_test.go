@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
+	"github.com/Eric-Fernald/chiton/internal/graph/store"
 )
 
 func TestHashEmbedderDeterministicAndNormalized(t *testing.T) {
@@ -257,4 +258,70 @@ func dot(a, b []float32) float32 {
 		s += a[i] * b[i]
 	}
 	return s
+}
+
+func TestNodeEmbeddingsTagsModelAndText(t *testing.T) {
+	embs, _, err := NodeEmbeddings(context.Background(), NewHashEmbedder(16), []model.Node{{ID: "s", Kind: model.KindSymbol, Label: "Retry"}})
+	if err != nil || len(embs) != 1 || embs[0].Model != "hash" || embs[0].TextSHA != TextSHA("Retry") {
+		t.Fatalf("got %+v, %v; want model hash and the text's SHA", embs, err)
+	}
+}
+
+func TestPlan(t *testing.T) {
+	sym := func(id, label string) model.Node { return model.Node{ID: id, Kind: model.KindSymbol, Label: label} }
+	nodes := []model.Node{
+		sym("new", "New"),                                    // no vector yet
+		sym("same", "Same"),                                  // current vector
+		sym("edited", "Edited"),                              // text changed since its vector
+		sym("othermodel", "Other"),                           // embedded by another model
+		sym("legacy", "Legacy"),                              // stored before models were recorded
+		{ID: "file", Kind: model.KindFile, Label: "main.go"}, // not embeddable, yet has a vector
+	}
+	have := []store.EmbeddingMeta{
+		{NodeID: "same", Model: "m", Dim: 2, TextSHA: TextSHA("Same")},
+		{NodeID: "edited", Model: "m", Dim: 2, TextSHA: TextSHA("Old text")},
+		{NodeID: "othermodel", Model: "x", Dim: 2, TextSHA: TextSHA("Other")},
+		{NodeID: "legacy", Dim: 2},
+		{NodeID: "file", Model: "m", Dim: 2},
+		{NodeID: "gone", Model: "m", Dim: 2}, // its node was deleted
+	}
+	work, stale := Plan(nodes, have, "m", false)
+	if got := idsOf(work); !slices.Equal(got, []string{"new", "edited", "othermodel", "legacy"}) {
+		t.Errorf("work = %v", got)
+	}
+	if !slices.Equal(stale, []string{"file", "gone"}) {
+		t.Errorf("stale = %v, want [file gone]", stale)
+	}
+	if work, _ := Plan(nodes, have, "m", true); len(work) != 5 {
+		t.Errorf("--all work = %v, want every embeddable node", idsOf(work))
+	}
+}
+
+func TestKeepModel(t *testing.T) {
+	embs := []store.Embedding{
+		{NodeID: "a", Model: "m", Vec: []float32{1, 0}},
+		{NodeID: "b", Vec: []float32{0, 1}},                 // legacy, same dim: kept
+		{NodeID: "c", Model: "other", Vec: []float32{1, 1}}, // another model: dropped
+		{NodeID: "d", Model: "m", Vec: []float32{1, 0, 0}},  // minority dimension: dropped
+		{NodeID: "e", Model: "m"},                           // empty: dropped
+	}
+	kept, rep := KeepModel(embs, "m")
+	var ids []string
+	for _, e := range kept {
+		ids = append(ids, e.NodeID)
+	}
+	if !slices.Equal(ids, []string{"a", "b"}) {
+		t.Errorf("kept = %v, want [a b]", ids)
+	}
+	if rep.Legacy != 1 || rep.WrongDim != 1 || len(rep.Other) != 1 || rep.Other["other"] != 1 {
+		t.Errorf("report = %+v", rep)
+	}
+}
+
+func idsOf(nodes []model.Node) []string {
+	ids := make([]string, len(nodes))
+	for i, n := range nodes {
+		ids[i] = n.ID
+	}
+	return ids
 }

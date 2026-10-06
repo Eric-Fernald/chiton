@@ -19,10 +19,12 @@ type Path struct {
 	Edges []model.Edge `json:"edges"`
 }
 
-// Embedding pairs a node ID with its embedding vector.
+// Embedding pairs a node ID with its embedding vector and what produced it.
 type Embedding struct {
-	NodeID string    `json:"node_id"`
-	Vec    []float32 `json:"vec"`
+	NodeID  string    `json:"node_id"`
+	Vec     []float32 `json:"vec"`
+	Model   string    `json:"model,omitempty"`    // embedder Model(); "" for a vector stored before models were recorded
+	TextSHA string    `json:"text_sha,omitempty"` // hex SHA-256 of the embedded text (embed.TextSHA)
 }
 
 // EmbeddingStore is an optional GraphStore capability that persists node embeddings outside the node JSON,
@@ -33,6 +35,26 @@ type EmbeddingStore interface {
 	// AllEmbeddings returns every stored embedding. Used to rebuild the
 	// in-memory ANN index at load.
 	AllEmbeddings(ctx context.Context) ([]Embedding, error)
+}
+
+// EmbeddingMeta describes a stored embedding without its vector.
+type EmbeddingMeta struct {
+	NodeID  string
+	Model   string // "" when unknown (stored before models were recorded)
+	Dim     int
+	TextSHA string
+}
+
+// EmbeddingMetaLister is an optional EmbeddingStore capability listing embedding metadata without decoding
+// vectors. Callers use the EmbeddingMetas helper.
+type EmbeddingMetaLister interface {
+	EmbeddingMetas(ctx context.Context) ([]EmbeddingMeta, error)
+}
+
+// EmbeddingDeleter is an optional EmbeddingStore capability removing vectors while keeping their nodes.
+type EmbeddingDeleter interface {
+	// DeleteEmbeddings removes the embeddings of ids. Missing IDs are skipped.
+	DeleteEmbeddings(ctx context.Context, ids []string) error
 }
 
 // NodeDeleter is an optional capability for deleting nodes by ID with point lookups. Callers type-assert it and

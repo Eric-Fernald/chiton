@@ -129,6 +129,22 @@ func EmbeddingIDs(ctx context.Context, es EmbeddingStore) ([]string, error) {
 	return ids, nil
 }
 
+// EmbeddingMetas lists es's stored embeddings without their vectors, via EmbeddingMetaLister when es has it.
+func EmbeddingMetas(ctx context.Context, es EmbeddingStore) ([]EmbeddingMeta, error) {
+	if l, ok := es.(EmbeddingMetaLister); ok {
+		return l.EmbeddingMetas(ctx)
+	}
+	embs, err := es.AllEmbeddings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	metas := make([]EmbeddingMeta, len(embs))
+	for i, e := range embs {
+		metas[i] = EmbeddingMeta{NodeID: e.NodeID, Model: e.Model, Dim: len(e.Vec), TextSHA: e.TextSHA}
+	}
+	return metas, nil
+}
+
 // ReplaceSources makes each update its source's stored content via SourceReplacer, else by DeleteBySourceURI
 // plus upserts, which also drops edges other sources attached. It returns stale-node counts per update; update URIs
 // must be distinct.

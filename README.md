@@ -202,7 +202,7 @@ chiton search "where do we handle auth?"
 | `chiton merge <snap>…` | Merge exported snapshot(s) into the current graph (cross-repo merging; idempotent, dedups shared nodes). Alias: `import`. |
 | `chiton bench [path]` | Benchmark token cost (chiton vs naive vs grep+read); `--synth N` for a synthetic corpus, `--json`. |
 | `chiton version` | Print version + build metadata. |
-| `chiton embed` | Embed nodes for semantic search (`--provider`, `--all`, `--link-similar`, `--exact`). Takes no path — it always covers the whole store. For stores of 100k+ vectors it also builds and saves the HNSW index (`hnsw.idx`) that `serve` loads, even when nothing new needed embedding. |
+| `chiton embed` | Embed nodes for semantic search (`--provider`, `--all`, `--link-similar`, `--exact`). Re-embeds nodes whose text or embedding model changed and prunes vectors of deleted nodes. Takes no path — it always covers the whole store. For stores of 100k+ vectors it also builds and saves the HNSW index (`hnsw.idx`) that `serve` loads, even when nothing new needed embedding. |
 | `chiton search <query>` | Hybrid semantic + graph search from the CLI. |
 | `chiton extract pending\|submit` | Emit semantic-extraction task specs / ingest the structured results. |
 | `chiton analyze <path>` | Run deterministic rules; persist findings as graph nodes. `--diff` / `--since <ref>`, `--no-llm`. |

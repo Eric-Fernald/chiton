@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,7 +32,7 @@ const (
 	pfxEdge = "e:" // e:{edgeID}                        → json(Edge)
 	pfxSrc  = "s:" // s:{src}:{kind}:{dst}              → edgeID   (forward adjacency)
 	pfxDst  = "d:" // d:{dst}:{kind}:{src}              → edgeID   (reverse adjacency)
-	pfxEmb  = "v:" // v:{nodeID}                        → packed little-endian []float32
+	pfxEmb  = "v:" // v:{nodeID}                        → embMagic header + packed little-endian []float32 (legacy: bare vector)
 	pfxURI  = "u:" // u:{hash(source_uri)}\x00{nodeID}  → empty    (source_uri index)
 	pfxKind = "k:" // k:{kind}\x00{nodeID}              → empty    (kind index)
 )
@@ -46,15 +47,17 @@ type Store struct {
 
 // Compile-time checks that Store satisfies the store interfaces.
 var (
-	_ store.GraphStore        = (*Store)(nil)
-	_ store.EmbeddingStore    = (*Store)(nil)
-	_ store.NodeDeleter       = (*Store)(nil)
-	_ store.ReadOnlyAware     = (*Store)(nil)
-	_ store.NodeScanner       = (*Store)(nil)
-	_ store.NodeGetter        = (*Store)(nil)
-	_ store.EmbeddingIDLister = (*Store)(nil)
-	_ store.SourceReplacer    = (*Store)(nil)
-	_ store.KindCounter       = (*Store)(nil)
+	_ store.GraphStore          = (*Store)(nil)
+	_ store.EmbeddingStore      = (*Store)(nil)
+	_ store.NodeDeleter         = (*Store)(nil)
+	_ store.ReadOnlyAware       = (*Store)(nil)
+	_ store.NodeScanner         = (*Store)(nil)
+	_ store.NodeGetter          = (*Store)(nil)
+	_ store.EmbeddingIDLister   = (*Store)(nil)
+	_ store.EmbeddingMetaLister = (*Store)(nil)
+	_ store.EmbeddingDeleter    = (*Store)(nil)
+	_ store.SourceReplacer      = (*Store)(nil)
+	_ store.KindCounter         = (*Store)(nil)
 )
 
 // ReadOnly reports whether the store was opened read-only, so callers can fail writes early
@@ -979,15 +982,19 @@ func (s *Store) CountByKind(_ context.Context) (map[model.NodeKind]int, map[mode
 	return nodes, edges, err
 }
 
-// UpsertEmbeddings stores vectors packed (little-endian float32) in the v: keyspace, out of the node JSON,
-// so graph traversals stay lean. Implements store.EmbeddingStore.
+// UpsertEmbeddings stores each vector with its model and text hash in the v: keyspace, out of the node JSON, so
+// graph traversals stay lean. Implements store.EmbeddingStore.
 func (s *Store) UpsertEmbeddings(_ context.Context, embs []store.Embedding) error {
 	return s.batch(func(wb *badgerdb.WriteBatch) error {
 		for _, e := range embs {
 			if e.NodeID == "" {
 				continue
 			}
-			if err := wb.Set(embKey(e.NodeID), encodeVec(e.Vec)); err != nil {
+			val, err := encodeEmb(e)
+			if err != nil {
+				return err
+			}
+			if err := wb.Set(embKey(e.NodeID), val); err != nil {
 				return err
 			}
 		}
@@ -1006,29 +1013,116 @@ func (s *Store) EmbeddingIDs(_ context.Context) ([]string, error) {
 	return ids, err
 }
 
-// AllEmbeddings returns every stored embedding by scanning the v: keyspace.
-// Implements store.EmbeddingStore.
+// AllEmbeddings returns every stored embedding by scanning the v: keyspace. Implements store.EmbeddingStore.
 func (s *Store) AllEmbeddings(_ context.Context) ([]store.Embedding, error) {
 	var embs []store.Embedding
 	err := s.db.View(func(txn *badgerdb.Txn) error {
 		return scan(txn, pfxEmb, func(k, v []byte) error {
-			embs = append(embs, store.Embedding{NodeID: string(k), Vec: decodeVec(v)})
+			embs = append(embs, decodeEmb(string(k), v))
 			return nil
 		})
 	})
 	return embs, err
 }
 
-// encodeVec packs a float32 slice as little-endian bytes (4 bytes per value).
-func encodeVec(vec []float32) []byte {
-	b := make([]byte, 4*len(vec))
-	for i, f := range vec {
-		binary.LittleEndian.PutUint32(b[i*4:], math.Float32bits(f))
-	}
-	return b
+// EmbeddingMetas lists every stored embedding's metadata in key order, parsing headers only.
+// Implements store.EmbeddingMetaLister.
+func (s *Store) EmbeddingMetas(_ context.Context) ([]store.EmbeddingMeta, error) {
+	var metas []store.EmbeddingMeta
+	err := s.db.View(func(txn *badgerdb.Txn) error {
+		return scan(txn, pfxEmb, func(k, v []byte) error {
+			m := store.EmbeddingMeta{NodeID: string(k)}
+			if modelID, sha, off, ok := embHeader(v); ok {
+				m.Model, m.TextSHA, m.Dim = modelID, sha, (len(v)-off)/4
+			}
+			metas = append(metas, m)
+			return nil
+		})
+	})
+	return metas, err
 }
 
-// decodeVec reverses encodeVec. A length not divisible by 4 yields nil.
+// DeleteEmbeddings removes the vectors of ids, keeping their nodes. Implements store.EmbeddingDeleter.
+func (s *Store) DeleteEmbeddings(_ context.Context, ids []string) error {
+	return s.batch(func(wb *badgerdb.WriteBatch) error {
+		for _, id := range ids {
+			if err := wb.Delete(embKey(id)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// embMagic opens a tagged embedding value. As a float32 it is a NaN, which no stored vector starts with, so a
+// value without it is a legacy bare vector whose model is unknown.
+const embMagic uint32 = 0x7FC04301
+
+// encodeEmb packs e as embMagic, the length-prefixed model id and raw text SHA, zero padding to a 4-byte boundary,
+// then the vector as little-endian float32s.
+func encodeEmb(e store.Embedding) ([]byte, error) {
+	sha, err := hex.DecodeString(e.TextSHA)
+	if err != nil || len(e.Model) > 255 || len(sha) > 255 {
+		return nil, fmt.Errorf("embedding %s: model id over 255 bytes or text SHA not short hex", e.NodeID)
+	}
+	hdr := (4 + 1 + len(e.Model) + 1 + len(sha) + 3) &^ 3
+	b := make([]byte, hdr+4*len(e.Vec))
+	binary.LittleEndian.PutUint32(b, embMagic)
+	b[4] = byte(len(e.Model))
+	n := 5 + copy(b[5:], e.Model)
+	b[n] = byte(len(sha))
+	copy(b[n+1:], sha)
+	putVec(b[hdr:], e.Vec)
+	return b, nil
+}
+
+// embHeader parses an embedding value's header: its model id, hex text SHA and the vector's byte offset. A legacy
+// bare vector has none (off 0). ok is false for a malformed value.
+func embHeader(b []byte) (modelID, textSHA string, off int, ok bool) {
+	if len(b) < 4 || binary.LittleEndian.Uint32(b) != embMagic {
+		return "", "", 0, len(b)%4 == 0
+	}
+	p := 4
+	if p >= len(b) {
+		return "", "", 0, false
+	}
+	ml := int(b[p])
+	p++
+	if p+ml >= len(b) {
+		return "", "", 0, false
+	}
+	modelID = string(b[p : p+ml])
+	p += ml
+	sl := int(b[p])
+	p++
+	if p+sl > len(b) {
+		return "", "", 0, false
+	}
+	textSHA = hex.EncodeToString(b[p : p+sl])
+	off = (p + sl + 3) &^ 3
+	if off > len(b) || (len(b)-off)%4 != 0 {
+		return "", "", 0, false
+	}
+	return modelID, textSHA, off, true
+}
+
+// decodeEmb reverses encodeEmb and also reads legacy bare vectors (model ""). A malformed value yields a nil Vec.
+func decodeEmb(id string, b []byte) store.Embedding {
+	modelID, sha, off, ok := embHeader(b)
+	if !ok {
+		return store.Embedding{NodeID: id}
+	}
+	return store.Embedding{NodeID: id, Vec: decodeVec(b[off:]), Model: modelID, TextSHA: sha}
+}
+
+// putVec writes vec into b as little-endian float32s (4 bytes per value).
+func putVec(b []byte, vec []float32) {
+	for i, f := range vec {
+		binary.LittleEndian.PutUint32(b[4*i:], math.Float32bits(f))
+	}
+}
+
+// decodeVec reads little-endian float32s, as putVec writes them. A length not divisible by 4 yields nil.
 func decodeVec(b []byte) []float32 {
 	if len(b)%4 != 0 {
 		return nil
@@ -1052,7 +1146,7 @@ func (s *Store) Snapshot(_ context.Context, w io.Writer) error {
 		// Attach embeddings to their nodes so the export is self-contained and portable.
 		embByID := map[string][]float32{}
 		if err := scan(txn, pfxEmb, func(k, v []byte) error {
-			embByID[string(k)] = decodeVec(v)
+			embByID[string(k)] = decodeEmb(string(k), v).Vec
 			return nil
 		}); err != nil {
 			return err

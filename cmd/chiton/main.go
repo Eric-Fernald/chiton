@@ -953,12 +953,13 @@ func buildSemanticDeps(cmd *cobra.Command, cfg *config.Config, gs store.GraphSto
 		fmt.Fprintf(errOut, "serve: warning: could not load embeddings: %v\n", err)
 		return deps
 	}
-	if len(embs) == 0 {
-		fmt.Fprintln(errOut, "serve: note: no embeddings indexed — semantic_search disabled (run 'chiton embed')")
+	logf := func(format string, args ...any) { fmt.Fprintf(errOut, format+"\n", args...) }
+	if embs = keepModel(embs, emb.Model(), "serve", logf); len(embs) == 0 {
+		fmt.Fprintln(errOut, "serve: note: no embeddings for the configured model — semantic_search disabled (run 'chiton embed')")
 		return deps
 	}
-	logf := func(format string, args ...any) { fmt.Fprintf(errOut, format+"\n", args...) }
-	idx, _, err := serveIndex(cmd.Context(), cfg.Vector, embs, es.AllEmbeddings, savedIndexFor(cfg.GraphPath, gs), logf)
+	reload := modelEmbeddings(es, emb.Model())
+	idx, _, err := serveIndex(cmd.Context(), cfg.Vector, embs, reload, savedIndexFor(cfg.GraphPath, gs), logf)
 	if err != nil {
 		fmt.Fprintf(errOut, "serve: warning: semantic_search disabled: %v\n", err)
 		return deps

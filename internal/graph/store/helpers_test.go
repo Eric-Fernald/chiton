@@ -247,3 +247,17 @@ func TestDeleteNodesFallbackAgrees(t *testing.T) {
 		}
 	}
 }
+
+func TestEmbeddingMetasFallbackAgrees(t *testing.T) {
+	ctx := context.Background()
+	gs := openStore(t)
+	if err := gs.UpsertEmbeddings(ctx, []store.Embedding{{NodeID: "b", Vec: []float32{1}, Model: "m"}, {NodeID: "a", Vec: []float32{2, 3}}}); err != nil {
+		t.Fatal(err)
+	}
+	want := []store.EmbeddingMeta{{NodeID: "a", Dim: 2}, {NodeID: "b", Model: "m", Dim: 1}}
+	for name, es := range map[string]store.EmbeddingStore{"lister": gs, "fallback": plainEmb{gs}} {
+		if got, err := store.EmbeddingMetas(ctx, es); err != nil || !slices.Equal(got, want) {
+			t.Errorf("%s EmbeddingMetas = %+v, %v; want %+v", name, got, err, want)
+		}
+	}
+}

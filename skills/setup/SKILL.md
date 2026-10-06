@@ -163,3 +163,4 @@ chiton sync once .                   # manual one-shot reconcile
 | Tools work but return nothing | graph never built, or built elsewhere | `chiton build .` at the workspace root, then restart |
 | `submit_*` tools fail to write | server started read-only | restart with `chiton serve --writable`, or use the CLI submit path |
 | `semantic_search` errors | no embeddings | `chiton embed`, then restart the server |
+| serve warns "made with model …" | embedding model changed | `chiton embed`, then restart the server |
