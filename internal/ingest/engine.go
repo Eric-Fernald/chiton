@@ -82,6 +82,7 @@ type Engine struct {
 	cfg      Config
 	log      Logger
 	stat     func(string) (fs.FileInfo, error) // os.Stat; prune's existence check, swappable in tests
+	lstat    func(string) (fs.FileInfo, error) // os.Lstat; prepare's regular-file check, swappable in tests
 
 	clusterMu sync.Mutex
 
@@ -112,6 +113,7 @@ func New(s store.GraphStore, c *cache.Cache, cfg Config, embedder embed.Embedder
 		cfg:      cfg.withDefaults(),
 		log:      log,
 		stat:     os.Stat,
+		lstat:    os.Lstat,
 		touched:  map[string]bool{},
 	}
 }
@@ -171,6 +173,19 @@ func (e *Engine) prepare(ctx context.Context, path string) prepared {
 	ex := extast.ForFile(path)
 	if ex == nil {
 		p.out = skipped(path, "unsupported file type")
+		return p
+	}
+	fi, err := e.lstat(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		p.gone = true
+		return p
+	case err != nil:
+		p.out = skipped(path, "stat: "+err.Error())
+		return p
+	case !fi.Mode().IsRegular():
+		// Never follow a symlink or junction: its target may be outside the repo (a key, a .env).
+		p.out = skipped(path, "not a regular file")
 		return p
 	}
 	content, err := os.ReadFile(path)

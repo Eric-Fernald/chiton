@@ -194,6 +194,7 @@ dated section.
 
 ### Security
 
+- **Indexing no longer follows symlinks.** `build`, `sync`, and `sync watch` index regular files only; a symlink or junction (e.g. `notes.md -> ~/.ssh/id_rsa`) is skipped, so its target never lands in the graph or in `pending_extractions`.
 - MCP `add_url` accepts only http/https URLs (the CLI still reads local files), and `pending_analyses` refuses paths outside the project root and no longer reads through symlinks, so an injected instruction can't make an MCP tool read `~/.aws/credentials`.
 - `chiton serve --http` now requires a bearer token (per start, written to `<graph dir>/mcp-token`, or `CHITON_MCP_TOKEN`), refuses browser `Origin`s not listed with `--allow-origin`, requires `application/json` POSTs, and no longer sends `Access-Control-Allow-Origin: *`. Before this, any web page could call tools on the loopback server with a `text/plain` POST.
 - **`chiton teams serve-webhook` now fails closed.** Two changes, both

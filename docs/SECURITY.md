@@ -510,6 +510,7 @@ status is labelled **shipped** or **planned**.
 | Stolen `chiton-out/graph.kuzu/` yields readable data | Same store encryption | **Shipped** |
 | Plaintext sidecars / exports leaking the same data | — | **Not mitigated:** `cluster.json`, `cache.json`, `.chiton/baselines/`, `.chiton/llm-analyzed.json`, and `chiton export` output are plaintext |
 | Meeting/email PII surfaced by the two meeting tools | `person` nodes tagged `pii=true`, hidden unless `include_pii` | **Shipped, but narrow** — see §3; the other read tools have no gate |
+| A symlink in an indexed repo pointing outside it (e.g. `notes.md -> ~/.ssh/id_rsa`) pulling its target into the graph and `pending_extractions` | `build`, `sync`, and `sync watch` index regular files only; symlinks and junctions are skipped at the walk and at the read | **Shipped** (`analyze` via Section D) |
 | Accidental upload of secrets to a remote LLM | Subagent mode = no built-in LLM calls; per-source allowlist + secret scrubbing | **Partly:** no built-in LLM egress (shipped); allowlist/scrubbing **planned** |
 | SSRF via assistant-driven `add_url` | Read-only default; `hostAllowed` on the host and on every redirect; 10-redirect cap | **Shipped, with known gaps** (§5.3) |
 | Unauthenticated reader on the MCP HTTP port | Per-start bearer token, Origin allowlist, JSON-only POSTs with an 8 MiB cap, no `Access-Control-Allow-Origin: *`; loopback default + wildcard-bind warning | **Shipped** (no TLS; §5.1) |

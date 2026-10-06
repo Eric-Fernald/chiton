@@ -712,3 +712,60 @@ func TestNoReclusterSkipsTouchedSet(t *testing.T) {
 		t.Errorf("touched = %d IDs, dirty = %v; want none", len(touched), dirty)
 	}
 }
+
+// symlinkInfo is a FileInfo whose mode marks a symlink, so the check runs on hosts that cannot create one.
+type symlinkInfo struct{ fs.FileInfo }
+
+func (symlinkInfo) Mode() fs.FileMode { return fs.ModeSymlink | 0o777 }
+
+// TestSyncFileRefusesNonRegular checks prepare skips whatever Lstat reports as a symlink without reading it.
+func TestSyncFileRefusesNonRegular(t *testing.T) {
+	h := newHarness(t, false, false)
+	p := h.write(t, "notes.md", "SECRET MATERIAL\n")
+	h.eng.lstat = func(name string) (fs.FileInfo, error) {
+		fi, err := os.Lstat(name)
+		if err != nil {
+			return nil, err
+		}
+		return symlinkInfo{fi}, nil
+	}
+	out, err := h.eng.SyncFile(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Skipped || out.Reason != "not a regular file" {
+		t.Errorf("SyncFile = %+v, want skipped as not a regular file", out)
+	}
+	if n := len(h.nodesForURI(t, model.FileURI(p))); n != 0 {
+		t.Errorf("symlink indexed with %d node(s)", n)
+	}
+}
+
+// TestSyncSkipsSymlinks checks neither a direct sync nor a reconcile reads a real symlink, so a link to a file
+// outside the repo (a key, a .env) never reaches the graph.
+func TestSyncSkipsSymlinks(t *testing.T) {
+	h := newHarness(t, false, false)
+	ctx := context.Background()
+	secret := filepath.Join(t.TempDir(), "id_rsa.md")
+	if err := os.WriteFile(secret, []byte("PRIVATE KEY MATERIAL\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(h.dir, "notes.md")
+	if err := os.Symlink(secret, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	out, err := h.eng.SyncFile(ctx, link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Skipped || out.Reason != "not a regular file" {
+		t.Errorf("SyncFile(symlink) = %+v, want skipped as not a regular file", out)
+	}
+	if _, err := h.eng.SyncDir(ctx, h.dir, true); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(h.nodesForURI(t, model.FileURI(link))); n != 0 {
+		t.Errorf("symlinked file indexed with %d node(s)", n)
+	}
+}
