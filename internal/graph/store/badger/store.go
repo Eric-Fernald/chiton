@@ -192,10 +192,14 @@ func (s *Store) abandon() {
 	s.lock.release()
 }
 
+// valueLogFileSize caps each value-log file. Badger preallocates twice this while a writer is open, and chiton's
+// values stay inline in the LSM tree, so the 1 GiB default only left 2 GiB files behind after a crash.
+const valueLogFileSize = 64 << 20
+
 // badgerOptions returns the Badger options for path. Read-only opens bypass Badger's directory lock, which
 // Windows can't take shared; chiton.lock coordinates readers and writers instead.
 func badgerOptions(path string, opts Options, readOnly bool) badgerdb.Options {
-	bopts := badgerdb.DefaultOptions(path).WithLogger(nil)
+	bopts := badgerdb.DefaultOptions(path).WithLogger(nil).WithValueLogFileSize(valueLogFileSize)
 	if readOnly {
 		bopts = bopts.WithReadOnly(true).WithBypassLockGuard(true)
 	}
@@ -219,10 +223,22 @@ func applyEncryption(bopts badgerdb.Options, key []byte) badgerdb.Options {
 		WithIndexCacheSize(64 << 20)
 }
 
-// Close seals a writable store (see sealed) and releases it.
+// collectValueLog runs bounded value-log GC before a writable store closes. Values rarely reach the log, so
+// this usually stops at once with ErrNoRewrite.
+func (s *Store) collectValueLog() {
+	for range 4 {
+		if s.db.RunValueLogGC(0.5) != nil {
+			return // ErrNoRewrite (nothing to reclaim) or ErrRejected
+		}
+	}
+}
+
+// Close collects and seals a writable store (see sealed), then releases it. GC runs first because its
+// rewrites are commits the seal must cover.
 func (s *Store) Close() error {
 	var sealErr error
 	if !s.readOnly {
+		s.collectValueLog()
 		sealErr = seal(s.db)
 	}
 	return errors.Join(sealErr, s.db.Close(), s.lock.release())
