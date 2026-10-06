@@ -1,7 +1,6 @@
 package metrics
 
 import (
-	"math"
 	"math/rand"
 	"testing"
 )
@@ -32,8 +31,8 @@ func randomGraph(n, chords int, seed int64) *intGraph {
 	return &intGraph{n: n, adj: adj}
 }
 
-// TestBetweennessParallelMatchesSerial checks splitting sources across workers changes no score beyond float
-// rounding, in exact (every source) and sampled (scaled subset) mode, and that a worker count is repeatable.
+// TestBetweennessParallelMatchesSerial checks splitting sources across workers changes no score bit
+// (exact ==), in exact (every source) and sampled (scaled subset) mode, and that a worker count is repeatable.
 func TestBetweennessParallelMatchesSerial(t *testing.T) {
 	g := randomGraph(600, 1500, 7)
 	all := make([]int, g.n)
@@ -54,8 +53,8 @@ func TestBetweennessParallelMatchesSerial(t *testing.T) {
 		for _, workers := range []int{2, 3, 8, 64} {
 			got := betweennessWorkers(g, tc.sources, tc.scale, workers)
 			for i := range want {
-				if math.Abs(got[i]-want[i]) > 1e-9 {
-					t.Fatalf("%s, %d workers: node %d = %.15f, serial %.15f", tc.name, workers, i, got[i], want[i])
+				if got[i] != want[i] {
+					t.Fatalf("%s, %d workers: node %d = %.17g, one worker %.17g", tc.name, workers, i, got[i], want[i])
 				}
 			}
 			again := betweennessWorkers(g, tc.sources, tc.scale, workers)
@@ -63,6 +62,58 @@ func TestBetweennessParallelMatchesSerial(t *testing.T) {
 				if again[i] != got[i] {
 					t.Fatalf("%s, %d workers: node %d differs between runs (%v vs %v)", tc.name, workers, i, got[i], again[i])
 				}
+			}
+		}
+	}
+}
+
+// TestBetweennessSymmetricTiesExact checks that mathematically tied nodes get bit-equal scores at any worker count.
+func TestBetweennessSymmetricTiesExact(t *testing.T) {
+	const n = 200
+	ring := randomGraph(n, 0, 1)
+	star := &intGraph{n: n, adj: make([][]int, n)}
+	for i := 1; i < n; i++ {
+		star.adj[0] = append(star.adj[0], i)
+		star.adj[i] = []int{0}
+	}
+	all := make([]int, n)
+	for i := range all {
+		all[i] = i
+	}
+	for name, g := range map[string]*intGraph{"ring": ring, "star": star} {
+		for _, workers := range []int{1, 2, 3, 8} {
+			got := betweennessWorkers(g, all, 1, workers)
+			for i := 2; i < n; i++ {
+				if got[i] != got[1] {
+					t.Fatalf("%s, %d workers: node %d = %.17g, node 1 = %.17g", name, workers, i, got[i], got[1])
+				}
+			}
+		}
+	}
+}
+
+// TestBetweennessDegenerate covers no sources and graphs of at most two nodes.
+func TestBetweennessDegenerate(t *testing.T) {
+	g := randomGraph(5, 0, 1)
+	for _, workers := range []int{1, 4} {
+		for i, v := range betweennessWorkers(g, nil, 1, workers) {
+			if v != 0 {
+				t.Fatalf("no sources, %d workers: node %d = %v", workers, i, v)
+			}
+		}
+	}
+	for n := 0; n <= 2; n++ {
+		g := &intGraph{n: n, adj: make([][]int, n)}
+		if n == 2 {
+			g.adj[0], g.adj[1] = []int{1}, []int{0}
+		}
+		src := make([]int, n)
+		for i := range src {
+			src[i] = i
+		}
+		for _, v := range betweennessWorkers(g, src, 1, 4) {
+			if v != 0 {
+				t.Fatalf("n=%d: score %v, want 0", n, v)
 			}
 		}
 	}

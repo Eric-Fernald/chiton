@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"runtime"
 	"sync"
+	"sync/atomic"
 
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
@@ -93,8 +94,13 @@ func buildIntGraph(n int, edges []model.Edge, idToIdx map[string]int) *intGraph 
 
 // ── Brandes algorithm ─────────────────────────────────────────────────────────
 
-// maxWorkers caps betweenness's goroutines, since each holds five n-length buffers.
-const maxWorkers = 8
+const (
+	// maxWorkers caps betweenness's goroutines, since each holds five n-length buffers.
+	maxWorkers = 8
+	// chunkSources is the fixed number of sources summed into one partial vector. Because the grouping never
+	// depends on the worker count, scores are bit-identical on every machine.
+	chunkSources = 32
+)
 
 // betweenness runs Brandes from each source on up to maxWorkers goroutines, scaling every contribution by
 // scale, and normalizes the sums. It runs in O(len(sources)·m) total work.
@@ -102,26 +108,35 @@ func betweenness(g *intGraph, sources []int, scale float64) []float64 {
 	return betweennessWorkers(g, sources, scale, min(runtime.GOMAXPROCS(0), maxWorkers))
 }
 
-// betweennessWorkers gives each worker a contiguous run of sources, its own buffers, and its own partial
-// sums, then adds the partials in worker order, so a given worker count always yields the same floats.
+// betweennessWorkers splits sources into fixed chunks of chunkSources, has workers claim chunks and sum each
+// into its own partial vector, then adds the partials in chunk order after the join. The float summation
+// order depends only on the sources, never on workers or scheduling. Partials number at most
+// ceil(len(sources)/chunkSources): 16 for the 500 sampled pivots, and at most 157 for exact mode (n <= 5000).
 func betweennessWorkers(g *intGraph, sources []int, scale float64, workers int) []float64 {
-	workers = max(1, min(workers, len(sources)))
-	chunk := (len(sources) + workers - 1) / workers
-	partial := make([][]float64, workers)
+	nChunks := (len(sources) + chunkSources - 1) / chunkSources
+	workers = max(1, min(workers, nChunks))
+	partial := make([][]float64, nChunks)
+	var next atomic.Int64
 	var wg sync.WaitGroup
-	for w := range workers {
-		partial[w] = make([]float64, g.n)
-		lo, hi := min(w*chunk, len(sources)), min((w+1)*chunk, len(sources))
+	for range workers {
 		wg.Go(func() {
 			b := newBrandes(g)
-			for _, s := range sources[lo:hi] {
-				b.accumulate(s, partial[w], scale)
+			for {
+				c := int(next.Add(1)) - 1
+				if c >= nChunks {
+					return
+				}
+				p := make([]float64, g.n)
+				for _, s := range sources[c*chunkSources : min((c+1)*chunkSources, len(sources))] {
+					b.accumulate(s, p, scale)
+				}
+				partial[c] = p
 			}
 		})
 	}
 	wg.Wait()
-	bet := partial[0]
-	for _, p := range partial[1:] {
+	bet := make([]float64, g.n)
+	for _, p := range partial {
 		for i, v := range p {
 			bet[i] += v
 		}
