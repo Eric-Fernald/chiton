@@ -317,3 +317,63 @@ func TestIngestDBPurgesUnredactedNodes(t *testing.T) {
 		}
 	}
 }
+
+func TestIngestDBRedactsSecretsInTitles(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "History")
+	now := time.Now().UTC()
+	writeHistoryDB(t, dbPath, []Visit{
+		{URL: "https://a.example/cb?code=SECRET1", Title: "https://a.example/cb?code=SECRET1", VisitCount: 1, LastVisit: now},
+		{URL: "https://b.example/cb?code=SECRET2", Title: "b.example/cb?code=SECRET2", VisitCount: 1, LastVisit: now},
+		{URL: "https://c.example/p#tok=SECRET3", Title: "Page tok=SECRET3", VisitCount: 1, LastVisit: now},
+	})
+	gs := newStore(t)
+	ctx := context.Background()
+	if _, err := New(gs).IngestDB(ctx, dbPath, "chrome", Options{}); err != nil {
+		t.Fatal(err)
+	}
+	var snap bytes.Buffer
+	if err := gs.Snapshot(ctx, &snap); err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"SECRET1", "SECRET2", "SECRET3"} {
+		if strings.Contains(snap.String(), leak) {
+			t.Errorf("stored graph still contains %q", leak)
+		}
+	}
+}
+
+func TestPurgeRunsOncePerIngesterAndSkipsKeepQuery(t *testing.T) {
+	gs := newStore(t)
+	ctx := context.Background()
+	legacy := func(raw string) model.Node {
+		uri := "browser://" + raw
+		return model.Node{ID: model.NewNodeID(uri, raw), Kind: model.KindURL, Label: raw, SourceURI: uri,
+			Attrs: map[string]any{"source": "browser", "url": raw}}
+	}
+	first, second, trailing := legacy("https://x.example/a?t=1"), legacy("https://x.example/b?t=2"), legacy("https://x.example/c#")
+	if err := gs.UpsertNodes(ctx, []model.Node{first, trailing}); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(t.TempDir(), "History")
+	writeHistoryDB(t, dbPath, nil)
+
+	kept := New(gs)
+	if rep, _ := kept.IngestDB(ctx, dbPath, "chrome", Options{KeepQuery: true}); rep.Purged != 0 {
+		t.Errorf("KeepQuery purged %d, want 0", rep.Purged)
+	}
+	ing := New(gs)
+	if rep, _ := ing.IngestDB(ctx, dbPath, "chrome", Options{}); rep.Purged != 1 {
+		t.Errorf("first run purged %d, want 1", rep.Purged)
+	}
+	if err := gs.UpsertNodes(ctx, []model.Node{second}); err != nil {
+		t.Fatal(err)
+	}
+	if rep, _ := ing.IngestDB(ctx, dbPath, "chrome", Options{}); rep.Purged != 0 {
+		t.Errorf("second run purged %d, want 0", rep.Purged)
+	}
+	for id, want := range map[string]bool{first.ID: false, second.ID: true, trailing.ID: true} {
+		if n, _ := gs.GetNode(ctx, id); (n != nil) != want {
+			t.Errorf("node %s present=%v, want %v", id, n != nil, want)
+		}
+	}
+}

@@ -101,17 +101,22 @@ func historyNodes(visits []Visit, browser string, keepQuery bool, now time.Time)
 		rows++
 		page := redactURL(u, keepQuery)
 		if i, seen := index[page]; seen {
-			nodes[i].Attrs["visit_count"] = nodes[i].Attrs["visit_count"].(int) + v.VisitCount
+			prev, _ := nodes[i].Attrs["visit_count"].(int)
+			nodes[i].Attrs["visit_count"] = prev + v.VisitCount
 			continue
 		}
 		index[page] = len(nodes)
 		// Key on the stable URL, not the mutable title, so a re-ingest after a title change refreshes the same node.
 		uri := historyURIScheme + page
+		title := v.Title
+		if !keepQuery {
+			title = redactTitle(title, v.URL, u, page)
+		}
 		attrs := map[string]any{
 			"kind":        "history",
 			"source":      "browser",
 			"url":         page,
-			"title":       v.Title,
+			"title":       title,
 			"visit_count": v.VisitCount,
 		}
 		if browser != "" {
@@ -123,7 +128,7 @@ func historyNodes(visits []Visit, browser string, keepQuery bool, now time.Time)
 		nodes = append(nodes, model.Node{
 			ID:         model.NewNodeID(uri, page),
 			Kind:       model.KindURL,
-			Label:      cmp.Or(strings.TrimSpace(v.Title), page),
+			Label:      cmp.Or(strings.TrimSpace(title), page),
 			SourceURI:  uri,
 			Attrs:      attrs,
 			Provenance: model.ProvExtracted,
@@ -156,7 +161,7 @@ func (ing *Ingester) purgeUnredacted(ctx context.Context, keepQuery bool) (int, 
 		if !ok {
 			continue
 		}
-		if u, ok := parseWebURL(raw); ok && redactURL(u, false) != raw {
+		if u, ok := parseWebURL(raw); ok && (u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.RawFragment != "") {
 			stale = append(stale, n)
 		}
 	}
@@ -208,4 +213,19 @@ func redactURL(u *url.URL, keepQuery bool) string {
 		c.RawQuery, c.ForceQuery, c.Fragment, c.RawFragment = "", false, "", ""
 	}
 	return c.String()
+}
+
+// redactTitle returns page when title embeds any part of the raw URL that redaction removed. Chromium often
+// stores an untitled page's title as its URL, so the secrets would survive in title and label otherwise.
+func redactTitle(title, raw string, u *url.URL, page string) string {
+	secrets := []string{raw, strings.TrimPrefix(raw, u.Scheme+":"), u.RawQuery, u.Fragment, u.RawFragment}
+	if u.User != nil {
+		secrets = append(secrets, u.User.String())
+	}
+	for _, s := range secrets {
+		if s != "" && strings.Contains(title, s) {
+			return page
+		}
+	}
+	return title
 }
