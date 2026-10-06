@@ -24,14 +24,16 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
 )
 
-// Key prefixes. Node IDs and edge IDs are 32-char lowercase hex strings, so the prefix bytes ('d','e','m','n','s','v')
-// never collide with key content (metadata keys are in schema.go).
+// Key prefixes. Node IDs and edge IDs are 32-char lowercase hex strings, so the prefix bytes
+// ('d','e','k','m','n','s','u','v') never collide with key content (metadata keys are in schema.go).
 const (
-	pfxNode = "n:" // n:{nodeID}            → json(Node)
-	pfxEdge = "e:" // e:{edgeID}            → json(Edge)
-	pfxSrc  = "s:" // s:{src}:{kind}:{dst}  → edgeID   (forward adjacency)
-	pfxDst  = "d:" // d:{dst}:{kind}:{src}  → edgeID   (reverse adjacency)
-	pfxEmb  = "v:" // v:{nodeID}            → packed little-endian []float32
+	pfxNode = "n:" // n:{nodeID}                        → json(Node)
+	pfxEdge = "e:" // e:{edgeID}                        → json(Edge)
+	pfxSrc  = "s:" // s:{src}:{kind}:{dst}              → edgeID   (forward adjacency)
+	pfxDst  = "d:" // d:{dst}:{kind}:{src}              → edgeID   (reverse adjacency)
+	pfxEmb  = "v:" // v:{nodeID}                        → packed little-endian []float32
+	pfxURI  = "u:" // u:{hash(source_uri)}\x00{nodeID}  → empty    (source_uri index)
+	pfxKind = "k:" // k:{kind}\x00{nodeID}              → empty    (kind index)
 )
 
 // Store is a BadgerDB-backed GraphStore.
@@ -52,6 +54,7 @@ var (
 	_ store.NodeGetter        = (*Store)(nil)
 	_ store.EmbeddingIDLister = (*Store)(nil)
 	_ store.SourceReplacer    = (*Store)(nil)
+	_ store.KindCounter       = (*Store)(nil)
 )
 
 // ReadOnly reports whether the store was opened read-only, so callers can fail writes early
@@ -190,7 +193,14 @@ func applyEncryption(bopts badgerdb.Options, key []byte) badgerdb.Options {
 		WithIndexCacheSize(64 << 20)
 }
 
-func (s *Store) Close() error { return errors.Join(s.db.Close(), s.lock.release()) }
+// Close seals a writable store (see sealed) and releases it.
+func (s *Store) Close() error {
+	var sealErr error
+	if !s.readOnly {
+		sealErr = seal(s.db)
+	}
+	return errors.Join(sealErr, s.db.Close(), s.lock.release())
+}
 
 // --- key builders ---
 
@@ -344,13 +354,14 @@ func deleteEdge(wb *badgerdb.WriteBatch, e *model.Edge) error {
 	return nil
 }
 
-// deleteNode queues deletion of node id, its embedding, and every adjacent edge with its adjacency keys.
-func deleteNode(txn *badgerdb.Txn, wb *badgerdb.WriteBatch, id string) error {
+// deleteNode queues deletion of node id (whose stored indexed fields are x): its record, embedding, index keys,
+// and every adjacent edge with its adjacency keys.
+func deleteNode(txn *badgerdb.Txn, wb *badgerdb.WriteBatch, id string, x indexed) error {
 	adj, err := adjacentEdgeKeys(txn, id, nil)
 	if err != nil {
 		return err
 	}
-	for _, k := range [][]byte{nodeKey(id), embKey(id)} {
+	for _, k := range [][]byte{nodeKey(id), embKey(id), uriKey(x.SourceURI, id), kindKey(x.Kind, id)} {
 		if err := wb.Delete(k); err != nil {
 			return err
 		}
@@ -363,9 +374,11 @@ func deleteNode(txn *badgerdb.Txn, wb *badgerdb.WriteBatch, id string) error {
 	return nil
 }
 
-// putNodes queues nodes into wb, stamping CreatedAt when unset and UpdatedAt always. txn is the batch's read
-// view, which still shows the records the nodes replace.
+// putNodes queues nodes and their index keys into wb, stamping CreatedAt when unset and UpdatedAt always, and
+// drops the keys a changed kind or source_uri left behind. txn is the batch's read view, which still shows the
+// records the nodes replace.
 func putNodes(txn *badgerdb.Txn, wb *badgerdb.WriteBatch, nodes []model.Node, now time.Time) error {
+	written := map[string]indexed{} // this batch's earlier writes, which txn can't see
 	for i := range nodes {
 		n := nodes[i]
 		if n.CreatedAt.IsZero() {
@@ -376,8 +389,28 @@ func putNodes(txn *badgerdb.Txn, wb *badgerdb.WriteBatch, nodes []model.Node, no
 		if err != nil {
 			return fmt.Errorf("marshal node %s: %w", n.ID, err)
 		}
+		prev, had := written[n.ID]
+		if !had {
+			old, err := loadJSON[indexed](txn, nodeKey(n.ID))
+			if err != nil {
+				return err
+			}
+			if old != nil {
+				prev, had = *old, true
+			}
+		}
+		cur := indexedOf(n)
+		written[n.ID] = cur
+		if err := setIndex(wb, n.ID, cur); err != nil {
+			return err
+		}
 		if err := wb.Set(nodeKey(n.ID), data); err != nil {
 			return err
+		}
+		if had {
+			if err := dropStaleIndex(wb, n.ID, prev, cur); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -408,15 +441,17 @@ func putEdges(wb *badgerdb.WriteBatch, edges []model.Edge, now time.Time) error 
 	return nil
 }
 
-// batch runs fill against a new write batch, flushing it on success and discarding it on error.
-func (s *Store) batch(fill func(wb *badgerdb.WriteBatch) error) error {
-	wb := s.db.NewWriteBatch()
+// writeBatch runs fill against a new write batch on db, flushing it on success and discarding it on error.
+func writeBatch(db *badgerdb.DB, fill func(wb *badgerdb.WriteBatch) error) error {
+	wb := db.NewWriteBatch()
 	if err := fill(wb); err != nil {
 		wb.Cancel()
 		return err
 	}
 	return wb.Flush()
 }
+
+func (s *Store) batch(fill func(wb *badgerdb.WriteBatch) error) error { return writeBatch(s.db, fill) }
 
 // --- GraphStore implementation ---
 
@@ -594,108 +629,79 @@ func stringProbe(s string) []byte {
 	return b
 }
 
-// nodeProbe prefilters raw node records for a store.NodeFilter without false negatives: a matching record
-// contains every probe in all and, when anyOf is non-empty, at least one probe in anyOf.
-type nodeProbe struct{ all, anyOf [][]byte }
-
-func newNodeProbe(f store.NodeFilter) nodeProbe {
-	var p nodeProbe
-	for _, k := range f.Kinds {
-		b := stringProbe(string(k))
-		if b == nil {
-			p.anyOf = nil // one unprobeable kind disables the any-of check
-			break
-		}
-		p.anyOf = append(p.anyOf, b)
-	}
-	vals := []string{f.SourceURI}
+// attrProbe returns raw-bytes probes for f's attrs; a record matching f contains every one. Empty values
+// (which also match an absent attr) and values whose escaping could vary get none.
+func attrProbe(f store.NodeFilter) [][]byte {
+	var probes [][]byte
 	for _, v := range f.Attrs {
-		vals = append(vals, v)
-	}
-	for _, v := range vals {
-		// An empty value gets no probe. An empty SourceURI doesn't constrain, and an empty attr value also
-		// matches an absent attr.
-		if v == "" {
-			continue
-		}
-		if b := stringProbe(v); b != nil {
-			p.all = append(p.all, b)
+		if b := stringProbe(v); v != "" && b != nil {
+			probes = append(probes, b)
 		}
 	}
-	return p
+	return probes
 }
 
-func (p nodeProbe) candidate(rec []byte) bool {
-	for _, b := range p.all {
-		if !bytes.Contains(rec, b) {
-			return false
-		}
-	}
-	if len(p.anyOf) == 0 {
-		return true
-	}
-	return slices.ContainsFunc(p.anyOf, func(b []byte) bool { return bytes.Contains(rec, b) })
-}
-
-// NodesMatching returns the nodes matching f in AllNodes order, decoding only records that pass the raw-bytes
-// probe. Implements store.NodeScanner.
+// NodesMatching returns the nodes matching f in AllNodes order. A source_uri or kind constraint loads only the
+// index's candidates; otherwise it scans, decoding records that pass the attr probe. Implements store.NodeScanner.
 func (s *Store) NodesMatching(_ context.Context, f store.NodeFilter) ([]model.Node, error) {
-	probe := newNodeProbe(f)
 	var nodes []model.Node
+	keep := func(n model.Node) {
+		if f.Match(n) {
+			nodes = append(nodes, n)
+		}
+	}
 	err := s.db.View(func(txn *badgerdb.Txn) error {
+		ids, ok, err := candidateIDs(txn, f)
+		if err != nil {
+			return err
+		}
+		if ok {
+			for _, id := range ids {
+				n, err := loadNode(txn, id)
+				if err != nil {
+					return err
+				}
+				if n != nil {
+					keep(*n)
+				}
+			}
+			return nil
+		}
+		probes := attrProbe(f)
 		return scan(txn, pfxNode, func(_, v []byte) error {
-			if !probe.candidate(v) {
+			if slices.ContainsFunc(probes, func(p []byte) bool { return !bytes.Contains(v, p) }) {
 				return nil
 			}
 			var n model.Node
 			if err := json.Unmarshal(v, &n); err != nil {
 				return err
 			}
-			if f.Match(n) {
-				nodes = append(nodes, n)
-			}
+			keep(n)
 			return nil
 		})
 	})
 	return nodes, err
 }
 
-// sourceIDs returns the IDs of stored nodes whose source_uri is in uris, keyed by URI. One URI gets a raw-bytes
-// probe scan; several share one scan decoding each record's source_uri.
+// sourceIDs returns the IDs the source_uri index lists under each of uris, keyed by URI. A digest collision
+// could list a foreign node, so callers check the loaded record's source_uri.
 func sourceIDs(txn *badgerdb.Txn, uris []string) (map[string][]string, error) {
 	out := make(map[string][]string, len(uris))
-	if len(uris) == 0 {
-		return out, nil
-	}
-	want := make(map[string]bool, len(uris))
 	for _, u := range uris {
-		want[u] = true
+		if _, done := out[u]; done {
+			continue
+		}
+		ids, err := keySuffixes(txn, uriPrefix(u))
+		if err != nil {
+			return nil, err
+		}
+		out[u] = ids
 	}
-	var probe []byte
-	if len(want) == 1 {
-		probe = stringProbe(uris[0])
-	}
-	err := scan(txn, pfxNode, func(_, v []byte) error {
-		if probe != nil && !bytes.Contains(v, probe) {
-			return nil
-		}
-		var n struct {
-			ID        string `json:"id"`
-			SourceURI string `json:"source_uri"`
-		}
-		if err := json.Unmarshal(v, &n); err != nil {
-			return err
-		}
-		if want[n.SourceURI] {
-			out[n.SourceURI] = append(out[n.SourceURI], n.ID)
-		}
-		return nil
-	})
-	return out, err
+	return out, nil
 }
 
-// DeleteBySourceURI removes all nodes whose source_uri matches uri and
-// all edges adjacent to those nodes. Returns the number of nodes deleted.
+// DeleteBySourceURI removes the nodes whose source_uri is uri, found through the source_uri index, and all
+// edges adjacent to them. Returns the number of nodes deleted.
 func (s *Store) DeleteBySourceURI(_ context.Context, uri string) (int, error) {
 	deleted := 0
 	err := s.batch(func(wb *badgerdb.WriteBatch) error {
@@ -705,7 +711,14 @@ func (s *Store) DeleteBySourceURI(_ context.Context, uri string) (int, error) {
 				return err
 			}
 			for _, id := range byURI[uri] {
-				if err := deleteNode(txn, wb, id); err != nil {
+				x, err := loadJSON[indexed](txn, nodeKey(id))
+				if err != nil {
+					return err
+				}
+				if x == nil || x.SourceURI != uri {
+					continue // stale index key or a digest collision
+				}
+				if err := deleteNode(txn, wb, id, *x); err != nil {
 					return err
 				}
 				deleted++
@@ -775,12 +788,12 @@ func replaceSource(txn *badgerdb.Txn, wb *badgerdb.WriteBatch, u store.SourceUpd
 		if err != nil {
 			return 0, nil, err
 		}
-		if old == nil {
-			continue
+		if old == nil || old.SourceURI != u.URI {
+			continue // stale index key or a digest collision
 		}
 		i, ok := index[id]
 		if !ok {
-			if err := deleteNode(txn, wb, id); err != nil {
+			if err := deleteNode(txn, wb, id, indexed{Kind: old.Kind, SourceURI: old.SourceURI}); err != nil {
 				return 0, nil, err
 			}
 			deleted++
@@ -860,8 +873,8 @@ func contentAttrs(attrs map[string]any) []byte {
 	return b
 }
 
-// DeleteByIDs deletes nodes by ID plus their embeddings and adjacent edges, skipping missing IDs.
-// Point lookups keep it O(K) in the number of IDs, unlike DeleteBySourceURI's full scan.
+// DeleteByIDs deletes nodes by ID plus their embeddings, adjacent edges, and index keys, skipping missing IDs.
+// Point lookups keep it O(K) in the number of IDs.
 func (s *Store) DeleteByIDs(_ context.Context, ids []string) (int, error) {
 	if len(ids) == 0 {
 		return 0, nil
@@ -871,13 +884,14 @@ func (s *Store) DeleteByIDs(_ context.Context, ids []string) (int, error) {
 		return s.db.View(func(txn *badgerdb.Txn) error {
 			n := 0
 			for _, id := range ids {
-				if _, err := txn.Get(nodeKey(id)); err != nil {
-					if errors.Is(err, badgerdb.ErrKeyNotFound) {
-						continue
-					}
+				x, err := loadJSON[indexed](txn, nodeKey(id))
+				if err != nil {
 					return err
 				}
-				if err := deleteNode(txn, wb, id); err != nil {
+				if x == nil {
+					continue
+				}
+				if err := deleteNode(txn, wb, id, *x); err != nil {
 					return err
 				}
 				n++
@@ -941,6 +955,30 @@ func (s *Store) AllEdges(_ context.Context) ([]model.Edge, error) {
 	return edges, err
 }
 
+// CountByKind tallies nodes from the kind index and edges from their forward adjacency keys, reading keys only.
+// Implements store.KindCounter.
+func (s *Store) CountByKind(_ context.Context) (map[model.NodeKind]int, map[model.EdgeKind]int, error) {
+	nodes, edges := map[model.NodeKind]int{}, map[model.EdgeKind]int{}
+	err := s.db.View(func(txn *badgerdb.Txn) error {
+		if err := eachKey(txn, pfxKind, func(k []byte) error {
+			if i := bytes.LastIndexByte(k, 0); i >= 0 {
+				nodes[model.NodeKind(k[:i])]++
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		return eachKey(txn, pfxSrc, func(k []byte) error {
+			// k is {src}:{kind}:{dst}. Node IDs hold no ':', but an imported edge kind may.
+			if i, j := bytes.IndexByte(k, ':'), bytes.LastIndexByte(k, ':'); i >= 0 && j > i {
+				edges[model.EdgeKind(k[i+1:j])]++
+			}
+			return nil
+		})
+	})
+	return nodes, edges, err
+}
+
 // UpsertEmbeddings stores vectors packed (little-endian float32) in the v: keyspace, out of the node JSON,
 // so graph traversals stay lean. Implements store.EmbeddingStore.
 func (s *Store) UpsertEmbeddings(_ context.Context, embs []store.Embedding) error {
@@ -961,13 +999,9 @@ func (s *Store) UpsertEmbeddings(_ context.Context, embs []store.Embedding) erro
 // Implements store.EmbeddingIDLister.
 func (s *Store) EmbeddingIDs(_ context.Context) ([]string, error) {
 	var ids []string
-	err := s.db.View(func(txn *badgerdb.Txn) error {
-		it := prefixIterator(txn, pfxEmb)
-		defer it.Close()
-		for it.Rewind(); it.Valid(); it.Next() {
-			ids = append(ids, string(it.Item().Key()[len(pfxEmb):]))
-		}
-		return nil
+	err := s.db.View(func(txn *badgerdb.Txn) (err error) {
+		ids, err = keySuffixes(txn, pfxEmb)
+		return err
 	})
 	return ids, err
 }

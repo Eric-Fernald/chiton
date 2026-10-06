@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -156,8 +157,9 @@ func TestColonEdgeKindAdjacency(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(left) != 1 || left[0] != nodeKeyString("b") {
-		t.Fatalf("keys after deleting a = %q, want only b's node key", left)
+	want := []string{string(kindKey("", "b")), nodeKeyString("b"), string(uriKey("", "b"))}
+	if !slices.Equal(left, want) {
+		t.Fatalf("keys after deleting a = %q, want only b's node and index keys %q", left, want)
 	}
 }
 

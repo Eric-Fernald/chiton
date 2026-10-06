@@ -35,8 +35,8 @@ type EmbeddingStore interface {
 	AllEmbeddings(ctx context.Context) ([]Embedding, error)
 }
 
-// NodeDeleter is an optional capability for deleting nodes by ID with point lookups, O(K) instead of
-// DeleteBySourceURI's full scan. Callers type-assert it and fall back to DeleteBySourceURI without it.
+// NodeDeleter is an optional capability for deleting nodes by ID with point lookups. Callers type-assert it and
+// fall back to DeleteBySourceURI without it.
 type NodeDeleter interface {
 	// DeleteByIDs deletes the given nodes plus their embeddings and adjacent
 	// edges. Missing IDs are skipped. Returns the number actually deleted.
@@ -66,6 +66,12 @@ type NodeGetter interface {
 // vectors. Callers use the EmbeddingIDs helper.
 type EmbeddingIDLister interface {
 	EmbeddingIDs(ctx context.Context) ([]string, error)
+}
+
+// KindCounter is an optional capability counting nodes and edges by kind without decoding values. Callers use
+// the CountByKind helper, which falls back to AllNodes/AllEdges without it.
+type KindCounter interface {
+	CountByKind(ctx context.Context) (nodes map[model.NodeKind]int, edges map[model.EdgeKind]int, err error)
 }
 
 // GraphStore is the central abstraction over the graph database. Packages depend on it, never on a

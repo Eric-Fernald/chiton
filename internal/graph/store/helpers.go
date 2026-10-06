@@ -153,3 +153,27 @@ func ReplaceSources(ctx context.Context, gs GraphStore, updates ...SourceUpdate)
 	}
 	return deleted, nil
 }
+
+// CountByKind tallies gs's nodes and edges by kind, via KindCounter when gs has it.
+func CountByKind(ctx context.Context, gs GraphStore) (map[model.NodeKind]int, map[model.EdgeKind]int, error) {
+	if c, ok := gs.(KindCounter); ok {
+		return c.CountByKind(ctx)
+	}
+	all, err := gs.AllNodes(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	nodes := map[model.NodeKind]int{}
+	for _, n := range all {
+		nodes[n.Kind]++
+	}
+	allEdges, err := gs.AllEdges(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	edges := map[model.EdgeKind]int{}
+	for _, e := range allEdges {
+		edges[e.Kind]++
+	}
+	return nodes, edges, nil
+}

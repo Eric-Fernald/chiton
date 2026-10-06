@@ -8,8 +8,9 @@ import (
 	badgerdb "github.com/dgraph-io/badger/v4"
 )
 
-// schemaVersion is the key layout this chiton reads and writes. Bump it together with a migrations entry.
-const schemaVersion = 1
+// schemaVersion is the key layout this chiton reads and writes. Bump it together with a migrations entry. v2
+// added the source_uri and kind indexes and the seal.
+const schemaVersion = 2
 
 // schemaFresh is storedSchema's answer for a store with no nodes, which needs no migration.
 const schemaFresh = 0
@@ -18,6 +19,7 @@ const schemaFresh = 0
 const (
 	pfxMeta    = "m:"
 	metaSchema = pfxMeta + "schema" // decimal layout version
+	metaSeal   = pfxMeta + "seal"   // Badger version at the last clean close (see sealed)
 )
 
 // ErrSchemaTooNew reports a store written by a newer chiton, which this binary must not read or write.
@@ -25,10 +27,12 @@ var ErrSchemaTooNew = errors.New("graph store was written by a newer chiton")
 
 // migrations[v] upgrades the layout from v to v+1. A step must be idempotent: an interrupted upgrade reruns
 // the first step whose version stamp is missing.
-var migrations = map[int]func(*badgerdb.DB) error{}
+var migrations = map[int]func(*badgerdb.DB) error{
+	1: reindex,
+}
 
-// prepareSchema checks the layout version on open. A writable store is stamped when fresh and migrated when
-// old; an old read-only store reports errNeedsWriterPass.
+// prepareSchema checks the layout version on open and that the indexes are intact. A writable store is
+// stamped, migrated, or reindexed as needed; a read-only one reports errNeedsWriterPass instead.
 func prepareSchema(db *badgerdb.DB, readOnly bool) error {
 	v, err := storedSchema(db)
 	if err != nil {
@@ -37,15 +41,44 @@ func prepareSchema(db *badgerdb.DB, readOnly bool) error {
 	switch {
 	case v > schemaVersion:
 		return fmt.Errorf("%w (layout v%d; this chiton reads up to v%d): upgrade chiton", ErrSchemaTooNew, v, schemaVersion)
-	case v == schemaVersion, v == schemaFresh && readOnly:
-		return nil
-	case readOnly:
-		return fmt.Errorf("%w (layout v%d predates v%d)", errNeedsWriterPass, v, schemaVersion)
 	case v == schemaFresh:
+		if readOnly {
+			return nil
+		}
 		return setMeta(db, metaSchema, strconv.Itoa(schemaVersion))
-	default:
-		return migrate(db, v, schemaVersion, migrations)
+	case v < schemaVersion && readOnly:
+		return fmt.Errorf("%w (layout v%d predates v%d)", errNeedsWriterPass, v, schemaVersion)
+	case v < schemaVersion:
+		return migrate(db, v, schemaVersion, migrations) // v1→v2 builds the indexes afresh
 	}
+	ok, err := sealed(db)
+	switch {
+	case err != nil || ok:
+		return err
+	case readOnly:
+		return fmt.Errorf("%w (the last writer did not close cleanly)", errNeedsWriterPass)
+	default:
+		return reindex(db)
+	}
+}
+
+// seal records the store's current Badger version. The seal's own commit is the next version, which sealed
+// checks to prove nothing wrote after it without index upkeep (a crash, or an older chiton).
+func seal(db *badgerdb.DB) error {
+	return setMeta(db, metaSeal, strconv.FormatUint(db.MaxVersion(), 10))
+}
+
+// sealed reports whether the seal is still the store's newest commit.
+func sealed(db *badgerdb.DB) (bool, error) {
+	var raw string
+	if err := db.View(func(txn *badgerdb.Txn) (err error) {
+		raw, err = getMeta(txn, metaSeal)
+		return err
+	}); err != nil || raw == "" {
+		return false, err
+	}
+	v, err := strconv.ParseUint(raw, 10, 64)
+	return err == nil && db.MaxVersion() == v+1, nil
 }
 
 // storedSchema returns the layout stamped in m:schema, 1 for a store with nodes but no stamp (written before

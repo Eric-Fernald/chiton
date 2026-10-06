@@ -91,6 +91,10 @@ dated section.
 
 ### Changed
 
+- **Incremental sync no longer rescans the whole graph per file.** The Badger store keeps source_uri and kind
+  indexes (store layout v2), so `DeleteBySourceURI` and kind or source filters read only matching nodes. The
+  first open after upgrading builds the indexes once, and an open after an unclean shutdown rebuilds them.
+  `store.CountByKind` counts nodes and edges from keys alone.
 - **The pre-commit hook now gates the commit, not the working tree.** It analyzes the staged blobs of the
   committed files in memory, with file rules only, since graph rules need the whole corpus; pre-push still
   scans the tree. Neither needs the graph store any more, and findings are recorded only when the store

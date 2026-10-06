@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"maps"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -149,6 +150,30 @@ func TestEmbeddingIDsFallbackAgrees(t *testing.T) {
 		ids, err := store.EmbeddingIDs(ctx, es)
 		if err != nil || !slices.Equal(ids, []string{"a", "b"}) {
 			t.Errorf("%s EmbeddingIDs = %v, %v; want [a b]", name, ids, err)
+		}
+	}
+}
+
+func TestCountByKindFallbackAgrees(t *testing.T) {
+	ctx := context.Background()
+	gs := openStore(t)
+	if err := gs.UpsertNodes(ctx, []model.Node{
+		{ID: "a", Kind: model.KindSymbol}, {ID: "b", Kind: model.KindFile}, {ID: "c", Kind: model.KindSymbol},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gs.UpsertEdges(ctx, []model.Edge{
+		{ID: "ab", Src: "a", Dst: "b", Kind: model.EdgeCalls},
+		{ID: "cb", Src: "c", Dst: "b", Kind: model.EdgeReferences},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	wantNodes := map[model.NodeKind]int{model.KindSymbol: 2, model.KindFile: 1}
+	wantEdges := map[model.EdgeKind]int{model.EdgeCalls: 1, model.EdgeReferences: 1}
+	for name, s := range map[string]store.GraphStore{"counter": gs, "fallback": plain{gs}} {
+		nodes, edges, err := store.CountByKind(ctx, s)
+		if err != nil || !maps.Equal(nodes, wantNodes) || !maps.Equal(edges, wantEdges) {
+			t.Errorf("%s CountByKind = %v %v %v, want %v %v", name, nodes, edges, err, wantNodes, wantEdges)
 		}
 	}
 }
