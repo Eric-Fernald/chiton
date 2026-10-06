@@ -402,7 +402,8 @@ substring. Embeds the query, seeds from the nearest nodes by meaning, expands
 the graph around them, and returns a ranked, token-budgeted subgraph. Use this
 for "where do we handle X?" / "what's the policy for Y?" questions; use
 `query_graph` when you know the exact name. **Requires a prior `chiton embed`
-run.**
+run.** External package stubs (`pkg://` symbols such as `fmt.Println`) are not
+embedded; results reach them through graph expansion.
 
 | Parameter | Type | Required / default | Description |
 |---|---|---|---|

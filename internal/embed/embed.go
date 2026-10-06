@@ -50,10 +50,13 @@ func New(cfg Config) (Embedder, error) {
 }
 
 // TextFor returns a node's embeddable text: a symbol's label and docstring, a doc section's label and text,
-// or a concept's label and description. It returns "" for any other node kind.
+// or a concept's label and description. It returns "" for external package stubs and any other node kind.
 func TextFor(n model.Node) string {
 	switch n.Kind {
 	case model.KindSymbol:
+		if isExternalStub(n) {
+			return "" // a label-only stub for an import or cross-package call; graph expansion still reaches it
+		}
 		return join(n.Label, model.AttrString(n.Attrs, "docstring"))
 	case model.KindDocSection:
 		if t := model.AttrString(n.Attrs, "text"); t != "" {
@@ -65,6 +68,12 @@ func TextFor(n model.Node) string {
 	default:
 		return ""
 	}
+}
+
+// isExternalStub reports whether n is an external package stub; D4's model.IsExternal replaces it.
+func isExternalStub(n model.Node) bool {
+	ext, _ := n.Attrs["external"].(bool)
+	return ext
 }
 
 // NodeEmbeddings embeds each node that TextFor gives text for in one Embed call and returns results as

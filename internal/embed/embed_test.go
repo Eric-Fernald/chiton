@@ -149,6 +149,11 @@ func TestTextFor(t *testing.T) {
 			want: "Idempotency\nsafe to retry",
 		},
 		{
+			name: "external stub not embeddable",
+			node: model.Node{Kind: model.KindSymbol, Label: "fmt.Println", Attrs: map[string]any{"external": true}},
+			want: "",
+		},
+		{
 			name: "file not embeddable",
 			node: model.Node{Kind: model.KindFile, Label: "main.go"},
 			want: "",
@@ -324,4 +329,12 @@ func idsOf(nodes []model.Node) []string {
 		ids[i] = n.ID
 	}
 	return ids
+}
+
+func TestPlanPrunesExternalStubVectors(t *testing.T) {
+	stub := model.Node{ID: "stub", Kind: model.KindSymbol, Label: "fmt.Println", Attrs: map[string]any{"external": true}}
+	have := []store.EmbeddingMeta{{NodeID: "stub", Model: "m", Dim: 2, TextSHA: TextSHA("fmt.Println")}}
+	if work, stale := Plan([]model.Node{stub}, have, "m", false); len(work) != 0 || !slices.Equal(stale, []string{"stub"}) {
+		t.Fatalf("work=%v stale=%v, want the stub's vector pruned", idsOf(work), stale)
+	}
 }
