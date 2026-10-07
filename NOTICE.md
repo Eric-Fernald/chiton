@@ -42,11 +42,12 @@ third-party code have been incorporated.
 ### License
 
 This software is licensed under the PolyForm Strict License 1.0.0 with
-an additional permission for commercial use, as set forth in the
-LICENSE file at the root of this repository. Anyone may use the
-software for any purpose, but may not distribute it or make changes or
-new works based on it. All other rights are reserved by the copyright
-holder.
+additional permissions, as set forth in the LICENSE file at the root of
+this repository. Anyone may use the software for any purpose and install
+or build it by the documented routes, and plugin marketplaces and
+mirrors may host unmodified copies, but no one else may distribute it or
+make changes or new works based on it. All other rights are reserved by
+the copyright holder.
 
 ### Third-Party Dependencies
 

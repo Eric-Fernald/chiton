@@ -28,6 +28,6 @@ Then run `/chiton:setup` in a workspace to build its graph.
 - Privacy policy: <https://github.com/Eric-Fernald/chiton/blob/main/docs/PRIVACY.md>
 - Issues: <https://github.com/Eric-Fernald/chiton/issues>
 
-Licensed under the PolyForm Strict License 1.0.0 with an additional permission
-for commercial use: use it for any purpose, but do not modify or redistribute
-it. See [LICENSE](LICENSE).
+Licensed under the PolyForm Strict License 1.0.0 with additional permissions:
+use it for any purpose and install it by any documented route, but do not modify
+or redistribute it. See [LICENSE](LICENSE).

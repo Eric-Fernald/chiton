@@ -6,10 +6,11 @@ license.
 
 ## Contribution status
 
-chiton is licensed under the PolyForm Strict License 1.0.0 with an additional
-permission for commercial use (see [LICENSE](LICENSE)). Anyone may use it for
-any purpose, but the license does not permit making changes or new works based
-on it, or distributing it.
+chiton is licensed under the PolyForm Strict License 1.0.0 with additional
+permissions (see [LICENSE](LICENSE)). Anyone may use it for any purpose and
+install or build it by the documented routes, but the license does not permit
+making changes or new works based on it, or distributing it beyond the plugin
+marketplaces and mirrors it names.
 
 Bug reports and feature requests are welcome as
 [issues](https://github.com/Eric-Fernald/chiton/issues). Pull requests are not

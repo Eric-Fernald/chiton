@@ -1,19 +1,44 @@
 Copyright (c) 2026 Eric Fernald. All rights reserved except as granted below.
 
 chiton is licensed under the PolyForm Strict License 1.0.0, reproduced
-unmodified below, together with the additional permission in this section.
-"The software" and "the licensor" have the meanings the PolyForm Strict License
-1.0.0 gives them; the licensor is Eric Fernald.
+unmodified below, together with the additional permissions in this section.
+"The software", "the licensor" and "use" have the meanings the PolyForm Strict
+License 1.0.0 gives them; the licensor is Eric Fernald.
 
-## Additional Permission: Commercial Use
+## Additional Permissions
+
+The licensor grants the three permissions below in addition to those in the
+PolyForm Strict License 1.0.0. Except as they expressly say, every term of that
+license continues to apply. None of them permits making changes or new works
+based on the software.
+
+### 1. Commercial Use
 
 In addition to the permitted purposes in the PolyForm Strict License 1.0.0, the
 licensor permits use of the software for any commercial purpose.
 
-This additional permission changes only which purposes are permitted. It does
-not permit distributing the software or making changes or new works based on
-the software, and every other term of the PolyForm Strict License 1.0.0
-continues to apply.
+### 2. Plugin Marketplaces and Mirrors
+
+Any plugin marketplace, plugin directory, package registry, or mirror,
+including Anthropic's Claude plugin directory, may copy, host, cache, and serve
+unmodified copies of the software, and of the release files the software
+downloads, to people who obtain them to use the software. Copies may be
+packaged or listed with descriptive metadata, provided the software's own files
+are not changed and each copy includes this license file.
+
+### 3. Installation and Building
+
+You may install, build, and run the software by any of the means its
+documentation describes, including installing it as a Claude Code plugin,
+running the install scripts included with the software, running
+`go install github.com/Eric-Fernald/chiton/cmd/chiton@latest`, and copying the
+source code to your machine and compiling it with the build commands the
+software provides (such as `make build` or `make build-msgraph`). Compiling the
+source; downloading, caching, and placing the resulting binaries on your
+machine; and writing the configuration, data, and assistant settings files that
+the software's own commands create (such as `chiton init` and
+`chiton install`) are use for a permitted purpose, and are not making changes
+or new works based on the software.
 
 Required Notice: Copyright (c) 2026 Eric Fernald (https://github.com/Eric-Fernald/chiton)
 

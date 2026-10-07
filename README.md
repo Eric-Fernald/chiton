@@ -551,7 +551,9 @@ optional daemon-mode LLM path. See
 
 Copyright © 2026 Eric Fernald. Licensed under the
 [PolyForm Strict License 1.0.0](https://polyformproject.org/licenses/strict/1.0.0)
-with an additional permission for commercial use: you may use chiton for any
-purpose, including commercial work, but may not distribute it or make changes or
-new works based on it. See [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md).
+with additional permissions: you may use chiton for any purpose, including
+commercial work, and install or build it by any route this documentation
+describes, but may not distribute it or make changes or new works based on it.
+Plugin marketplaces and mirrors may host unmodified copies. See
+[LICENSE](LICENSE) and [NOTICE.md](NOTICE.md).
 Third-party dependencies remain under their own licenses.

@@ -52,13 +52,16 @@ func TestPluginManifest(t *testing.T) {
 		t.Errorf("plugin.json license = %q, want LicenseRef-PolyForm-Strict-1.0.0-Commercial-Use (the LICENSE file)", m.License)
 	}
 	// PolyForm's terms require dropping its name from any edited copy of a PolyForm license, so the
-	// LICENSE file must carry the Strict text verbatim and grant commercial use in a separate section.
+	// LICENSE file must carry the Strict text verbatim and grant the extra permissions in a separate
+	// section. Marketplace hosting and the documented install routes depend on those permissions.
 	lic, err := os.ReadFile("LICENSE")
 	if err != nil {
 		t.Fatalf("read LICENSE: %v", err)
 	}
 	for _, want := range []string{
-		"## Additional Permission: Commercial Use",
+		"### 1. Commercial Use",
+		"### 2. Plugin Marketplaces and Mirrors",
+		"### 3. Installation and Building",
 		"# PolyForm Strict License 1.0.0",
 		"Any noncommercial purpose is a permitted purpose.",
 	} {
