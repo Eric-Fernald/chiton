@@ -1,0 +1,240 @@
+{
+  "module": "github.com/Eric-Fernald/chiton",
+  "commit": "e3b40c0",
+  "questions": [
+    {
+      "id": "callers-1",
+      "kind": "callers",
+      "target": "internal/analyze:BaselineDir",
+      "prompt": "Which functions and methods call the package-level function `internal/analyze:BaselineDir` directly? A call inside a closure counts for the named function or method that contains it. A function value used without calling it does not count. Consider every non-test Go file in the repository (files not ending in _test.go), whatever their build tags or target OS.\n\nReply with ONLY a JSON array of strings and nothing else. Write each function as \"\u003cdir\u003e:\u003cFunc\u003e\" and each method as \"\u003cdir\u003e:\u003cType\u003e.\u003cMethod\u003e\", and each package as \"\u003cdir\u003e\", where \u003cdir\u003e is the package's directory relative to the repository root with forward slashes (\".\" for the root). Example: [\"internal/mcp:queryHandler\", \"cmd/chiton:Server.Run\", \"internal/graph/store\"]. Reply [] if the answer is empty.",
+      "expected": [
+        "cmd/chiton:buildSemanticDeps",
+        "cmd/chiton:runDiff",
+        "internal/mcp:New"
+      ]
+    },
+    {
+      "id": "callers-2",
+      "kind": "callers",
+      "target": "internal/analyze:New",
+      "prompt": "Which functions and methods call the package-level function `internal/analyze:New` directly? A call inside a closure counts for the named function or method that contains it. A function value used without calling it does not count. Consider every non-test Go file in the repository (files not ending in _test.go), whatever their build tags or target OS.\n\nReply with ONLY a JSON array of strings and nothing else. Write each function as \"\u003cdir\u003e:\u003cFunc\u003e\" and each method as \"\u003cdir\u003e:\u003cType\u003e.\u003cMethod\u003e\", and each package as \"\u003cdir\u003e\", where \u003cdir\u003e is the package's directory relative to the repository root with forward slashes (\".\" for the root). Example: [\"internal/mcp:queryHandler\", \"cmd/chiton:Server.Run\", \"internal/graph/store\"]. Reply [] if the answer is empty.",
+      "expected": [
+        "cmd/chiton:analyzeCmd",
+        "cmd/chiton:buildCmd",
+        "cmd/chiton:openSyncEngine",
+        "cmd/chiton:recordHookScan",
+        "internal/hooks:Run"
+      ]
+    },
+    {
+      "id": "callers-3",
+      "kind": "callers",
+      "target": "internal/config:StateDir",
+      "prompt": "Which functions and methods call the package-level function `internal/config:StateDir` directly? A call inside a closure counts for the named function or method that contains it. A function value used without calling it does not count. Consider every non-test Go file in the repository (files not ending in _test.go), whatever their build tags or target OS.\n\nReply with ONLY a JSON array of strings and nothing else. Write each function as \"\u003cdir\u003e:\u003cFunc\u003e\" and each method as \"\u003cdir\u003e:\u003cType\u003e.\u003cMethod\u003e\", and each package as \"\u003cdir\u003e\", where \u003cdir\u003e is the package's directory relative to the repository root with forward slashes (\".\" for the root). Example: [\"internal/mcp:queryHandler\", \"cmd/chiton:Server.Run\", \"internal/graph/store\"]. Reply [] if the answer is empty.",
+      "expected": [
+        "cmd/chiton:analyzePendingCmd",
+        "cmd/chiton:analyzeSubmitCmd",
+        "cmd/chiton:buildSemanticDeps",
+        "cmd/chiton:reportPendingLLM",
+        "cmd/chiton:resolveStoreKey",
+        "cmd/chiton:runDiff",
+        "internal/analyze:NewLLMService",
+        "internal/mcp:New"
+      ]
+    },
+    {
+      "id": "callers-4",
+      "kind": "callers",
+      "target": "internal/fsutil:WriteFileAtomic",
+      "prompt": "Which functions and methods call the package-level function `internal/fsutil:WriteFileAtomic` directly? A call inside a closure counts for the named function or method that contains it. A function value used without calling it does not count. Consider every non-test Go file in the repository (files not ending in _test.go), whatever their build tags or target OS.\n\nReply with ONLY a JSON array of strings and nothing else. Write each function as \"\u003cdir\u003e:\u003cFunc\u003e\" and each method as \"\u003cdir\u003e:\u003cType\u003e.\u003cMethod\u003e\", and each package as \"\u003cdir\u003e\", where \u003cdir\u003e is the package's directory relative to the repository root with forward slashes (\".\" for the root). Example: [\"internal/mcp:queryHandler\", \"cmd/chiton:Server.Run\", \"internal/graph/store\"]. Reply [] if the answer is empty.",
+      "expected": [
+        "cmd/chiton:serveToken",
+        "internal/analyze:LLMService.saveState",
+        "internal/analyze:SaveBaseline",
+        "internal/cache:Cache.Save",
+        "internal/crypto:KeyFile.Save",
+        "internal/graph/cluster:WriteSidecar",
+        "internal/install:writeKeepingMode",
+        "internal/vector:SaveHNSW"
+      ]
+    },
+    {
+      "id": "callers-5",
+      "kind": "callers",
+      "target": "internal/graph/model:PkgFuncRefID",
+      "prompt": "Which functions and methods call the package-level function `internal/graph/model:PkgFuncRefID` directly? A call inside a closure counts for the named function or method that contains it. A function value used without calling it does not count. Consider every non-test Go file in the repository (files not ending in _test.go), whatever their build tags or target OS.\n\nReply with ONLY a JSON array of strings and nothing else. Write each function as \"\u003cdir\u003e:\u003cFunc\u003e\" and each method as \"\u003cdir\u003e:\u003cType\u003e.\u003cMethod\u003e\", and each package as \"\u003cdir\u003e\", where \u003cdir\u003e is the package's directory relative to the repository root with forward slashes (\".\" for the root). Example: [\"internal/mcp:queryHandler\", \"cmd/chiton:Server.Run\", \"internal/graph/store\"]. Reply [] if the answer is empty.",
+      "expected": [
+        "internal/extract/ast:pkgFuncRef",
+        "internal/mcp:resolver.definitions",
+        "internal/mcp:resolver.reference"
+      ]
+    },
+    {
+      "id": "callers-6",
+      "kind": "callers",
+      "target": "internal/ingest/git:ValidateRef",
+      "prompt": "Which functions and methods call the package-level function `internal/ingest/git:ValidateRef` directly? A call inside a closure counts for the named function or method that contains it. A function value used without calling it does not count. Consider every non-test Go file in the repository (files not ending in _test.go), whatever their build tags or target OS.\n\nReply with ONLY a JSON array of strings and nothing else. Write each function as \"\u003cdir\u003e:\u003cFunc\u003e\" and each method as \"\u003cdir\u003e:\u003cType\u003e.\u003cMethod\u003e\", and each package as \"\u003cdir\u003e\", where \u003cdir\u003e is the package's directory relative to the repository root with forward slashes (\".\" for the root). Example: [\"internal/mcp:queryHandler\", \"cmd/chiton:Server.Run\", \"internal/graph/store\"]. Reply [] if the answer is empty.",
+      "expected": [
+        "internal/analyze:GitCommit",
+        "internal/ingest/git:ChangedSince",
+        "internal/ingest/git:RangeChanges"
+      ]
+    },
+    {
+      "id": "callees-1",
+      "kind": "callees",
+      "target": "cmd/chiton:analyzeCmd",
+      "prompt": "Which package-level functions defined in this repository does `cmd/chiton:analyzeCmd` call directly, including calls inside closures in its body? Leave out methods, builtins, and functions from the standard library or other modules. Consider every non-test Go file in the repository (files not ending in _test.go), whatever their build tags or target OS.\n\nReply with ONLY a JSON array of strings and nothing else. Write each function as \"\u003cdir\u003e:\u003cFunc\u003e\" and each method as \"\u003cdir\u003e:\u003cType\u003e.\u003cMethod\u003e\", and each package as \"\u003cdir\u003e\", where \u003cdir\u003e is the package's directory relative to the repository root with forward slashes (\".\" for the root). Example: [\"internal/mcp:queryHandler\", \"cmd/chiton:Server.Run\", \"internal/graph/store\"]. Reply [] if the answer is empty.",
+      "expected": [
+        "cmd/chiton:analyzePendingCmd",
+        "cmd/chiton:analyzeSubmitCmd",
+        "cmd/chiton:loadStore",
+        "cmd/chiton:reportPendingLLM",
+        "cmd/chiton:runDiff",
+        "internal/analyze:New",
+        "internal/analyze:SeverityRank"
+      ]
+    },
+    {
+      "id": "callees-2",
+      "kind": "callees",
+      "target": "cmd/chiton:hooksRunCmd",
+      "prompt": "Which package-level functions defined in this repository does `cmd/chiton:hooksRunCmd` call directly, including calls inside closures in its body? Leave out methods, builtins, and functions from the standard library or other modules. Consider every non-test Go file in the repository (files not ending in _test.go), whatever their build tags or target OS.\n\nReply with ONLY a JSON array of strings and nothing else. Write each function as \"\u003cdir\u003e:\u003cFunc\u003e\" and each method as \"\u003cdir\u003e:\u003cType\u003e.\u003cMethod\u003e\", and each package as \"\u003cdir\u003e\", where \u003cdir\u003e is the package's directory relative to the repository root with forward slashes (\".\" for the root). Example: [\"internal/mcp:queryHandler\", \"cmd/chiton:Server.Run\", \"internal/graph/store\"]. Reply [] if the answer is empty.",
+      "expected": [
+        "cmd/chiton:recordHookScan",
+        "internal/hooks:FormatResult",
+        "internal/hooks:Load",
+        "internal/hooks:Run",
+        "internal/hooks:Stages"
+      ]
+    },
+    {
+      "id": "callees-3",
+      "kind": "callees",
+      "target": "cmd/chiton:saveIndex",
+      "prompt": "Which package-level functions defined in this repository does `cmd/chiton:saveIndex` call directly, including calls inside closures in its body? Leave out methods, builtins, and functions from the standard library or other modules. Consider every non-test Go file in the repository (files not ending in _test.go), whatever their build tags or target OS.\n\nReply with ONLY a JSON array of strings and nothing else. Write each function as \"\u003cdir\u003e:\u003cFunc\u003e\" and each method as \"\u003cdir\u003e:\u003cType\u003e.\u003cMethod\u003e\", and each package as \"\u003cdir\u003e\", where \u003cdir\u003e is the package's directory relative to the repository root with forward slashes (\".\" for the root). Example: [\"internal/mcp:queryHandler\", \"cmd/chiton:Server.Run\", \"internal/graph/store\"]. Reply [] if the answer is empty.",
+      "expected": [
+        "cmd/chiton:buildIndex",
+        "cmd/chiton:fingerprint",
+        "cmd/chiton:hnswConfig",
+        "cmd/chiton:loadFailure",
+        "cmd/chiton:loadIndex",
+        "cmd/chiton:modelEmbeddings",
+        "internal/vector:Resolve",
+        "internal/vector:SaveHNSW"
+      ]
+    },
+    {
+      "id": "callees-4",
+      "kind": "callees",
+      "target": "internal/graph/cluster:Full",
+      "prompt": "Which package-level functions defined in this repository does `internal/graph/cluster:Full` call directly, including calls inside closures in its body? Leave out methods, builtins, and functions from the standard library or other modules. Consider every non-test Go file in the repository (files not ending in _test.go), whatever their build tags or target OS.\n\nReply with ONLY a JSON array of strings and nothing else. Write each function as \"\u003cdir\u003e:\u003cFunc\u003e\" and each method as \"\u003cdir\u003e:\u003cType\u003e.\u003cMethod\u003e\", and each package as \"\u003cdir\u003e\", where \u003cdir\u003e is the package's directory relative to the repository root with forward slashes (\".\" for the root). Example: [\"internal/mcp:queryHandler\", \"cmd/chiton:Server.Run\", \"internal/graph/store\"]. Reply [] if the answer is empty.",
+      "expected": [
+        "internal/graph/cluster:Run",
+        "internal/graph/cluster:buildResults",
+        "internal/graph/metrics:Compute"
+      ]
+    },
+    {
+      "id": "imports-1",
+      "kind": "imports",
+      "target": "internal/analyze",
+      "prompt": "Which packages from this repository (not the standard library or third-party modules) does package `internal/analyze` import? Consider every non-test Go file in the repository (files not ending in _test.go), whatever their build tags or target OS.\n\nReply with ONLY a JSON array of strings and nothing else. Write each function as \"\u003cdir\u003e:\u003cFunc\u003e\" and each method as \"\u003cdir\u003e:\u003cType\u003e.\u003cMethod\u003e\", and each package as \"\u003cdir\u003e\", where \u003cdir\u003e is the package's directory relative to the repository root with forward slashes (\".\" for the root). Example: [\"internal/mcp:queryHandler\", \"cmd/chiton:Server.Run\", \"internal/graph/store\"]. Reply [] if the answer is empty.",
+      "expected": [
+        "internal/config",
+        "internal/extract/ast",
+        "internal/fsutil",
+        "internal/graph/model",
+        "internal/graph/store",
+        "internal/ingest/git",
+        "internal/walk"
+      ]
+    },
+    {
+      "id": "imports-2",
+      "kind": "imports",
+      "target": "internal/extract/subagent",
+      "prompt": "Which packages from this repository (not the standard library or third-party modules) does package `internal/extract/subagent` import? Consider every non-test Go file in the repository (files not ending in _test.go), whatever their build tags or target OS.\n\nReply with ONLY a JSON array of strings and nothing else. Write each function as \"\u003cdir\u003e:\u003cFunc\u003e\" and each method as \"\u003cdir\u003e:\u003cType\u003e.\u003cMethod\u003e\", and each package as \"\u003cdir\u003e\", where \u003cdir\u003e is the package's directory relative to the repository root with forward slashes (\".\" for the root). Example: [\"internal/mcp:queryHandler\", \"cmd/chiton:Server.Run\", \"internal/graph/store\"]. Reply [] if the answer is empty.",
+      "expected": [
+        "internal/embed",
+        "internal/graph/model",
+        "internal/graph/store"
+      ]
+    },
+    {
+      "id": "imports-3",
+      "kind": "imports",
+      "target": "internal/ingest/browser",
+      "prompt": "Which packages from this repository (not the standard library or third-party modules) does package `internal/ingest/browser` import? Consider every non-test Go file in the repository (files not ending in _test.go), whatever their build tags or target OS.\n\nReply with ONLY a JSON array of strings and nothing else. Write each function as \"\u003cdir\u003e:\u003cFunc\u003e\" and each method as \"\u003cdir\u003e:\u003cType\u003e.\u003cMethod\u003e\", and each package as \"\u003cdir\u003e\", where \u003cdir\u003e is the package's directory relative to the repository root with forward slashes (\".\" for the root). Example: [\"internal/mcp:queryHandler\", \"cmd/chiton:Server.Run\", \"internal/graph/store\"]. Reply [] if the answer is empty.",
+      "expected": [
+        "internal/graph/model",
+        "internal/graph/store",
+        "internal/ingest/fswatch",
+        "internal/jobs"
+      ]
+    },
+    {
+      "id": "imports-4",
+      "kind": "imports",
+      "target": "internal/ingest/url",
+      "prompt": "Which packages from this repository (not the standard library or third-party modules) does package `internal/ingest/url` import? Consider every non-test Go file in the repository (files not ending in _test.go), whatever their build tags or target OS.\n\nReply with ONLY a JSON array of strings and nothing else. Write each function as \"\u003cdir\u003e:\u003cFunc\u003e\" and each method as \"\u003cdir\u003e:\u003cType\u003e.\u003cMethod\u003e\", and each package as \"\u003cdir\u003e\", where \u003cdir\u003e is the package's directory relative to the repository root with forward slashes (\".\" for the root). Example: [\"internal/mcp:queryHandler\", \"cmd/chiton:Server.Run\", \"internal/graph/store\"]. Reply [] if the answer is empty.",
+      "expected": [
+        "internal/extract/meeting",
+        "internal/graph/model",
+        "internal/graph/store",
+        "internal/ingest/chunk"
+      ]
+    },
+    {
+      "id": "importers-1",
+      "kind": "importers",
+      "target": "internal/config",
+      "prompt": "Which packages in this repository import package `internal/config`? Consider every non-test Go file in the repository (files not ending in _test.go), whatever their build tags or target OS.\n\nReply with ONLY a JSON array of strings and nothing else. Write each function as \"\u003cdir\u003e:\u003cFunc\u003e\" and each method as \"\u003cdir\u003e:\u003cType\u003e.\u003cMethod\u003e\", and each package as \"\u003cdir\u003e\", where \u003cdir\u003e is the package's directory relative to the repository root with forward slashes (\".\" for the root). Example: [\"internal/mcp:queryHandler\", \"cmd/chiton:Server.Run\", \"internal/graph/store\"]. Reply [] if the answer is empty.",
+      "expected": [
+        "cmd/chiton",
+        "internal/analyze",
+        "internal/mcp"
+      ]
+    },
+    {
+      "id": "importers-2",
+      "kind": "importers",
+      "target": "internal/embed",
+      "prompt": "Which packages in this repository import package `internal/embed`? Consider every non-test Go file in the repository (files not ending in _test.go), whatever their build tags or target OS.\n\nReply with ONLY a JSON array of strings and nothing else. Write each function as \"\u003cdir\u003e:\u003cFunc\u003e\" and each method as \"\u003cdir\u003e:\u003cType\u003e.\u003cMethod\u003e\", and each package as \"\u003cdir\u003e\", where \u003cdir\u003e is the package's directory relative to the repository root with forward slashes (\".\" for the root). Example: [\"internal/mcp:queryHandler\", \"cmd/chiton:Server.Run\", \"internal/graph/store\"]. Reply [] if the answer is empty.",
+      "expected": [
+        "cmd/chiton",
+        "internal/extract/subagent",
+        "internal/graph/retrieve",
+        "internal/ingest"
+      ]
+    },
+    {
+      "id": "importers-3",
+      "kind": "importers",
+      "target": "internal/fsutil",
+      "prompt": "Which packages in this repository import package `internal/fsutil`? Consider every non-test Go file in the repository (files not ending in _test.go), whatever their build tags or target OS.\n\nReply with ONLY a JSON array of strings and nothing else. Write each function as \"\u003cdir\u003e:\u003cFunc\u003e\" and each method as \"\u003cdir\u003e:\u003cType\u003e.\u003cMethod\u003e\", and each package as \"\u003cdir\u003e\", where \u003cdir\u003e is the package's directory relative to the repository root with forward slashes (\".\" for the root). Example: [\"internal/mcp:queryHandler\", \"cmd/chiton:Server.Run\", \"internal/graph/store\"]. Reply [] if the answer is empty.",
+      "expected": [
+        "cmd/chiton",
+        "internal/analyze",
+        "internal/cache",
+        "internal/crypto",
+        "internal/graph/cluster",
+        "internal/install",
+        "internal/mcp",
+        "internal/vector"
+      ]
+    },
+    {
+      "id": "importers-4",
+      "kind": "importers",
+      "target": "internal/jobs",
+      "prompt": "Which packages in this repository import package `internal/jobs`? Consider every non-test Go file in the repository (files not ending in _test.go), whatever their build tags or target OS.\n\nReply with ONLY a JSON array of strings and nothing else. Write each function as \"\u003cdir\u003e:\u003cFunc\u003e\" and each method as \"\u003cdir\u003e:\u003cType\u003e.\u003cMethod\u003e\", and each package as \"\u003cdir\u003e\", where \u003cdir\u003e is the package's directory relative to the repository root with forward slashes (\".\" for the root). Example: [\"internal/mcp:queryHandler\", \"cmd/chiton:Server.Run\", \"internal/graph/store\"]. Reply [] if the answer is empty.",
+      "expected": [
+        "internal/ingest",
+        "internal/ingest/browser",
+        "internal/ingest/slack",
+        "internal/ingest/teams"
+      ]
+    }
+  ]
+}

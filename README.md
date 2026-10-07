@@ -41,7 +41,7 @@ When sources conflict, prefer `EXTRACTED` facts over `INFERRED` ones.
   ingest            extract              store + index            serve
   ------            -------              -------------            -----
   file walk    →    Go AST (go/ast)  →   BadgerDB graph      →   MCP (stdio/HTTP)
-  fsnotify          line scanners        (encrypted at rest)      19 graph + semantic
+  fsnotify          line scanners        (encrypted at rest)      20 graph + semantic
   git hooks         Markdown structure   pure-Go vector index     + analysis tools
                     image nodes          Leiden communities       CLI (thin wrapper)
                     rule engine          betweenness / god nodes
@@ -227,8 +227,9 @@ wrapper over the same logic.
 
 | Tool | Use when |
 |---|---|
-| `get_node` | Fetch a single node by label (exact or substring). |
-| `get_node_neighborhood` | "What does X depend on / call / import?" Returns the node and its N-hop neighbors. |
+| `get_node` | Fetch a single node by label (exact names rank first; `"<dir>:<Name>"` picks one package). |
+| `get_node_neighborhood` | "What does X depend on / call / import?" Returns the node and its N-hop neighbors. `direction: "in"` with `edge_kinds: ["CALLS"]` lists callers, `"out"` lists callees; calls resolve across files and packages. |
+| `package_deps` | "What does package P import, or what imports it?" Direct or `transitive`, joined over every file in the Go package. |
 | `query_graph` | Find nodes whose label matches a known substring. |
 | `shortest_path` | "How are A and B connected?" |
 | `god_nodes` | Highest-betweenness nodes, which are the architectural hubs (needs `cluster`). |
@@ -243,9 +244,11 @@ wrapper over the same logic.
 | `pending_meeting_links` / `submit_meeting_links` | Subagent meeting→code linkage: transcript + candidate-symbol task specs in, decisions + edges out. |
 | `add_url` | Fetch a URL (article, paper PDF, or YouTube transcript) and ingest it as a `url` node with `doc_section` children. |
 
-> **Note:** `query_graph` matches node *labels*, not call sites. chiton indexes
-> package-level `IMPORTS` but not individual call expressions, so use grep for
-> "which lines call X?". `CALLS` edges connect symbol nodes, not file nodes.
+> **Note:** `query_graph` matches node *labels*, not call sites. A `CALLS` edge
+> says that function A calls function B, not on which line, so use grep for
+> "which lines call X?". chiton tracks calls to package-level functions but not
+> method calls on values (`x.Method()`). `CALLS` edges connect symbol nodes, not
+> file nodes.
 
 Write tools (`submit_extraction`, `submit_analysis`, `submit_meeting_links`,
 `add_url`) need a writable store: run `chiton serve --writable`, or use the CLI
@@ -408,7 +411,9 @@ Opt out for CI or synthetic data with `chiton init --encrypt=false`.
 ## Supported sources
 
 - **Go.** Full AST extraction via the standard-library parser (`go/ast`):
-  files, symbols, `CONTAINS`, `IMPORTS`, and intra-corpus `CALLS` edges.
+  files, symbols, `CONTAINS`, `IMPORTS`, and `CALLS` edges for calls to
+  package-level functions, across files and packages. File nodes carry the
+  package's `import_path` and `module`.
 - **Python, JavaScript/TypeScript, Rust, Java.** Lightweight line-scanning
   extractors for symbols and imports.
 - **Markdown.** `doc_section` nodes per heading with `CONTAINS` nesting.

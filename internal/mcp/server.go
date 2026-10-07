@@ -62,6 +62,7 @@ func New(gs store.GraphStore, overlay *cluster.Results, deps Deps) *mcpsdk.MCPSe
 	s.AddTool(neighborhoodTool(), neighborhoodHandler(gs, r))
 	s.AddTool(queryTool(), queryHandler(gs, r))
 	s.AddTool(shortestPathTool(), shortestPathHandler(gs, r))
+	s.AddTool(packageDepsTool(), packageDepsHandler(gs))
 	s.AddTool(godNodesTool(), godNodesHandler(gs, overlay, r))
 	s.AddTool(graphSummaryTool(), graphSummaryHandler(gs, overlay, r))
 	s.AddTool(listFindingsTool(), listFindingsHandler(gs))
@@ -89,10 +90,10 @@ func New(gs store.GraphStore, overlay *cluster.Results, deps Deps) *mcpsdk.MCPSe
 
 func getNodeTool() mcplib.Tool {
 	return mcplib.NewTool("get_node",
-		mcplib.WithDescription("Return a single node by label exact or substring match."),
+		mcplib.WithDescription("Return a single node by label: the symbol or file with that name, its source location and provenance. Exact names win over substrings, and definitions over references. When several symbols share the name, the result says so."),
 		mcplib.WithString("label",
 			mcplib.Required(),
-			mcplib.Description("Node label or substring to look up (case-insensitive)"),
+			mcplib.Description("Name to look up (case-insensitive), e.g. \"New\", \"Server.Run\", or \"<dir>:<Name>\" such as \"internal/analyze:New\" to name the symbol in one package directory"),
 		),
 		mcplib.WithString("file",
 			mcplib.Description("Optional source file hint to disambiguate when multiple nodes match (case-insensitive substring of source_uri, e.g. \"fetchall.go\")"),
@@ -103,26 +104,39 @@ func getNodeTool() mcplib.Tool {
 
 func neighborhoodTool() mcplib.Tool {
 	return mcplib.NewTool("get_node_neighborhood",
-		mcplib.WithDescription("Return a node and all nodes/edges reachable within depth hops. Prefer this over grep or file-read for architecture questions."),
+		mcplib.WithDescription("Walk the code graph from a symbol or file. One call answers questions that take many greps: "+
+			"who calls a function (direction \"in\", edge_kinds [\"CALLS\"]), everything that reaches it through a chain of calls (the same, with depth 2-5), "+
+			"what it calls (direction \"out\"), and what a file imports or contains. Calls are resolved across files and packages, "+
+			"so callers in other packages are included, and each edge comes from the parser rather than a text match. "+
+			"Use it before grep for any \"who calls / what calls / what depends on\" question. Method calls on values are not tracked; package-level function calls are."),
 		mcplib.WithString("label",
 			mcplib.Required(),
-			mcplib.Description("Node label or substring (case-insensitive)"),
+			mcplib.Description("Name to start from (case-insensitive), e.g. \"New\", \"Server.Run\", or \"<dir>:<Name>\" such as \"internal/analyze:New\" to pick the symbol in one package directory"),
+		),
+		mcplib.WithString("direction",
+			mcplib.DefaultString(dirBoth),
+			mcplib.Description("\"in\" follows edges into each node (callers, importers, the containing file), \"out\" follows edges out of it (callees, imports, contents), \"both\" (default) follows either"),
+			mcplib.Enum(dirBoth, dirIn, dirOut),
 		),
 		mcplib.WithString("file",
 			mcplib.Description("Optional source file hint to disambiguate when label matches multiple nodes (case-insensitive substring of source_uri, e.g. \"fetchall.go\")"),
 		),
 		mcplib.WithInteger("depth",
 			mcplib.DefaultNumber(2),
-			mcplib.Description("Hop depth (default 2, max 5)"),
+			mcplib.Description("Hop depth (default 2, max 5). Depth 1 with direction \"in\" and edge_kinds [\"CALLS\"] lists direct callers; depth N lists every caller within N calls."),
 			mcplib.Min(1),
 			mcplib.Max(5),
 		),
 		mcplib.WithArray("edge_kinds",
-			mcplib.Description("Filter to these edge types e.g. [\"CALLS\",\"IMPORTS\"]. Empty = all kinds."),
+			mcplib.Description("Follow only these edge types, e.g. [\"CALLS\"] for the call graph or [\"IMPORTS\"]. Empty = all kinds, which mixes in CONTAINS and IMPORTS edges."),
 			mcplib.WithStringItems(),
 		),
 		mcplib.WithString("source_prefix",
 			mcplib.Description("Optional filter: only return neighbor nodes whose source_uri contains this substring (e.g. \"Go_Projects\" to scope to one corpus)"),
+		),
+		mcplib.WithBoolean("exclude_tests",
+			mcplib.DefaultBool(false),
+			mcplib.Description("Leave out nodes from _test.go files, and don't walk through them; set it when the question is about non-test code"),
 		),
 		mcplib.WithInteger("max_nodes",
 			mcplib.DefaultNumber(100),
@@ -183,17 +197,23 @@ func clampInt(v, lo, hi int) int {
 	return min(max(v, lo), hi)
 }
 
-// lookupNode resolves label (plus an optional file hint) to one node. A non-nil result is the tool response
-// to return instead: a search failure, or a no-match message, also given for a node whose label names a person.
-func lookupNode(ctx context.Context, gs store.GraphStore, r redactor, label, file string) (model.Node, *mcplib.CallToolResult) {
-	node, found, err := store.FindNode(ctx, gs, label, file)
+// lookupNode resolves label (plus an optional file hint) to one node, with a note when other symbols share its
+// name. A non-nil result is the tool response to return instead: a search failure, or a no-match message, also
+// given for a node whose label names a person.
+func lookupNode(ctx context.Context, res *resolver, r redactor, label, file string) (model.Node, string, *mcplib.CallToolResult) {
+	node, others, found, err := res.lookup(ctx, label, file)
 	if err != nil {
-		return model.Node{}, mcplib.NewToolResultErrorFromErr("search failed", err)
+		return model.Node{}, "", mcplib.NewToolResultErrorFromErr("search failed", err)
 	}
 	if !found || r.hidden(node) {
-		return model.Node{}, mcplib.NewToolResultText(fmt.Sprintf("no node found matching %q", label))
+		return model.Node{}, "", mcplib.NewToolResultText(fmt.Sprintf("no node found matching %q", label))
 	}
-	return node, nil
+	note := ""
+	if others > 0 {
+		note = fmt.Sprintf("%d other symbol(s) are also named %q; this is the one in %s. Pass file, or a label like \"<dir>:%s\", to pick another.",
+			others, node.Label, r.sourceURI(node), node.Label)
+	}
+	return node, note, nil
 }
 
 // parseEdgeKinds upper-cases the edge_kinds argument. It returns nil (all kinds) when none are given.
@@ -207,11 +227,17 @@ func getNodeHandler(gs store.GraphStore, r redactor) mcpsdk.ToolHandlerFunc {
 		if err != nil {
 			return mcplib.NewToolResultError(err.Error()), nil
 		}
-		node, errRes := lookupNode(ctx, gs, r, label, req.GetString("file", ""))
+		node, note, errRes := lookupNode(ctx, newResolver(gs), r, label, req.GetString("file", ""))
 		if errRes != nil {
 			return errRes, nil
 		}
-		return jsonResult(r.node(node))
+		if note == "" {
+			return jsonResult(r.node(node))
+		}
+		return jsonResult(struct {
+			leanNode
+			Note string `json:"note"`
+		}{r.node(node), note})
 	}
 }
 
@@ -225,16 +251,23 @@ func neighborhoodHandler(gs store.GraphStore, r redactor) mcpsdk.ToolHandlerFunc
 		maxNodes := clampInt(req.GetInt("max_nodes", 100), 1, 500)
 		maxTokens := clampInt(req.GetInt("max_tokens", 4000), 500, 16000)
 
-		seed, errRes := lookupNode(ctx, gs, r, label, req.GetString("file", ""))
+		direction := strings.ToLower(req.GetString("direction", dirBoth))
+		if direction != dirIn && direction != dirOut {
+			direction = dirBoth
+		}
+
+		resv := newResolver(gs)
+		seed, note, errRes := lookupNode(ctx, resv, r, label, req.GetString("file", ""))
 		if errRes != nil {
 			return errRes, nil
 		}
-		sub, err := gs.Neighbors(ctx, seed.ID, depth, parseEdgeKinds(req))
+		walked, walkedEdges, err := resv.walk(ctx, seed, depth, parseEdgeKinds(req), direction, req.GetBool("exclude_tests", false))
 		if err != nil {
 			return mcplib.NewToolResultErrorFromErr("neighbors failed", err), nil
 		}
-		reachable := keepPrefix(seed.ID, sub.Nodes, req.GetString("source_prefix", ""), r)
-		nodes, edges := capNeighborhood(reachable, sub.Edges, maxNodes, maxTokens, r)
+		seed = walked[0]
+		reachable := keepPrefix(seed.ID, walked, req.GetString("source_prefix", ""), r)
+		nodes, edges := capNeighborhood(reachable, walkedEdges, maxNodes, maxTokens, r)
 
 		type result struct {
 			Seed      leanNode   `json:"seed"`
@@ -242,13 +275,22 @@ func neighborhoodHandler(gs store.GraphStore, r redactor) mcpsdk.ToolHandlerFunc
 			Edges     []leanEdge `json:"edges"`
 			Truncated bool       `json:"truncated,omitempty"`
 			Summary   string     `json:"summary"`
+			Note      string     `json:"note,omitempty"`
+		}
+		where := "within"
+		switch direction {
+		case dirIn:
+			where = "pointing into, within"
+		case dirOut:
+			where = "pointing out of, within"
 		}
 		res := result{
 			Seed:      r.node(seed),
 			Nodes:     nodes,
 			Edges:     edges,
 			Truncated: len(nodes) < len(reachable),
-			Summary:   fmt.Sprintf("%d nodes, %d edges within depth %d of %q", len(nodes), len(edges), depth, r.label(seed)),
+			Summary:   fmt.Sprintf("%d nodes, %d edges %s depth %d of %q", len(nodes), len(edges), where, depth, r.label(seed)),
+			Note:      note,
 		}
 		if res.Truncated {
 			res.Summary += fmt.Sprintf(" (truncated from %d reachable nodes; raise max_nodes/max_tokens or narrow edge_kinds/source_prefix)", len(reachable))

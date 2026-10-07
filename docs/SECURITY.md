@@ -40,7 +40,7 @@ has not been asked to ingest anything.
 - **stdio binds no port.** The process talks to the assistant over its own
   stdin/stdout. Nothing is listening.
 - The store is opened **read-only** unless you pass `--writable`.
-- **19 MCP tools** are registered. 15 are read-only queries against the local
+- **20 MCP tools** are registered. 16 are read-only queries against the local
   (normally encrypted) graph. The 4 write tools are `submit_extraction`,
   `submit_analysis`, `submit_meeting_links` and `add_url`. They are still
   *listed*, but fail against a read-only store; `add_url` refuses **before** it

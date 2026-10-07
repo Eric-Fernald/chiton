@@ -14,18 +14,68 @@ func IsReadOnly(gs GraphStore) bool {
 	return ok && ro.ReadOnly()
 }
 
-// FindNode resolves a label substring, plus an optional source-file hint, to one node via PickByFile.
-// found is false when nothing matches, and err is the raw search error.
+// FindNode resolves a label, plus an optional source-file hint, to the best-ranked matching node (see
+// FindNodes). found is false when nothing matches, and err is the raw search error.
 func FindNode(ctx context.Context, gs GraphStore, label, file string) (node model.Node, found bool, err error) {
-	limit := 1
-	if file != "" {
-		limit = 20
-	}
-	nodes, err := gs.SearchNodes(ctx, label, limit)
+	nodes, err := FindNodes(ctx, gs, label, file)
 	if err != nil || len(nodes) == 0 {
 		return model.Node{}, false, err
 	}
-	return PickByFile(nodes, file), true, nil
+	return nodes[0], true, nil
+}
+
+// maxLabelMatches bounds how many substring matches FindNodes ranks, so a one-letter label doesn't decode
+// the whole store.
+const maxLabelMatches = 2000
+
+// FindNodes returns every node whose label contains label (case-insensitive), best match first: nodes in a
+// file matching the file hint, then exact label matches (case-sensitive before case-insensitive), then
+// labels ending in "."+label (a method, or a pkg.Func reference), then other substring matches. Within a
+// rank, definitions come before files and files before external references. A plain substring lookup used
+// to return whichever match came first in key order, so "New" could resolve to "NewEngine".
+func FindNodes(ctx context.Context, gs GraphStore, label, file string) ([]model.Node, error) {
+	nodes, err := gs.SearchNodes(ctx, label, maxLabelMatches)
+	if err != nil || len(nodes) == 0 {
+		return nil, err
+	}
+	hint := strings.ToLower(file)
+	rank := func(n model.Node) (int, int, int) {
+		fileRank := 0
+		if hint != "" && !strings.Contains(strings.ToLower(n.SourceURI), hint) {
+			fileRank = 1
+		}
+		var labelRank int
+		switch {
+		case n.Label == label:
+			labelRank = 0
+		case strings.EqualFold(n.Label, label):
+			labelRank = 1
+		case strings.HasSuffix(strings.ToLower(n.Label), "."+strings.ToLower(label)):
+			labelRank = 2
+		default:
+			labelRank = 3
+		}
+		kindRank := 1
+		switch {
+		case model.IsExternal(n):
+			kindRank = 2
+		case n.Kind == model.KindSymbol:
+			kindRank = 0
+		}
+		return fileRank, labelRank, kindRank
+	}
+	slices.SortStableFunc(nodes, func(a, b model.Node) int {
+		af, al, ak := rank(a)
+		bf, bl, bk := rank(b)
+		if af != bf {
+			return af - bf
+		}
+		if al != bl {
+			return al - bl
+		}
+		return ak - bk
+	})
+	return nodes, nil
 }
 
 // PickByFile picks a node whose source_uri contains the file hint, preferring symbols over file
