@@ -18,7 +18,7 @@ on it.
 All three submit paths need a writable store. Run `chiton serve --writable`, or
 use the equivalent CLI subcommand noted per flow.
 
-## Semantic extraction (Phase 2)
+## Semantic extraction
 
 - `pending_extractions` returns schema-pinned task specs for doc sections and
   images that still need semantic extraction. Run each task (extract concepts
@@ -34,7 +34,7 @@ chiton extract pending --out tasks.json   # emit semantic-extraction task specs
 chiton extract submit results.json        # ingest concepts + edges
 ```
 
-## LLM rule analysis (Phase 2.5)
+## LLM rule analysis
 
 - `pending_analyses` returns task specs (one per LLM rule × code file). Inspect
   the code in `input` for the issue the rule's `instructions` describe, then call
@@ -49,7 +49,7 @@ chiton analyze pending --out tasks.json   # emit LLM-rule task specs
 chiton analyze submit results.json        # ingest findings
 ```
 
-## Meeting→code linkage (Phase 4)
+## Meeting→code linkage
 
 - The linkage flow is subagent-mode like extraction/LLM-rules: `pending_meeting_links`
   emits a schema-pinned task per un-linked meeting (transcript + candidate symbol

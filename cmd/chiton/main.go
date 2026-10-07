@@ -1025,7 +1025,7 @@ func buildSemanticDeps(cmd *cobra.Command, cfg *config.Config, gs store.GraphSto
 	var deps mcpsrv.Deps
 	deps.LLM = analyze.NewLLMService(gs, nil, cfg.Semantic.ConfidenceThreshold, config.StateDir())
 	deps.BaselineDir = analyze.BaselineDir(config.StateDir())
-	// Phase 4: meeting→code linkage (read pending always; submit guarded by the
+	// Meeting→code linkage (read pending always; submit guarded by the
 	// store's read-only flag) and URL ingest (add_url; also read-only-guarded).
 	deps.MeetingLinker = meeting.NewLinkService(gs, cfg.Semantic.ConfidenceThreshold)
 	deps.URLIngester = urlingest.New(gs)

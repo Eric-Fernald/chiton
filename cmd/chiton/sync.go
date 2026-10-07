@@ -14,7 +14,7 @@ import (
 	gitpkg "github.com/Eric-Fernald/chiton/internal/ingest/git"
 )
 
-// syncCmd is the parent for chiton's live-sync front-ends (Phase 3).
+// syncCmd is the parent for chiton's live-sync front-ends.
 func syncCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sync",

@@ -10,7 +10,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/ingest/browser"
 )
 
-// browserCmd is the Phase 6 parent for local web-browser history ingestion.
+// browserCmd is the parent for local web-browser history ingestion.
 func browserCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "browser",

@@ -15,7 +15,7 @@ import (
 	urlingest "github.com/Eric-Fernald/chiton/internal/ingest/url"
 )
 
-// meetingCmd is the Phase 4 parent for meeting ingest + meeting→code linkage.
+// meetingCmd is the parent for meeting ingest + meeting→code linkage.
 func meetingCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "meeting",

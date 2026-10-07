@@ -105,7 +105,7 @@ func LoadFrom(dir string) (*Config, error) {
 	v.SetDefault("graph_path", "./chiton-out/graph.kuzu")
 	v.SetDefault("log_level", "info")
 
-	// Semantic-layer defaults (Phase 2). Embeddings default to local Ollama;
+	// Semantic-layer defaults. Embeddings default to local Ollama;
 	// nothing leaves the machine unless the user points us at a remote provider.
 	v.SetDefault("embed.provider", "ollama")
 	v.SetDefault("embed.model", "nomic-embed-text")

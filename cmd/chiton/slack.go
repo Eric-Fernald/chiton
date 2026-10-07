@@ -11,7 +11,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/ingest/slack"
 )
 
-// slackCmd is the Phase 4.5 parent for Slack conversation ingest.
+// slackCmd is the parent for Slack conversation ingest.
 func slackCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "slack",

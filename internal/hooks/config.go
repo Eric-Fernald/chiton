@@ -18,7 +18,7 @@ type Stage string
 const (
 	StagePreCommit Stage = "pre-commit"
 	StagePrePush   Stage = "pre-push"
-	// Sync stages keep the graph current after history changes (Phase 3). They
+	// Sync stages keep the graph current after history changes. They
 	// run `chiton sync git` rather than the gating `chiton hooks run`.
 	StagePostCommit   Stage = "post-commit"
 	StagePostCheckout Stage = "post-checkout"

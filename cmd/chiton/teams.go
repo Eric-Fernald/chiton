@@ -11,7 +11,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/ingest/teams"
 )
 
-// teamsCmd is the Phase 4 parent for Microsoft Teams transcript ingest.
+// teamsCmd is the parent for Microsoft Teams transcript ingest.
 func teamsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "teams",

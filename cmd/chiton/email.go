@@ -8,7 +8,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/ingest/email"
 )
 
-// emailCmd is the Phase 6 parent for email ingestion.
+// emailCmd is the parent for email ingestion.
 func emailCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "email",
