@@ -106,6 +106,26 @@ func TestBaseIdent(t *testing.T) {
 	}
 }
 
+func TestContainsWord(t *testing.T) {
+	cases := []struct {
+		text, word string
+		want       bool
+	}{
+		{"x := Open(path)", "Open", true},
+		{"OpenReadOnly(path)", "Open", false},
+		{"reopen", "open", false},
+		{"store.Open", "Open", true},
+		{"Open", "Open", true},
+		{"Opened then Open.", "Open", true},
+		{"my_Open", "Open", false},
+	}
+	for _, c := range cases {
+		if got := containsWord(c.text, c.word); got != c.want {
+			t.Errorf("containsWord(%q, %q) = %v, want %v", c.text, c.word, got, c.want)
+		}
+	}
+}
+
 func TestEstimateTokens(t *testing.T) {
 	if got := estimateTokens(400); got != 100 {
 		t.Errorf("estimateTokens(400) = %d, want 100", got)

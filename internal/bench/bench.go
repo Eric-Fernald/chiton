@@ -145,6 +145,7 @@ func Run(ctx context.Context, name, path string, opts Options) (*Report, error) 
 		corpusTokens += t
 	}
 
+	nodes, edges = resolveFuncRefs(nodes, edges)
 	g := newGraph(nodes, edges)
 	targets := g.topSymbols(maxQueries, opts.IncludeTests)
 
@@ -184,17 +185,89 @@ func Run(ctx context.Context, name, path string, opts Options) (*Report, error) 
 	return rep, nil
 }
 
-// grepReadTokens models "grep -l <symbol> | xargs cat" on the base identifier (after the last '.'),
+// resolveFuncRefs merges each pkg:// function reference into the definition it names, as the MCP server does
+// when it walks the graph, so a neighborhood here holds the same nodes the server would return: the callers in
+// other files and packages, attached to the definition. A reference naming no definition, or more than one
+// (build-tag variants), stays as it is.
+func resolveFuncRefs(nodes []model.Node, edges []model.Edge) ([]model.Node, []model.Edge) {
+	importPath := map[string]string{} // file URI → import path
+	for _, n := range nodes {
+		if n.Kind == model.KindFile {
+			if ip := model.AttrString(n.Attrs, model.AttrImportPath); ip != "" {
+				importPath[n.SourceURI] = ip
+			}
+		}
+	}
+	defs := map[string][]string{} // reference ID → definition IDs
+	for _, n := range nodes {
+		ip := importPath[n.SourceURI]
+		if ip == "" || n.Kind != model.KindSymbol || model.IsExternal(n) || strings.Contains(n.Label, ".") ||
+			model.AttrString(n.Attrs, "lang_kind") != "func" {
+			continue
+		}
+		ref := model.PkgFuncRefID(ip, n.Label)
+		defs[ref] = append(defs[ref], n.ID)
+	}
+	canon := func(id string) string {
+		if ds := defs[id]; len(ds) == 1 {
+			return ds[0]
+		}
+		return id
+	}
+	keptNodes := nodes[:0:0]
+	for _, n := range nodes {
+		if canon(n.ID) == n.ID {
+			keptNodes = append(keptNodes, n)
+		}
+	}
+	seen := map[string]bool{}
+	keptEdges := edges[:0:0]
+	for _, e := range edges {
+		e.Src, e.Dst = canon(e.Src), canon(e.Dst)
+		key := e.Src + "\x00" + e.Dst + "\x00" + string(e.Kind)
+		if e.Src == e.Dst || seen[key] {
+			continue
+		}
+		seen[key] = true
+		keptEdges = append(keptEdges, e)
+	}
+	return keptNodes, keptEdges
+}
+
+// grepReadTokens models "grep -lw <symbol> | xargs cat" on the base identifier (after the last '.'),
 // since qualified labels like "LinkService.Submit" never appear verbatim in source.
 func grepReadTokens(label string, fileText map[string]string, fileTokens map[string]int) int {
 	needle := baseIdent(label)
 	total := 0
 	for path, text := range fileText {
-		if strings.Contains(text, needle) {
+		if containsWord(text, needle) {
 			total += fileTokens[path]
 		}
 	}
 	return total
+}
+
+// containsWord reports whether word occurs in text as a whole identifier, the way `grep -w` or `rg -w` would
+// match it, so "Open" finds Open( but not OpenReadOnly.
+func containsWord(text, word string) bool {
+	if word == "" {
+		return false
+	}
+	for i := 0; ; {
+		j := strings.Index(text[i:], word)
+		if j < 0 {
+			return false
+		}
+		start, end := i+j, i+j+len(word)
+		if (start == 0 || !isIdentByte(text[start-1])) && (end == len(text) || !isIdentByte(text[end])) {
+			return true
+		}
+		i = start + 1
+	}
+}
+
+func isIdentByte(c byte) bool {
+	return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= 0x80
 }
 
 // baseIdent returns the identifier after the last '.', e.g. "LinkService.Submit"

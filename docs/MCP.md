@@ -79,11 +79,11 @@ error:
 
 ### Tool index
 
-Nineteen tools, all registered in `New()` and all documented below:
+Twenty tools, all registered in `New()` and all documented below:
 
 | Group | Tools |
 |---|---|
-| Graph | `get_node`, `get_node_neighborhood`, `query_graph`, `shortest_path`, `god_nodes`, `graph_summary` |
+| Graph | `get_node`, `get_node_neighborhood`, `package_deps`, `query_graph`, `shortest_path`, `god_nodes`, `graph_summary` |
 | Semantic | `semantic_search` |
 | Findings | `list_findings`, `explain_finding`, `diff_findings` |
 | Meetings | `search_meetings`, `decisions_about` |
@@ -174,6 +174,41 @@ which works the same with or without the flag. Free text such as email bodies
 and decision summaries is not scanned, and `url` nodes (browser history
 included) are returned as stored.
 
+### Label lookup
+
+`get_node` and `get_node_neighborhood` resolve their `label` argument the same
+way. Every node whose label contains `label` (case-insensitive) is a candidate,
+and the best-ranked candidate wins:
+
+1. Nodes whose `source_uri` contains the `file` hint, when one is given. The
+   hint outranks everything below.
+2. An exact label match, case-sensitive before case-insensitive.
+3. A label ending in `"." + label`, such as the method `Server.Close` for
+   `Close`, or a `pkg.Func` reference.
+4. Any other substring match.
+
+Within each rank, definitions (`symbol` nodes) come before files, and files
+before external references (`pkg://` stubs). So `New` resolves to a function
+named `New` rather than to `NewEngine`, and a symbol named `fetch` outranks the
+file `fetchall.go`.
+
+A label of the form `<dir>:<Name>`, with no spaces, names the symbol `Name` in
+the Go package at directory `dir`, for example `internal/analyze:New` or
+`internal/mcp:Server.Close`. `dir` matches a package whose import path equals
+it or ends in `"/" + dir`, and `.` is the module root. If that package has no
+such symbol, the lookup ranks the whole label as above.
+
+When other symbols share the resolved node's name, the response carries a
+`note` field that says how many there are, where the chosen one lives, and how
+to pick another:
+
+```json
+"note": "2 other symbol(s) are also named \"New\"; this is the one in internal/analyze/engine.go. Pass file, or a label like \"<dir>:New\", to pick another."
+```
+
+`query_graph` and `shortest_path` do not use this ranking. They match plain
+substrings and take the first match in store order.
+
 > **Note:** the schema's `Min`/`Max` annotations are advisory. mcp-go does not
 > enforce them at dispatch, so the server clamps integer inputs to their
 > documented ranges before use.
@@ -186,15 +221,12 @@ These tools carry the read-only hint and work against a read-only store.
 
 ## get_node
 
-Return a single node by exact or substring label match.
+Return the single best match for a label (see [Label lookup](#label-lookup)).
 
 | Parameter | Type | Required / default | Description |
 |---|---|---|---|
-| `label` | string | required | Node label or substring to look up (case-insensitive). |
+| `label` | string | required | Name to look up (case-insensitive), e.g. `"New"`, `"Server.Run"`, or `"<dir>:<Name>"` such as `"internal/analyze:New"`. |
 | `file` | string | optional | Source file hint to disambiguate when multiple nodes match (case-insensitive substring of `source_uri`, e.g. `"fetchall.go"`). |
-
-When `file` is given the server searches up to 20 candidates and prefers a
-`symbol` node from that file over the file node itself.
 
 **Request**
 
@@ -215,20 +247,28 @@ When `file` is given the server searches up to 20 candidates and prefers a
 }
 ```
 
+When other symbols share the node's name, the node also carries a `note`
+field (see [Label lookup](#label-lookup)). If the best match is a `pkg://`
+function reference (such as `analyze.New`) that names one indexed definition,
+the response is that definition.
+
 No match returns the text `no node found matching "FetchAll"`.
 
 ## get_node_neighborhood
 
 Return a node and all nodes/edges reachable within `depth` hops. Prefer this
-over grep or file-read for architecture questions.
+over grep or file-read for architecture questions: "who calls X?", "what does X
+call?", "what does this file import or contain?".
 
 | Parameter | Type | Required / default | Description |
 |---|---|---|---|
-| `label` | string | required | Node label or substring (case-insensitive). |
+| `label` | string | required | Name to start from (case-insensitive), resolved as in [Label lookup](#label-lookup). Accepts `"<dir>:<Name>"`. |
+| `direction` | string | default `both` | `in` follows edges into each node (callers, importers, the containing file). `out` follows edges out of it (callees, imports, contents). `both` follows either. |
 | `file` | string | optional | Source file hint to disambiguate when label matches multiple nodes. |
-| `depth` | integer | default `2`, min `1`, max `5` | Hop depth. |
+| `depth` | integer | default `2`, min `1`, max `5` | Hop depth. Depth 1 with `direction: "in"` and `edge_kinds: ["CALLS"]` lists direct callers; depth N lists every caller within N calls. |
 | `edge_kinds` | string[] | optional | Filter to these edge types, e.g. `["CALLS","IMPORTS"]`. Empty means all kinds. |
 | `source_prefix` | string | optional | Only return neighbor nodes whose `source_uri` contains this substring. |
+| `exclude_tests` | boolean | default `false` | Leave out nodes from `_test.go` files and don't walk through them, along with their edges. The seed is kept even when it is in a test file. Set it when the question is about non-test code. |
 | `max_nodes` | integer | default `100`, min `1`, max `500` | Max nodes to return, nearest hops first. |
 | `max_tokens` | integer | default `4000`, min `500`, max `16000` | Approximate token budget for the returned nodes and edges. |
 
@@ -252,6 +292,13 @@ over grep or file-read for architecture questions.
   "nodes": [
     {
       "kind": "symbol",
+      "label": "FetchAll",
+      "source_uri": "internal/client/fetchall.go",
+      "provenance": "EXTRACTED",
+      "confidence": 1
+    },
+    {
+      "kind": "symbol",
       "label": "doRequest",
       "source_uri": "internal/client/http.go",
       "provenance": "EXTRACTED",
@@ -261,11 +308,103 @@ over grep or file-read for architecture questions.
   "edges": [
     { "kind": "CALLS", "from": "FetchAll", "to": "doRequest" }
   ],
-  "summary": "1 nodes, 1 edges within depth 1 of \"FetchAll\""
+  "summary": "2 nodes, 1 edges within depth 1 of \"FetchAll\""
 }
 ```
 
-`truncated: true` (and a hint in `summary`) means more nodes were reachable than returned. When `source_prefix` is set, the seed is always included in `nodes`.
+`nodes` starts with the seed. `truncated: true` (and a hint in `summary`) means more nodes were reachable than returned. When `source_prefix` is set, the seed is always included in `nodes`. The response carries a `note` field when other symbols share the seed's name (see [Label lookup](#label-lookup)).
+
+**Callers.** `direction: "in"` keeps only edges that point into each node, so
+with `edge_kinds: ["CALLS"]` the walk lists callers, and callers of callers up
+to `depth`:
+
+```json
+{ "label": "FetchAll", "direction": "in", "depth": 1, "edge_kinds": ["CALLS"] }
+```
+
+```json
+{
+  "seed": { "kind": "symbol", "label": "FetchAll", "source_uri": "internal/client/fetchall.go", "provenance": "EXTRACTED", "confidence": 1 },
+  "nodes": [
+    { "kind": "symbol", "label": "FetchAll", "source_uri": "internal/client/fetchall.go", "provenance": "EXTRACTED", "confidence": 1 },
+    { "kind": "symbol", "label": "run", "source_uri": "cmd/app/main.go", "provenance": "EXTRACTED", "confidence": 1 }
+  ],
+  "edges": [
+    { "kind": "CALLS", "from": "run", "to": "FetchAll" }
+  ],
+  "summary": "2 nodes, 1 edges pointing into, within depth 1 of \"FetchAll\""
+}
+```
+
+**Calls across files and packages.** The Go extractor parses one file at a
+time, so a call to a package-level function defined in another file (a
+`client.FetchAll` call from another package, or a bare `doRequest()` call into a
+sibling file of the same package) points at a `pkg://` reference node, not at
+the definition. The walk treats a function and its reference as one node and
+reports it as the definition, so callers in every file and package appear, and
+a multi-hop walk continues across package boundaries. Edges through a
+reference are reported between the definitions, as above. Method calls on
+values (`x.Method()`) need type information the extractor does not have, so
+they are not tracked. Graphs built before this version lack the sibling-file
+call edges and the file `import_path` attributes the join needs; rebuild with
+`chiton build .`.
+
+## package_deps
+
+Return the package-level dependencies of a Go package in one call: the
+packages it imports, or the packages that import it, optionally followed
+transitively. The tool joins the `IMPORTS` edges of every indexed non-test file
+in the package's directory, which per-file `IMPORTS` edges and grep leave you
+to piece together. Use it for "what does package P depend on?" and "what depends on
+package P?".
+
+| Parameter | Type | Required / default | Description |
+|---|---|---|---|
+| `package` | string | required | The package: its directory relative to the module root (e.g. `"internal/graph/store"`, `"."` for the root), its import path, or a unique trailing part of either (e.g. `"store"`). |
+| `direction` | string | default `imports` | `imports`: packages this one imports. `importers`: packages that import this one. |
+| `transitive` | boolean | default `false` | Follow the dependency chain to the end instead of stopping at direct dependencies. Each result carries its `depth`. |
+| `include_external` | boolean | default `false` | For `imports` only, also list standard-library and third-party packages. By default only packages in the indexed module are returned. Ignored for `importers`. |
+| `include_tests` | boolean | default `false` | Count `_test.go` files too. By default only non-test files count, so imports made only by test files are left out, and so are importers whose only importing files are tests. |
+
+**Request**
+
+```json
+{ "package": "internal/client", "transitive": true }
+```
+
+**Response**
+
+```json
+{
+  "package": "internal/client",
+  "direction": "imports",
+  "transitive": true,
+  "packages": [
+    { "dir": "internal/log", "import_path": "example.com/app/internal/log", "depth": 1 },
+    { "dir": "internal/config", "import_path": "example.com/app/internal/config", "depth": 2 }
+  ],
+  "summary": "2 transitive imports of internal/client"
+}
+```
+
+`packages` is sorted by `depth`, then by import path, and lists each package
+once, at the depth where the walk first reached it. `dir` is the package's
+directory relative to its module root. With `include_external: true`, a
+standard-library or third-party package appears with `"external": true` and no
+`dir`, and the walk does not follow it further. `importers` lists only indexed
+packages. A package never appears among its own results.
+
+`package` matches an exact directory or import path first, then a trailing
+part. When a trailing part matches several packages the tool returns the text
+`"log" matches 2 packages; name one: internal/log, pkg/log`. When nothing
+matches it returns `no indexed Go package matches "x"; package_deps
+needs a graph built by this chiton version (rebuild with chiton build)`.
+
+A package is the set of Go files in one directory under a `go.mod`, with its
+`_test.go` files counted only under `include_tests`. The tool
+reads the `import_path` and `module` attributes that `chiton build` records on
+each Go file node, so it needs a graph built by this version. Files outside any
+module are not part of a package.
 
 ## query_graph
 
@@ -981,20 +1120,21 @@ the 'chiton add-url' CLI`.
 
 # Known limitations
 
-These constraints come from the extractor's indexing model and the
-substring-matching label resolver. Plan queries accordingly.
+These constraints come from the extractor's indexing model and the label
+resolver. Plan queries accordingly.
 
-- **Call-site queries are unsupported.** `query_graph("http.Get")` or
-  `query_graph("pkg.Method")` returns nothing. The extractor indexes
-  package-level `IMPORTS` edges but not individual call expressions. Use grep
-  for "which lines call X?" queries.
+- **`CALLS` edges link functions, not call sites.** The graph records that A
+  calls B, not on which line. Use grep for "which lines call X?" queries.
 
-- **Label disambiguation by substring.** `get_node_neighborhood` matches labels
-  by substring. If a symbol name (e.g. `fetch`) is a substring of a filename
-  (`fetchall.go`), the file node matches first and `CALLS` edges return empty.
-  Call `query_graph` first to inspect what matches, then target the correct node
-  kind. You can also pass the `file` hint, which prefers a symbol node over the
-  file node.
+- **Method calls on values are not tracked.** `x.Method()` needs type
+  information the extractor does not have, so a method's callers are missing.
+  Calls to package-level functions, in any file or package, are tracked.
+
+- **Shared names.** Several symbols can share a name (`New`, `Close`). Label
+  lookup picks one by the [ranking above](#label-lookup) and adds a `note`
+  when others exist. Pass the `file` hint or a `"<dir>:<Name>"` label to pick
+  a specific one. A label with no exact match falls back to substring matches,
+  so check the returned `seed` before trusting the edges.
 
 - **`CALLS` edges connect symbol nodes, not file nodes.** Querying a file node
   with `edge_kinds=["CALLS"]` returns 0 edges. To traverse `CALLS` edges, target

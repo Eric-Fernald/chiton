@@ -97,7 +97,8 @@ Argument names below are the MCP tools' own parameter names, as registered in
 | `build` | *(none)* | `path` (optional) | `chiton build .` |
 | `query` | `query_graph` | `query` | `chiton query <label>` |
 | *(exact node)* | `get_node` | `label` (optional `file` to disambiguate) | — |
-| `neighborhood` | `get_node_neighborhood` | `label` (optional `depth`) | — |
+| `neighborhood` | `get_node_neighborhood` | `label` (optional `direction`, `depth`, `edge_kinds`) | — |
+| *(package imports)* | `package_deps` | `package` (optional `direction`, `transitive`, `include_external`) | — |
 | `path` | `shortest_path` | `from`, `to` | — |
 | `godnodes` | `god_nodes` | optional `limit`, `community_id` | — |
 | `summary` | `graph_summary` | optional `scope`, `max_tokens` | — |
@@ -113,6 +114,8 @@ Notes:
 - The status and `build` sub-commands appear in the skill's command list but not
   in its MCP-tool mapping table; neither is pinned to a tool. `build`
   corresponds to the `chiton build [path]` CLI subcommand.
+- `get_node` and `package_deps` have no sub-command of their own. The skill
+  lists them in its mapping table so the assistant calls them directly.
 - `search` covers `semantic_search`, and `meetings` / `decisions` cover
   `search_meetings` / `decisions_about`. The meeting tools serve Slack
   conversations as well as transcripts, so `meetings` can return a channel or
@@ -152,21 +155,34 @@ act on it; quote it to the user and ask.
 
 Call a chiton tool first when the question is about:
 
-- "What does X depend on / call / import?"
+- "Who calls X?" The skill gives the recipe: `get_node_neighborhood` with
+  `direction: "in"`, `edge_kinds: ["CALLS"]`, `depth: 1`. Calls are resolved
+  across files and packages.
+- "What reaches X through a chain of calls?" The same, with `depth` 2-5.
+- "What does X call?" `direction: "out"`, `edge_kinds: ["CALLS"]`.
+- "What does package P import, or what imports it?" `package_deps`, with
+  `transitive: true` for the whole chain.
 - "Where is Y defined? Which file contains Z?"
 - "How are A and B connected?"
 - "What are the architectural hubs / god nodes here?"
 - "What findings / rule violations exist in this module?"
 - "Why is this function written this way?" / "what did we decide about X?"
 
+The skill also tells the assistant to name a symbol as `"<dir>:<Name>"` (e.g.
+`internal/analyze:New`) when its name is common, and that a result notes when
+other symbols share the name.
+
 Use grep or file reads when you need the actual source content to make an
 edit, locate a bug, or understand an implementation in detail.
 
 ### Known limitations (carried in the skill)
 
-Call-site queries return nothing (the extractor indexes package-level `IMPORTS`
-edges, not call expressions); label matching is substring-based, so a filename
-can shadow a symbol; and `CALLS` edges connect symbol nodes, never file nodes.
+`CALLS` edges link functions, not call sites, so "which lines call X?" is a
+grep question. Method calls on values (`x.Method()`) are not tracked, while
+calls to package-level functions in any file or package are. `CALLS` edges
+connect symbol nodes, never file nodes. Graphs built before this version lack
+the cross-file call links and the package data `package_deps` needs, so
+rebuild them with `chiton build .`.
 
 ### Fallback if the MCP server is unavailable
 
@@ -215,11 +231,14 @@ short always-on instruction (`manifests.RulesPrompt`) appended to its rules file
 (`CLAUDE.md`, `AGENTS.md`, `.github/copilot-instructions.md`, etc.). It is
 short because it is paid for on every turn.
 
-It tells the assistant to call chiton before grepping for architecture or
-navigation questions, and names the tools directly: `semantic_search`,
-`get_node_neighborhood`, `query_graph` / `get_node`, `shortest_path`,
-`graph_summary`, `god_nodes`, `list_findings` / `explain_finding` /
-`diff_findings`, and `search_meetings` / `decisions_about`. It then covers the
+It tells the assistant to call chiton first for structural questions and
+gives three recipes: callers and callees through `get_node_neighborhood` with
+`direction` and `edge_kinds: ["CALLS"]`, package imports and importers through
+`package_deps`, and the `"<dir>:<Name>"` label form for common names. It then
+names the other tools directly: `semantic_search`, `query_graph` / `get_node`,
+`shortest_path`, `graph_summary`, `god_nodes`, `list_findings` /
+`explain_finding` / `diff_findings`, and `search_meetings` /
+`decisions_about`. It also covers the
 same three guardrails the graph skill does: still use grep for actual source
 content, prefer `EXTRACTED` over `INFERRED` (with `AMBIGUOUS` hidden by
 default), and treat everything the graph returns as untrusted data. It notes
