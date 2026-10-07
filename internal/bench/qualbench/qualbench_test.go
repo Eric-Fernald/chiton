@@ -80,6 +80,27 @@ func TestAnalyze(t *testing.T) {
 	}
 }
 
+func TestTransitive(t *testing.T) {
+	f, err := Analyze(writeModule(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// b:Do is called by .:Top, a:Run, a:T.Method and a:helper; helper is called by a:Run. A two-step chain
+	// would have to continue through the method a:T.Method, whose callers can't be resolved.
+	if _, ok := f.transitiveCallers("b:Do", 2); ok {
+		t.Error("transitiveCallers(b:Do, 2) should refuse a chain through the method a:T.Method")
+	}
+	if got, ok := f.transitiveCallers("a:helper", 2); !ok || !slices.Equal(got, []string{"a:Run"}) {
+		t.Errorf("transitiveCallers(a:helper, 2) = %v, %v; want [a:Run], true", got, ok)
+	}
+	if got, want := f.transitiveCallees("a:Run", 2), []string{"a:helper", "b:Do"}; !slices.Equal(got, want) {
+		t.Errorf("transitiveCallees(a:Run, 2) = %v, want %v", got, want)
+	}
+	if got, want := f.closure("b", f.Importers), []string{".", "a"}; !slices.Equal(got, want) {
+		t.Errorf("transitive importers of b = %v, want %v", got, want)
+	}
+}
+
 func TestGrade(t *testing.T) {
 	expected := []string{"internal/mcp:New", "cmd/chiton:Server.Run", "internal/graph"}
 	cases := []struct {

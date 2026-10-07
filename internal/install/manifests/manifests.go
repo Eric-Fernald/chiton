@@ -16,12 +16,19 @@ var SubagentTasksSkillMarkdown = chiton.SubagentTasksSkillMarkdown
 // assistant when to call chiton instead of grepping. It is short because it costs tokens every turn.
 const RulesPrompt = `# chiton — knowledge graph context
 
-This workspace has a chiton MCP server registered. Before using grep or file
-reads to answer architecture or navigation questions, call the chiton tools:
+This workspace has a chiton MCP server registered. For structural questions,
+call chiton first: one call returns what takes several greps, and its edges
+come from the parser, so callers in other files and packages aren't missed.
 
+- Who calls X: ` + "`get_node_neighborhood`" + ` with ` + "`direction: \"in\"`" + `, ` + "`edge_kinds: [\"CALLS\"]`" + `,
+  ` + "`depth: 1`" + `. Everything that reaches X through a chain of calls: the same
+  with ` + "`depth`" + ` 2-5. What X calls: ` + "`direction: \"out\"`" + `.
+- What package P imports, or what imports P (directly or ` + "`transitive`" + `):
+  ` + "`package_deps`" + `.
+- Name a symbol as ` + "`\"<dir>:<Name>\"`" + ` (e.g. ` + "`internal/analyze:New`" + `) when the name is
+  common; results say when other symbols share a name.
 - ` + "`semantic_search`" + ` — natural-language questions: "where do we handle auth?"
-- ` + "`get_node_neighborhood`" + ` — "what does X call / depend on?", "show X and its neighbors"
-- ` + "`query_graph`" + ` / ` + "`get_node`" + ` — find nodes by label substring, or fetch the single best match (pass ` + "`file`" + ` to disambiguate)
+- ` + "`query_graph`" + ` / ` + "`get_node`" + ` — find nodes by name, or fetch the single best match
 - ` + "`shortest_path`" + ` — "how are A and B connected?"
 - ` + "`graph_summary`" + ` — token-budgeted overview of a module or the repo
 - ` + "`god_nodes`" + ` — architectural hubs ranked by betweenness centrality

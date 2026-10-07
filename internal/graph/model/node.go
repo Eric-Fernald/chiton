@@ -3,6 +3,7 @@ package model
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"time"
 )
 
@@ -72,4 +73,23 @@ func ContentSHA(b []byte) string {
 func IsExternal(n Node) bool {
 	ext, _ := n.Attrs["external"].(bool)
 	return ext
+}
+
+// Go file nodes carry these attrs when the file sits inside a module: the package's import path and the
+// module path. They tie a function's definition to the pkg:// reference its callers point at.
+const (
+	AttrImportPath = "import_path"
+	AttrModule     = "module"
+)
+
+// PkgFuncRefID is the ID of the pkg:// reference node a Go call names when the called package-level function
+// is defined outside the calling file: funcName in the package at importPath.
+func PkgFuncRefID(importPath, funcName string) string {
+	return NewNodeID("pkg://"+importPath, funcName)
+}
+
+// PkgRefImportPath returns the import path of a pkg:// reference node, and false for any other node.
+func PkgRefImportPath(n Node) (string, bool) {
+	p, ok := strings.CutPrefix(n.SourceURI, "pkg://")
+	return p, ok && IsExternal(n)
 }

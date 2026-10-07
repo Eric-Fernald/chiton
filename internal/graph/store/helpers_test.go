@@ -57,14 +57,46 @@ func TestFindNode(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if n, found, err := store.FindNode(ctx, gs, "FETCH", ""); err != nil || !found || n.ID != "f" {
-		t.Errorf("FindNode no hint = %s, %v, %v; want f (first match)", n.ID, found, err)
+	// The symbol named fetch outranks the file whose name merely contains it.
+	if n, found, err := store.FindNode(ctx, gs, "FETCH", ""); err != nil || !found || n.ID != "s" {
+		t.Errorf("FindNode no hint = %s, %v, %v; want s (the exact name, case-insensitively)", n.ID, found, err)
 	}
 	if n, found, err := store.FindNode(ctx, gs, "fetch", "fetchall"); err != nil || !found || n.ID != "s" {
 		t.Errorf("FindNode with hint = %s, %v, %v; want s", n.ID, found, err)
 	}
 	if n, found, err := store.FindNode(ctx, gs, "zzz", ""); err != nil || found || n.ID != "" {
 		t.Errorf("FindNode no match = %+v, %v, %v", n, found, err)
+	}
+}
+
+func TestFindNodesRanking(t *testing.T) {
+	ctx := context.Background()
+	gs := openStore(t)
+	ext := map[string]any{"external": true}
+	if err := gs.UpsertNodes(ctx, []model.Node{
+		// IDs sort these ahead of the exact definition, which is what the old first-match lookup returned.
+		{ID: "a", Kind: model.KindSymbol, Label: "NewEngine", SourceURI: "file:///x/engine.go"},
+		{ID: "b", Kind: model.KindSymbol, Label: "analyze.New", SourceURI: "pkg://m/analyze", Attrs: ext},
+		{ID: "c", Kind: model.KindSymbol, Label: "Server.New", SourceURI: "file:///x/server.go"},
+		{ID: "d", Kind: model.KindSymbol, Label: "New", SourceURI: "file:///x/analyze/analyze.go"},
+		{ID: "e", Kind: model.KindSymbol, Label: "New", SourceURI: "file:///x/mcp/server.go"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.FindNodes(ctx, gs, "New", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, n := range got {
+		ids = append(ids, n.ID)
+	}
+	// Exact names first, then "<x>.New" labels with definitions before references, then substrings.
+	if want := []string{"d", "e", "c", "b", "a"}; !slices.Equal(ids, want) {
+		t.Errorf("FindNodes(New) order = %v, want %v", ids, want)
+	}
+	if n, _, _ := store.FindNode(ctx, gs, "New", "mcp/"); n.ID != "e" {
+		t.Errorf("FindNode(New, mcp/) = %s, want e: the file hint outranks everything", n.ID)
 	}
 }
 

@@ -49,13 +49,23 @@ func cmdGen(args []string) error {
 	fs := flag.NewFlagSet("gen", flag.ExitOnError)
 	repo := fs.String("repo", ".", "checkout to generate questions for (the directory holding go.mod)")
 	out := fs.String("out", "questions.json", "where to write the question set")
+	which := fs.String("set", "hard", "question set: hard (multi-hop chains and transitive dependencies) or basic (direct callers, callees, imports, importers)")
 	_ = fs.Parse(args)
 
 	facts, err := Analyze(*repo)
 	if err != nil {
 		return err
 	}
-	set := QuestionSet{Module: facts.Module, Commit: gitHead(*repo), Questions: Generate(facts)}
+	var qs []Question
+	switch *which {
+	case "hard":
+		qs = GenerateHard(facts)
+	case "basic":
+		qs = Generate(facts)
+	default:
+		return fmt.Errorf("unknown -set %q (want hard or basic)", *which)
+	}
+	set := QuestionSet{Module: facts.Module, Commit: gitHead(*repo), Questions: qs}
 	if err := writeJSON(*out, set); err != nil {
 		return err
 	}
