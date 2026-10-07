@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" alt="chiton logo: eight overlapping diamond rings shading from blue to pink" width="480">
+</p>
+
 # Chiton
 
 Like the mollusk it's named after, chiton is many independent plates flexing as
