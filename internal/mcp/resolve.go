@@ -155,8 +155,8 @@ const (
 
 // walk does a breadth-first walk from seed up to depth hops along edges of kinds (all kinds when empty) in
 // direction, returning the nodes in visiting order (seed first) and the edges it followed. A function and its
-// pkg:// reference count as one node, reported as the definition.
-func (r *resolver) walk(ctx context.Context, seed model.Node, depth int, kinds []model.EdgeKind, direction string) ([]model.Node, []model.Edge, error) {
+// pkg:// reference count as one node, reported as the definition. excludeTests skips nodes from _test.go files.
+func (r *resolver) walk(ctx context.Context, seed model.Node, depth int, kinds []model.EdgeKind, direction string, excludeTests bool) ([]model.Node, []model.Edge, error) {
 	seed, err := r.canonical(ctx, seed)
 	if err != nil {
 		return nil, nil, err
@@ -204,6 +204,9 @@ func (r *resolver) walk(ctx context.Context, seed model.Node, depth int, kinds [
 					other, err := r.canonical(ctx, other)
 					if err != nil {
 						return nil, nil, err
+					}
+					if excludeTests && isGoTestFile(other.SourceURI) {
+						continue
 					}
 					// Report the edge between canonical nodes, so a call through a reference reads as a call to x.
 					ce := e

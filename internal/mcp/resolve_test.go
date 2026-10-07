@@ -27,6 +27,8 @@ func indexModule(t *testing.T, gs store.GraphStore) {
 		"svc/helper.go":  "package svc\n\nimport \"example.com/m/store\"\n\nfunc helper() { store.Open() }\n",
 		"app/app.go":     "package app\n\nimport (\n\t\"example.com/m/store\"\n\t\"example.com/m/svc\"\n)\n\nfunc Main() {\n\tsvc.Start()\n\tstore.Open()\n}\n",
 		"app/other.go":   "package app\n\nfunc New() {}\n",
+		// A test-only import: svc's tests depend on app, but svc itself does not.
+		"svc/svc_test.go": "package svc\n\nimport \"example.com/m/app\"\n\nfunc testUsesApp() { app.Main() }\n",
 	}
 	ctx := context.Background()
 	ex := &extast.GoExtractor{}
@@ -86,10 +88,15 @@ func TestNeighborhoodResolvesCallersAcrossFilesAndPackages(t *testing.T) {
 		t.Errorf("direct callers of store.Open = %v, want %v\n%s", got, want, out)
 	}
 
-	// Two hops: helper is reached through Start in a sibling file of svc.
+	// Three hops: Start reaches Open through helper in a sibling file of svc, and a test function reaches it
+	// through Main.
 	out = call(t, h, map[string]any{"label": "store:Open", "direction": "in", "edge_kinds": []any{"CALLS"}, "depth": 3})
-	if got, want := neighborLabels(t, out), []string{"Main", "Start", "helper"}; !slices.Equal(got, want) {
+	if got, want := neighborLabels(t, out), []string{"Main", "Start", "helper", "testUsesApp"}; !slices.Equal(got, want) {
 		t.Errorf("callers of store.Open within 3 calls = %v, want %v\n%s", got, want, out)
+	}
+	out = call(t, h, map[string]any{"label": "store:Open", "direction": "in", "edge_kinds": []any{"CALLS"}, "depth": 3, "exclude_tests": true})
+	if got, want := neighborLabels(t, out), []string{"Main", "Start", "helper"}; !slices.Equal(got, want) {
+		t.Errorf("callers of store.Open within 3 calls, tests excluded = %v, want %v\n%s", got, want, out)
 	}
 
 	// direction out from Main: what it calls, resolved to the definitions.
@@ -153,5 +160,15 @@ func TestPackageDeps(t *testing.T) {
 	// svc imports only store; transitively, app reaches store twice but lists it once.
 	if got, want := dirs(map[string]any{"package": "svc", "direction": "importers", "transitive": true}), []string{"app"}; !slices.Equal(got, want) {
 		t.Errorf("transitive importers of svc = %v, want %v", got, want)
+	}
+	// svc_test.go imports app; that counts only with include_tests.
+	if got := dirs(map[string]any{"package": "app", "direction": "importers"}); len(got) != 0 {
+		t.Errorf("importers of app = %v, want none: only a test file imports it", got)
+	}
+	if got, want := dirs(map[string]any{"package": "app", "direction": "importers", "include_tests": true}), []string{"svc"}; !slices.Equal(got, want) {
+		t.Errorf("importers of app with include_tests = %v, want %v", got, want)
+	}
+	if got, want := dirs(map[string]any{"package": "svc"}), []string{"store"}; !slices.Equal(got, want) {
+		t.Errorf("imports of svc = %v, want %v (its test file's import of app excluded)", got, want)
 	}
 }

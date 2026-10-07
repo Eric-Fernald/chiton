@@ -134,6 +134,10 @@ func neighborhoodTool() mcplib.Tool {
 		mcplib.WithString("source_prefix",
 			mcplib.Description("Optional filter: only return neighbor nodes whose source_uri contains this substring (e.g. \"Go_Projects\" to scope to one corpus)"),
 		),
+		mcplib.WithBoolean("exclude_tests",
+			mcplib.DefaultBool(false),
+			mcplib.Description("Leave out nodes from _test.go files, and don't walk through them; set it when the question is about non-test code"),
+		),
 		mcplib.WithInteger("max_nodes",
 			mcplib.DefaultNumber(100),
 			mcplib.Description("Max nodes to return, nearest hops first (default 100, max 500). The result sets truncated when more were reachable."),
@@ -257,7 +261,7 @@ func neighborhoodHandler(gs store.GraphStore, r redactor) mcpsdk.ToolHandlerFunc
 		if errRes != nil {
 			return errRes, nil
 		}
-		walked, walkedEdges, err := resv.walk(ctx, seed, depth, parseEdgeKinds(req), direction)
+		walked, walkedEdges, err := resv.walk(ctx, seed, depth, parseEdgeKinds(req), direction, req.GetBool("exclude_tests", false))
 		if err != nil {
 			return mcplib.NewToolResultErrorFromErr("neighbors failed", err), nil
 		}

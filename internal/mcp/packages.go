@@ -3,6 +3,7 @@ package mcpsrv
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -35,15 +36,23 @@ func packageDepsTool() mcplib.Tool {
 			mcplib.DefaultBool(false),
 			mcplib.Description("For \"imports\", also list the standard library and third-party packages; by default only packages in the indexed module are returned"),
 		),
+		mcplib.WithBoolean("include_tests",
+			mcplib.DefaultBool(false),
+			mcplib.Description("Count imports made by _test.go files too. By default only non-test files count, matching what the package itself depends on."),
+		),
 		mcplib.WithReadOnlyHintAnnotation(true),
 	)
 }
 
-// goPackage is one Go package in the graph: its import path, module, and file node IDs.
+// goPackage is one Go package in the graph: its import path, module, and file node IDs. testFiles are the
+// _test.go files, kept apart because a package's tests may import what the package itself does not.
 type goPackage struct {
 	importPath, module string
-	files              []string
+	files, testFiles   []string
 }
+
+// isGoTestFile reports whether a source URI names a _test.go file.
+func isGoTestFile(uri string) bool { return strings.HasSuffix(strings.ToLower(uri), "_test.go") }
 
 func (p goPackage) dir() string {
 	if p.importPath == p.module {
@@ -69,7 +78,11 @@ func goPackages(ctx context.Context, gs store.GraphStore) (map[string]*goPackage
 			p = &goPackage{importPath: ip, module: model.AttrString(f.Attrs, model.AttrModule)}
 			pkgs[ip] = p
 		}
-		p.files = append(p.files, f.ID)
+		if isGoTestFile(f.SourceURI) {
+			p.testFiles = append(p.testFiles, f.ID)
+		} else {
+			p.files = append(p.files, f.ID)
+		}
 	}
 	return pkgs, nil
 }
@@ -93,10 +106,14 @@ func matchPackage(pkgs map[string]*goPackage, arg string) ([]*goPackage, error) 
 	return suffix, nil
 }
 
-// directImports returns the import paths the package's files import.
-func directImports(ctx context.Context, gs store.GraphStore, p *goPackage) ([]string, error) {
+// directImports returns the import paths the package's files import, its test files too when tests is set.
+func directImports(ctx context.Context, gs store.GraphStore, p *goPackage, tests bool) ([]string, error) {
+	files := p.files
+	if tests {
+		files = append(slices.Clone(files), p.testFiles...)
+	}
 	seen := map[string]bool{}
-	for _, fileID := range p.files {
+	for _, fileID := range files {
 		sub, err := gs.Neighbors(ctx, fileID, 1, []model.EdgeKind{model.EdgeImports})
 		if err != nil {
 			return nil, err
@@ -117,8 +134,9 @@ func directImports(ctx context.Context, gs store.GraphStore, p *goPackage) ([]st
 	return sortedKeys(seen), nil
 }
 
-// directImporters returns the import paths of the indexed packages with a file that imports p.
-func directImporters(ctx context.Context, gs store.GraphStore, p *goPackage) ([]string, error) {
+// directImporters returns the import paths of the indexed packages with a file that imports p, counting
+// _test.go files only when tests is set.
+func directImporters(ctx context.Context, gs store.GraphStore, p *goPackage, tests bool) ([]string, error) {
 	pkgNode := model.NewNodeID("pkg://"+p.importPath, p.importPath)
 	sub, err := gs.Neighbors(ctx, pkgNode, 1, []model.EdgeKind{model.EdgeImports})
 	if err != nil {
@@ -131,6 +149,9 @@ func directImporters(ctx context.Context, gs store.GraphStore, p *goPackage) ([]
 	seen := map[string]bool{}
 	for _, e := range sub.Edges {
 		if e.Dst != pkgNode {
+			continue
+		}
+		if !tests && isGoTestFile(byID[e.Src].SourceURI) {
 			continue
 		}
 		if ip := model.AttrString(byID[e.Src].Attrs, model.AttrImportPath); ip != "" && ip != p.importPath {
@@ -161,6 +182,7 @@ func packageDepsHandler(gs store.GraphStore) mcpsdk.ToolHandlerFunc {
 		}
 		transitive := req.GetBool("transitive", false)
 		external := req.GetBool("include_external", false) && direction == "imports"
+		tests := req.GetBool("include_tests", false)
 
 		pkgs, err := goPackages(ctx, gs)
 		if err != nil {
@@ -198,9 +220,9 @@ func packageDepsHandler(gs store.GraphStore) mcpsdk.ToolHandlerFunc {
 			for _, p := range frontier {
 				var ips []string
 				if direction == "imports" {
-					ips, err = directImports(ctx, gs, p)
+					ips, err = directImports(ctx, gs, p, tests)
 				} else {
-					ips, err = directImporters(ctx, gs, p)
+					ips, err = directImporters(ctx, gs, p, tests)
 				}
 				if err != nil {
 					return mcplib.NewToolResultErrorFromErr("reading imports failed", err), nil
