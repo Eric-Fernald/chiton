@@ -47,8 +47,7 @@ Methodology notes:
   *reasoning* the model must do over raw file dumps. That is the real benefit,
   and this table cannot show it.
 - **Prompt caching.** Naive/grep contexts are far more cacheable than chiton's
-  per-query neighborhoods; with a warm cache the input-token gap narrows further
-  (see PLAN.md "Query-Cost Comparison").
+  per-query neighborhoods; with a warm cache the input-token gap narrows further.
 - **Output tokens.** At $25/M, output often dominates the bill regardless of
   retrieval strategy.
 

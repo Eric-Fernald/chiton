@@ -119,13 +119,15 @@ chiton/
 │   │   └── rules/     the rules themselves, one package per category
 │   ├── mcp/           MCP server and tool handlers (stdio / SSE / unix)
 │   ├── install/       per-assistant installers + the shared markdown manifests
-│   ├── embed/ vector/ embedding providers and the flat-cosine index
+│   ├── embed/ vector/ embedding providers and the vector index (flat scan + HNSW)
 │   └── crypto/ cache/ config/ hooks/ jobs/ report/ bench/
 ├── skills/            assistant-facing skill markdown — single source of truth
 ├── .claude-plugin/    plugin.json + marketplace.json
-├── bin/ scripts/      PATH shim and the prebuilt-binary installers
+├── bin/ scripts/      plugin launchers, the prebuilt-binary installers, and build-plugin-dist.sh
+├── packaging/plugin/  .mcp.json and README for the published plugin
+├── assets/            logo and plugin icon
 ├── embed.go           //go:embed of skills/*/SKILL.md
-└── docs/              PLAN.md, INSTALL.md, MCP.md, SKILL.md, SECURITY.md, BENCHMARK.md
+└── docs/              INSTALL.md, MCP.md, SKILL.md, SECURITY.md, PRIVACY.md, BENCHMARK.md
 ```
 
 Keep `cmd/chiton` thin: it parses flags, opens a store, and calls into

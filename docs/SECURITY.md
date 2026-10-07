@@ -8,8 +8,8 @@ encrypted, what stays on the device, what can leave it, and the threat model it
 is (and is not) designed to defend against.
 
 Throughout, **shipped** means the behaviour is implemented in the current
-codebase; **planned** means it is described in the design (`docs/PLAN.md`) but is
-not yet wired into the binary. We are explicit about the distinction so you can
+codebase; **planned** means it is part of chiton's design but is not yet wired
+into the binary. We are explicit about the distinction so you can
 make an informed trust decision.
 
 > **License note:** chiton is licensed under the PolyForm Strict License 1.0.0
@@ -576,8 +576,7 @@ capabilities. The read-only default exists so that you have to opt in.
 
 ## 6. Threat model
 
-Adapted from `docs/PLAN.md` ("Security, Privacy & Threat Model"). Mitigation
-status is labelled **shipped** or **planned**.
+Mitigation status is labelled **shipped** or **planned**.
 
 ### In scope
 
@@ -624,7 +623,7 @@ status is labelled **shipped** or **planned**.
 
 ### Planned resource & cost controls
 
-`docs/PLAN.md` specifies per-call / per-session / lifetime LLM budget limits,
+The design calls for per-call / per-session / lifetime LLM budget limits,
 disk and memory caps, and automatic fallback from daemon to subagent mode when a
 budget is hit. **None of these are enforced in the current binary**. They are
 unnecessary today because chiton makes no LLM calls of its own. Treat
