@@ -1,6 +1,7 @@
 # Security Policy
 
-chiton is MIT-licensed (see [LICENSE](LICENSE)). This file covers one thing: **how to report a vulnerability**. The threat model,
+chiton is licensed under the PolyForm Strict License 1.0.0 with an additional
+permission for commercial use (see [LICENSE](LICENSE)). This file covers one thing: **how to report a vulnerability**. The threat model,
 encryption-at-rest design, PII handling, and full data-handling posture live in
 [docs/SECURITY.md](docs/SECURITY.md) — read that first if you want to know what
 chiton defends against and what it explicitly does not.

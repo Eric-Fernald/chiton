@@ -1,17 +1,24 @@
 # Contributing to chiton
 
 This guide is how the project is built, tested, and extended. Read
-[Contribution status](#contribution-status) first.
+[Contribution status](#contribution-status) first — this document grants no
+license.
 
 ## Contribution status
 
-chiton is released under the [MIT License](LICENSE). Contributions are accepted
-under the same license: by opening a pull request you agree that your change is
-licensed under MIT, and there is no separate CLA.
+chiton is licensed under the PolyForm Strict License 1.0.0 with an additional
+permission for commercial use (see [LICENSE](LICENSE)). Anyone may use it for
+any purpose, but the license does not permit making changes or new works based
+on it, or distributing it.
 
-Open an issue before starting anything larger than a bug fix, so the design can
-be agreed before the code is written. [NOTICE.md](NOTICE.md) records project
-provenance and will list contributors once outside changes are merged.
+Bug reports and feature requests are welcome as
+[issues](https://github.com/Eric-Fernald/chiton/issues). Pull requests are not
+accepted: a change to chiton is a new work the license does not permit, and
+there is no contributor agreement through which outside code could be taken in.
+[NOTICE.md](NOTICE.md) records project provenance, and is where any change to
+contributor status will be recorded.
+
+What follows is the working guide for the maintainer.
 
 ## Prerequisites
 

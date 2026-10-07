@@ -14,7 +14,9 @@ This document covers both, plus getting the binary, the per-assistant config
 matrix, the three serve transports, the environment variables the ingest
 commands read, and troubleshooting.
 
-> chiton is MIT-licensed — see [`LICENSE`](../LICENSE).
+> chiton is licensed under the PolyForm Strict License 1.0.0 with an additional
+> permission for commercial use: use it for any purpose, but do not modify or
+> redistribute it. See [`LICENSE`](../LICENSE).
 
 ## Prerequisites: the `chiton` binary
 

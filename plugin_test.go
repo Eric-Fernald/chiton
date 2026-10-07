@@ -47,8 +47,24 @@ func TestPluginManifest(t *testing.T) {
 	readJSON(t, filepath.Join(".claude-plugin", "plugin.json"), &m)
 
 	// The claude.ai directory listing reads these.
-	if m.License != "MIT" {
-		t.Errorf("plugin.json license = %q, want MIT (the LICENSE file)", m.License)
+	// There is no SPDX id for PolyForm Strict, let alone with the extra permission, hence a LicenseRef.
+	if m.License != "LicenseRef-PolyForm-Strict-1.0.0-Commercial-Use" {
+		t.Errorf("plugin.json license = %q, want LicenseRef-PolyForm-Strict-1.0.0-Commercial-Use (the LICENSE file)", m.License)
+	}
+	// PolyForm's terms require dropping its name from any edited copy of a PolyForm license, so the
+	// LICENSE file must carry the Strict text verbatim and grant commercial use in a separate section.
+	lic, err := os.ReadFile("LICENSE")
+	if err != nil {
+		t.Fatalf("read LICENSE: %v", err)
+	}
+	for _, want := range []string{
+		"## Additional Permission: Commercial Use",
+		"# PolyForm Strict License 1.0.0",
+		"Any noncommercial purpose is a permitted purpose.",
+	} {
+		if !strings.Contains(string(lic), want) {
+			t.Errorf("LICENSE does not contain %q", want)
+		}
 	}
 	if !strings.HasPrefix(m.Icon, "./") {
 		t.Errorf("plugin.json icon = %q, want a ./-relative path inside the plugin", m.Icon)

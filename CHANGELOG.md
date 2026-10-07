@@ -37,7 +37,7 @@ dated section.
 
 ### Changed
 
-- **chiton is now MIT-licensed** (previously proprietary), and the repository is public. `go install github.com/Eric-Fernald/chiton/cmd/chiton@latest` works without `GOPRIVATE` or git credentials, and the install scripts need no credentials.
+- **chiton is now licensed under the PolyForm Strict License 1.0.0 with an additional permission for commercial use** (previously proprietary with all rights reserved), and the repository is public. Anyone may use chiton for any purpose; distributing it and making changes or new works based on it remain reserved, so pull requests are not accepted. `go install github.com/Eric-Fernald/chiton/cmd/chiton@latest` works without `GOPRIVATE` or git credentials, and the install scripts need no credentials.
 - **The MCP server advertises the binary's version** (`chiton version --short` without the leading `v`) instead of a hard-coded `0.1.0`.
 - **Opening an unencrypted store prints a one-line notice** (`CHITON_PLAINTEXT_OK=1` hides it), and **`chiton-out/` now gets its own `.gitignore`.**
 - **`chiton cluster` computes betweenness on up to 8 cores.** Brandes pivots are summed in fixed chunks of 32 on private buffers and added in chunk order, so scores are bit-identical on any core count; a full pass over a 118k-node graph dropped from 4.3 s to 0.95 s of compute.

@@ -12,7 +12,8 @@ codebase; **planned** means it is described in the design (`docs/PLAN.md`) but i
 not yet wired into the binary. We are explicit about the distinction so you can
 make an informed trust decision.
 
-> **License note:** chiton is MIT-licensed and provided "as is" (see
+> **License note:** chiton is licensed under the PolyForm Strict License 1.0.0
+> with an additional permission for commercial use, and comes as is (see
 > `LICENSE`). This document describes its security posture; it is not a
 > warranty.
 

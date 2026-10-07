@@ -41,9 +41,12 @@ third-party code have been incorporated.
 
 ### License
 
-This software is distributed under the MIT License, as set forth in the
-LICENSE file at the root of this repository. The copyright holder
-retains copyright; the MIT License grants the permissions it states.
+This software is licensed under the PolyForm Strict License 1.0.0 with
+an additional permission for commercial use, as set forth in the
+LICENSE file at the root of this repository. Anyone may use the
+software for any purpose, but may not distribute it or make changes or
+new works based on it. All other rights are reserved by the copyright
+holder.
 
 ### Third-Party Dependencies
 

@@ -549,6 +549,9 @@ optional daemon-mode LLM path. See
 
 ## License
 
-MIT — Copyright © 2026 Eric Fernald. See [LICENSE](LICENSE) and
-[NOTICE.md](NOTICE.md). Third-party dependencies remain under their own
-licenses.
+Copyright © 2026 Eric Fernald. Licensed under the
+[PolyForm Strict License 1.0.0](https://polyformproject.org/licenses/strict/1.0.0)
+with an additional permission for commercial use: you may use chiton for any
+purpose, including commercial work, but may not distribute it or make changes or
+new works based on it. See [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md).
+Third-party dependencies remain under their own licenses.
