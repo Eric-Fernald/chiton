@@ -8,13 +8,14 @@ chiton defends against and what it explicitly does not.
 
 ## Supported versions
 
-There are no tagged releases yet and no maintained release branches. Only the
-current tip of `main` is supported.
+Fixes go into the next release. There are no maintained release branches, so
+only the latest release and the tip of `main` are supported.
 
 | Version | Supported |
 |---|---|
+| Latest release | Yes |
 | `main` (latest commit) | Yes |
-| Any older commit or branch | No. Reproduce against `main` before reporting |
+| Older releases, commits, or branches | No. Reproduce against the latest release or `main` before reporting |
 
 ## Reporting a vulnerability
 
