@@ -23,7 +23,7 @@ func benchCmd() *cobra.Command {
 		Long: `Build an in-memory graph over a corpus and measure how many tokens it costs
 to answer dependency questions three ways: reading every file (naive), reading
 every file that mentions the symbol (grep+read), and chiton's lean neighborhood
-payload. Token cost uses the same chars÷4 estimate as the Phase 0 benchmark.
+payload. Token cost uses the same chars÷4 estimate for every strategy.
 
 Pass a path (default "."), or --synth N to generate and benchmark a reproducible
 synthetic corpus of N Go files instead. Output is a Markdown table by default.`,

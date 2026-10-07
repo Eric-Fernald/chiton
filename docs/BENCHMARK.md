@@ -1,12 +1,30 @@
 # chiton benchmark: token cost per query across corpora
 
-This is the reproducible benchmark the plan calls for: token cost per query
-across corpora of varying size and shape, published as a table rather than a
-single number. It includes the cases where chiton *loses*, and on raw token
-count vs `grep+read` it loses often.
+This is chiton's reproducible benchmark: token cost per query across corpora of
+varying size and shape, published as a table rather than a single number, plus
+the vector index and the performance work behind semantic search. It includes
+the cases where chiton *loses*, and on raw token count vs `grep+read` it loses
+often.
 
-Generated with `chiton bench` (built into the binary). It is the Phase 5
-cross-corpus successor to the Phase 0 micro-study.
+## At a glance
+
+- **Tokens:** about **14–15× fewer** than dumping whole files into context, and
+  roughly on par with `grep+read` overall. Against `grep+read` the result is
+  mixed by corpus: 1.4× cheaper on a medium package, 1.9× costlier on a large
+  tree, and far costlier on a tiny one. See [Results](#results).
+- **Semantic search at 1M vectors:** **0.50 ms** p50 per query with HNSW, about
+  **1,200× faster** than the 600 ms exact scan, at a recall@8 of **0.984**
+  (0.998 at 100k). See [Vector index](#vector-index-flat-vs-hnsw).
+- **Index build and load:** 2.8 s to build at 100k vectors (down from 36.4 s),
+  0.7 s to load the saved index, which is about 2% the size of the vector data.
+- **Other measured improvements:** a default binary 83% smaller, live sync with
+  analysis about 3× faster, and Leiden communities that no longer collapse. See
+  [Other performance results](#other-performance-results).
+
+The point of chiton is better context, not fewer tokens; [Summary](#summary)
+explains why.
+
+Generated with `chiton bench` (built into the binary).
 
 ## What is measured
 
@@ -24,7 +42,7 @@ reports the token cost of each:
 Methodology notes:
 
 - **Token estimate = characters ÷ 4**, applied identically to all three
-  strategies. The Phase 0 benchmark used the same rough estimate.
+  strategies.
 - **The chiton payload is byte-faithful to the real MCP output.** The bench
   serialises the *exact* `leanNode`/`leanEdge` shape `internal/mcp/server.go`
   returns, so the chiton column is not under-counted. That shape has `kind`,
@@ -234,3 +252,33 @@ like the second row.
   `flat` while it builds HNSW in the background.
 - `hnsw` holds about 10% more heap than the raw vectors. `flat` holds about 3%.
   The saved index adds about 2% of the vector data on disk.
+
+### Recall in context
+
+recall@8 asks whether the right material reaches the answer. Without an index,
+a model has to find that material inside its own context window. Anthropic's
+Claude Opus 4.6 launch (February 2026) reported these scores on MRCR v2 with 8
+needles at 1M tokens, a test of picking the right item out of eight look-alikes
+in a million tokens of raw text:
+
+| Retrieval | Score |
+|---|---|
+| chiton HNSW, recall@8 at 1M vectors | 0.984 |
+| Claude Opus 4.6 alone, MRCR v2 8-needle at 1M tokens | 0.76 |
+| Claude Sonnet 4.5 alone, same test | 0.185 |
+
+These are different tests. chiton's number is index recall against an exact
+scan on synthetic vectors, and it covers only the seed step; the graph walk then
+adds the connected code. MRCR scores a model reading raw text. Both measure
+whether the right material reaches the answer, but they are not a head-to-head
+result. A direct comparison would run one question set on a real repository
+with and without chiton and grade the final answers.
+
+## Other performance results
+
+| Change | Before | After | Notes |
+|---|---|---|---|
+| Default binary size | 142 MB | 24.6 MB (83% smaller) | The Microsoft Graph SDK linked about 117 MB for two API calls; it now builds only with the opt-in `msgraph` tag. |
+| Live sync with analysis | 10.1 s | 3.4 s (about 3× faster) | `sync once` on Go's `src/net` (390 files). Findings are pruned through their `AFFECTS` edges instead of a scan of the whole store. |
+| HNSW build, 100k vectors | 36.4 s | 2.8 s | The build runs on every core, and `ef_construction` dropped from 200 to 100 with no recall loss on embedding-like data. |
+| Largest Leiden community, chiton's own graph | 87.5% of nodes | 15% | A correctness fix: aggregation dropped each community's internal weight. Zachary's karate club now scores a modularity of about 0.42, up from 0. Re-run `chiton cluster` after upgrading. |

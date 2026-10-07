@@ -29,12 +29,12 @@ import (
 type Deps struct {
 	Retriever *retrieve.Engine
 	Extractor *subagent.Service
-	// LLM backs pending_analyses / submit_analysis (Phase 2.5 LLM rules).
+	// LLM backs pending_analyses / submit_analysis (LLM rules).
 	LLM *analyze.LLMService
-	// MeetingLinker backs pending_meeting_links / submit_meeting_links (Phase 4
-	// meeting→code linkage). nil disables those tools.
+	// MeetingLinker backs pending_meeting_links / submit_meeting_links
+	// (meeting→code linkage). nil disables those tools.
 	MeetingLinker *meeting.LinkService
-	// URLIngester backs the add_url write tool (Phase 4). nil (e.g. a read-only
+	// URLIngester backs the add_url write tool. nil (e.g. a read-only
 	// server) makes add_url report that it is unavailable.
 	URLIngester *urlingest.Ingester
 	// BaselineDir is where diff_findings reads saved baselines from
@@ -76,7 +76,7 @@ func New(gs store.GraphStore, overlay *cluster.Results, deps Deps) *mcpsdk.MCPSe
 	s.AddTool(diffFindingsTool(), diffFindingsHandler(gs, baselineDir, cmp.Or(deps.ProjectRoot, ".")))
 	s.AddTool(pendingAnalysesTool(), pendingAnalysesHandler(deps.LLM, cmp.Or(deps.ProjectRoot, ".")))
 	s.AddTool(submitAnalysisTool(), submitAnalysisHandler(deps.LLM))
-	// Phase 4: meetings & external sources.
+	// Meetings & external sources.
 	s.AddTool(searchMeetingsTool(), searchMeetingsHandler(gs))
 	s.AddTool(decisionsAboutTool(), decisionsAboutHandler(gs))
 	s.AddTool(pendingMeetingLinksTool(), pendingMeetingLinksHandler(deps.MeetingLinker))

@@ -188,9 +188,9 @@ chiton calls no LLM itself. The three flows:
 
 | Flow | Tools | CLI equivalent |
 |---|---|---|
-| Semantic extraction (Phase 2) | `pending_extractions` → `submit_extraction` | `chiton extract pending` / `chiton extract submit` |
-| LLM rule analysis (Phase 2.5) | `pending_analyses` → `submit_analysis` | `chiton analyze pending` / `chiton analyze submit` |
-| Meeting→code linkage (Phase 4) | `pending_meeting_links` → `submit_meeting_links` | `chiton meeting pending` / `chiton meeting submit` |
+| Semantic extraction | `pending_extractions` → `submit_extraction` | `chiton extract pending` / `chiton extract submit` |
+| LLM rule analysis | `pending_analyses` → `submit_analysis` | `chiton analyze pending` / `chiton analyze submit` |
+| Meeting→code linkage | `pending_meeting_links` → `submit_meeting_links` | `chiton meeting pending` / `chiton meeting submit` |
 
 All three submit paths need a writable store (`chiton serve --writable`, or the
 CLI). All three treat the task `input`, which is doc text, source code, or a
