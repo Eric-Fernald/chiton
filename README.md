@@ -114,9 +114,9 @@ Three commands use Microsoft Graph: `chiton teams fetch`,
 `chiton teams serve-webhook`, and `chiton email outlook`. They require the
 `msgraph` build tag and are **not** in the default build or in any release
 artifact. The Graph SDK's generated
-request builders cost roughly 120 MB for the two API calls chiton makes through
-them (a stripped default `windows/amd64` binary is 24.0 MB; with the tag it is
-144.0 MB), so they are opt-in:
+request builders cost roughly 117 MB for the two API calls chiton makes through
+them (a stripped default binary is 24.6 MB; with the tag it is 142.0 MB), so
+they are opt-in:
 
 ```sh
 make build-msgraph      # or: go build -tags msgraph ./cmd/chiton
