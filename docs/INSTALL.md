@@ -73,8 +73,7 @@ arm64 gets the windows/amd64 binary, which runs under emulation.
 
 The scripts copy the binary beside its target and rename it into place, so a
 concurrent launcher never runs a half-written file. They never execute anything
-they download. No release has been cut yet, so until one is, use `go install`
-or build from source.
+they download.
 
 **Teams and Outlook need a tagged build.** Microsoft Graph support is behind
 `//go:build msgraph`, which the default build *and every release artifact*
@@ -199,8 +198,7 @@ release's so installed plugins fast-forward, holding the assembled plugin:
 
 The branch holds no binaries. `scripts/build-plugin-dist.sh`
 (`make plugin-dist`) assembles it, and refuses a `checksums.txt` that lacks any
-of the five assets the launchers download. Until the first release is cut,
-`plugin-dist` does not exist and `claude plugin install` fails.
+of the five assets the launchers download.
 
 Because the plugin directory contains `bin/`, claude.ai and Cowork will not
 install it. chiton needs a local filesystem, so Claude Code is the only target.

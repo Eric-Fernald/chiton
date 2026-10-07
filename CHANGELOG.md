@@ -5,15 +5,11 @@ All notable changes to chiton are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**There are no released versions yet.** No git tag has been cut, so there is no
-`1.0.0` and no release history. Everything below sits under `Unreleased`.
-Until a tag exists, `make` derives the version from
-`git describe --tags --always --dirty` and `chiton version` falls back to Go
-module and VCS metadata. The first tagged release, `v1.0.0` (the version
-`.claude-plugin/plugin.json` already declares), will move these entries into a
-dated section.
-
 ## [Unreleased]
+
+## [1.0.0] - 2026-10-06
+
+The first public release.
 
 ### Added
 

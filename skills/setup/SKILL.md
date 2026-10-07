@@ -60,8 +60,7 @@ from its GitHub download URL, verifies its SHA-256 against the release's
 `checksums.txt`, and installs into `$CLAUDE_PLUGIN_DATA/bin` (or
 `~/.chiton/bin`). It never executes anything it downloads. It needs network
 access to `github.com` but no credentials, and calls no GitHub API.
-`--version vX.Y.Z` (`-Version` in PowerShell) installs a specific release. It
-fails if no release has been published yet.
+`--version vX.Y.Z` (`-Version` in PowerShell) installs a specific release.
 
 **b. From a local clone** (needs a Go toolchain):
 
