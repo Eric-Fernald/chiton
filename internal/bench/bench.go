@@ -1,5 +1,6 @@
 // Package bench implements chiton's token-cost benchmark (4 chars per token). It costs each dependency
-// question as naive (every file), grep+read (files naming the symbol), and chiton's lean MCP neighborhood.
+// question as naive (every file), grep+read (files naming the symbol), chiton's lean MCP neighborhood at
+// depth 2 and depth 1, and the query_graph lookup that finds the symbol.
 package bench
 
 import (
@@ -10,21 +11,38 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Eric-Fernald/chiton/internal/analyze"
 	extast "github.com/Eric-Fernald/chiton/internal/extract/ast"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 	"github.com/Eric-Fernald/chiton/internal/walk"
 )
 
+// queryGraphLimit is query_graph's default result limit, so the lookup column costs what the tool returns.
+const queryGraphLimit = 10
+
 // estimateTokens approximates token count from character count (chars ÷ 4), the
 // standard rough estimate; identical across strategies so ratios are fair.
 func estimateTokens(chars int) int { return chars / 4 }
 
-// QueryResult is the token cost of one question under each strategy.
+// QueryResult is the token cost of one question under each strategy. Chiton is the depth-2 neighborhood,
+// ChitonDepth1 the depth-1 one, and QueryGraph the query_graph lookup for the symbol's name, which finds
+// the symbol but returns no edges.
 type QueryResult struct {
-	Question string `json:"question"`
-	Naive    int    `json:"naive"`
-	GrepRead int    `json:"grep_read"`
-	Chiton   int    `json:"chiton"`
+	Question     string `json:"question"`
+	Naive        int    `json:"naive"`
+	GrepRead     int    `json:"grep_read"`
+	Chiton       int    `json:"chiton"`
+	ChitonDepth1 int    `json:"chiton_depth1"`
+	QueryGraph   int    `json:"query_graph"`
+}
+
+// Options controls how Run picks its questions.
+type Options struct {
+	// MaxQueries is how many of the highest-degree symbols to benchmark (default 5).
+	MaxQueries int
+	// IncludeTests lets symbols defined in test files be query targets. Test files are always part of
+	// the corpus, so they still count toward naive and grep+read; this only changes which symbols get asked about.
+	IncludeTests bool
 }
 
 // Report is the full benchmark output for one corpus.
@@ -36,6 +54,7 @@ type Report struct {
 	Edges        int           `json:"edges"`
 	CorpusTokens int           `json:"corpus_tokens"`
 	Depth        int           `json:"depth"`
+	IncludeTests bool          `json:"include_tests"`
 	Queries      []QueryResult `json:"queries"`
 }
 
@@ -71,9 +90,10 @@ func toLeanNode(n model.Node) leanNode {
 	}
 }
 
-// Run builds an in-memory graph over the supported files under path and costs the depth-2
-// neighborhoods of its maxQueries highest-degree symbols. name labels the report.
-func Run(ctx context.Context, name, path string, maxQueries int) (*Report, error) {
+// Run builds an in-memory graph over the supported files under path and costs the neighborhoods of its
+// highest-degree symbols. name labels the report.
+func Run(ctx context.Context, name, path string, opts Options) (*Report, error) {
+	maxQueries := opts.MaxQueries
 	if maxQueries <= 0 {
 		maxQueries = 5
 	}
@@ -126,7 +146,7 @@ func Run(ctx context.Context, name, path string, maxQueries int) (*Report, error
 	}
 
 	g := newGraph(nodes, edges)
-	targets := g.topSymbols(maxQueries)
+	targets := g.topSymbols(maxQueries, opts.IncludeTests)
 
 	rep := &Report{
 		Name:         name,
@@ -136,18 +156,29 @@ func Run(ctx context.Context, name, path string, maxQueries int) (*Report, error
 		Edges:        len(edges),
 		CorpusTokens: corpusTokens,
 		Depth:        depth,
+		IncludeTests: opts.IncludeTests,
 	}
 
 	for _, t := range targets {
-		chitonTokens, err := g.neighborhoodTokens(t, depth)
+		d2, err := g.neighborhoodTokens(t, depth)
+		if err != nil {
+			return nil, err
+		}
+		d1, err := g.neighborhoodTokens(t, 1)
+		if err != nil {
+			return nil, err
+		}
+		qg, err := g.queryGraphTokens(baseIdent(g.nodes[t].Label))
 		if err != nil {
 			return nil, err
 		}
 		rep.Queries = append(rep.Queries, QueryResult{
-			Question: fmt.Sprintf("What does %s depend on / connect to?", g.nodes[t].Label),
-			Naive:    corpusTokens,
-			GrepRead: grepReadTokens(g.nodes[t].Label, fileText, fileTokens),
-			Chiton:   chitonTokens,
+			Question:     fmt.Sprintf("What does %s depend on / connect to?", g.nodes[t].Label),
+			Naive:        corpusTokens,
+			GrepRead:     grepReadTokens(g.nodes[t].Label, fileText, fileTokens),
+			Chiton:       d2,
+			ChitonDepth1: d1,
+			QueryGraph:   qg,
 		})
 	}
 	return rep, nil
@@ -178,10 +209,11 @@ func baseIdent(label string) string {
 // graph is a minimal in-memory adjacency over the extracted nodes/edges, enough
 // to rank by degree and walk depth-bounded neighborhoods.
 type graph struct {
-	nodes  map[string]model.Node
-	adj    map[string][]int // node ID → indices into edges (both directions)
-	edges  []model.Edge
-	degree map[string]int
+	nodes     map[string]model.Node
+	adj       map[string][]int // node ID → indices into edges (both directions)
+	edges     []model.Edge
+	degree    map[string]int
+	sortedIDs []string // node IDs in store key order, built on first queryGraphTokens call
 }
 
 func newGraph(nodes []model.Node, edges []model.Edge) *graph {
@@ -203,9 +235,10 @@ func newGraph(nodes []model.Node, edges []model.Edge) *graph {
 	return g
 }
 
-// topSymbols returns the IDs of the n highest-degree symbol nodes, ties broken
-// by ID for reproducibility.
-func (g *graph) topSymbols(n int) []string {
+// topSymbols returns the IDs of the n highest-degree symbol nodes, ties broken by ID for reproducibility.
+// Unless includeTests is set, symbols defined in test files are skipped: a busy test helper is rarely what
+// a developer asks about, and its wide neighborhood would dominate the sample.
+func (g *graph) topSymbols(n int, includeTests bool) []string {
 	type ranked struct {
 		id  string
 		deg int
@@ -221,6 +254,9 @@ func (g *graph) topSymbols(n int) []string {
 		// Skip external import targets (fmt, http.Get). Their huge degree doesn't match any real question
 		// and would inflate every column.
 		if model.IsExternal(node) {
+			continue
+		}
+		if !includeTests && analyze.IsTestSource(node.SourceURI) {
 			continue
 		}
 		rs = append(rs, ranked{id, g.degree[id]})
@@ -239,6 +275,35 @@ func (g *graph) topSymbols(n int) []string {
 		out[i] = r.id
 	}
 	return out
+}
+
+// queryGraphTokens costs the query_graph payload for query: the first queryGraphLimit nodes, in ID order as
+// the store returns them, whose label contains query case-insensitively, as a JSON array of lean nodes.
+func (g *graph) queryGraphTokens(query string) (int, error) {
+	if g.sortedIDs == nil {
+		g.sortedIDs = make([]string, 0, len(g.nodes))
+		for id := range g.nodes {
+			g.sortedIDs = append(g.sortedIDs, id)
+		}
+		sort.Strings(g.sortedIDs)
+	}
+	q := strings.ToLower(query)
+	lean := []leanNode{}
+	for _, id := range g.sortedIDs {
+		n := g.nodes[id]
+		if !strings.Contains(strings.ToLower(n.Label), q) {
+			continue
+		}
+		lean = append(lean, toLeanNode(n))
+		if len(lean) == queryGraphLimit {
+			break
+		}
+	}
+	b, err := json.Marshal(lean)
+	if err != nil {
+		return 0, err
+	}
+	return estimateTokens(len(b)), nil
 }
 
 // neighborhoodTokens computes the token cost of the lean MCP neighborhood
@@ -287,8 +352,7 @@ func (g *graph) neighborhoodTokens(seed string, depth int) (int, error) {
 		Seed:  toLeanNode(sn),
 		Nodes: neighborNodes,
 		Edges: leanEdges,
-		// This matches the MCP neighborhood handler's summary. MCP indents its JSON but this compact
-		// marshal doesn't, so the chiton column slightly understates the real payload.
+		// This matches the MCP neighborhood handler's summary; both marshal compact JSON.
 		Summary: fmt.Sprintf("%d nodes, %d edges within depth %d of %q", len(neighborNodes), len(leanEdges), depth, sn.Label),
 	}
 	b, err := json.Marshal(payload)

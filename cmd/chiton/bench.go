@@ -15,15 +15,20 @@ import (
 func benchCmd() *cobra.Command {
 	var name string
 	var queries, synth int
-	var asJSON bool
+	var asJSON, includeTests bool
 
 	cmd := &cobra.Command{
 		Use:   "bench [path]",
 		Short: "Benchmark token cost: chiton neighborhoods vs naive vs grep+read",
 		Long: `Build an in-memory graph over a corpus and measure how many tokens it costs
-to answer dependency questions three ways: reading every file (naive), reading
-every file that mentions the symbol (grep+read), and chiton's lean neighborhood
-payload. Token cost uses the same chars÷4 estimate for every strategy.
+to answer dependency questions: reading every file (naive), reading every file
+that mentions the symbol (grep+read), chiton's lean neighborhood payload at
+depth 2 and depth 1, and the query_graph lookup for the symbol's name. Token
+cost uses the same chars÷4 estimate for every strategy.
+
+Questions target the highest-degree symbols outside test files; pass
+--include-tests to let test symbols be targets too. Test files count toward the
+corpus either way.
 
 Pass a path (default "."), or --synth N to generate and benchmark a reproducible
 synthetic corpus of N Go files instead. Output is a Markdown table by default.`,
@@ -53,7 +58,7 @@ synthetic corpus of N Go files instead. Output is a Markdown table by default.`,
 				name = filepath.Base(abs)
 			}
 
-			rep, err := bench.Run(cmd.Context(), name, path, queries)
+			rep, err := bench.Run(cmd.Context(), name, path, bench.Options{MaxQueries: queries, IncludeTests: includeTests})
 			if err != nil {
 				return err
 			}
@@ -71,5 +76,6 @@ synthetic corpus of N Go files instead. Output is a Markdown table by default.`,
 	cmd.Flags().IntVar(&queries, "queries", 5, "Number of highest-degree symbols to benchmark")
 	cmd.Flags().IntVar(&synth, "synth", 0, "Generate and benchmark a synthetic corpus of N Go files instead of a path")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Output JSON instead of a Markdown table")
+	cmd.Flags().BoolVar(&includeTests, "include-tests", false, "Let symbols defined in test files be query targets")
 	return cmd
 }

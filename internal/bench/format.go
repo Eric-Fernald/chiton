@@ -36,21 +36,27 @@ func medianInt(xs []int) int {
 // medians), ready to paste into docs/BENCHMARK.md.
 func FormatMarkdown(w io.Writer, reps []*Report) {
 	for _, rep := range reps {
-		fmt.Fprintf(w, "### %s\n\n", rep.Name)
-		fmt.Fprintf(w, "%d files · %d nodes · %d edges · ~%d tokens in scope · depth %d\n\n",
-			rep.Files, rep.Nodes, rep.Edges, rep.CorpusTokens, rep.Depth)
-		fmt.Fprintln(w, "| Question | naive | grep+read | chiton | chiton vs grep+read |")
-		fmt.Fprintln(w, "|---|---:|---:|---:|---|")
-		grepVals := make([]int, 0, len(rep.Queries))
-		chitonVals := make([]int, 0, len(rep.Queries))
-		for _, q := range rep.Queries {
-			fmt.Fprintf(w, "| %s | %d | %d | %d | %s |\n",
-				q.Question, q.Naive, q.GrepRead, q.Chiton, ratio(q.GrepRead, q.Chiton))
-			grepVals = append(grepVals, q.GrepRead)
-			chitonVals = append(chitonVals, q.Chiton)
+		targets := "test symbols excluded"
+		if rep.IncludeTests {
+			targets = "test symbols included"
 		}
-		mg, mc := medianInt(grepVals), medianInt(chitonVals)
-		fmt.Fprintf(w, "\n**Median:** chiton ~%d tokens vs grep+read ~%d (%s); naive ~%d.\n\n",
-			mc, mg, ratio(mg, mc), rep.CorpusTokens)
+		fmt.Fprintf(w, "### %s\n\n", rep.Name)
+		fmt.Fprintf(w, "%d files · %d nodes · %d edges · ~%d tokens in scope · %s\n\n",
+			rep.Files, rep.Nodes, rep.Edges, rep.CorpusTokens, targets)
+		fmt.Fprintln(w, "| Question | naive | grep+read | chiton d2 | chiton d1 | query_graph | d2 vs grep+read | d1 vs grep+read |")
+		fmt.Fprintln(w, "|---|---:|---:|---:|---:|---:|---|---|")
+		var grepVals, d2Vals, d1Vals, qgVals []int
+		for _, q := range rep.Queries {
+			fmt.Fprintf(w, "| %s | %d | %d | %d | %d | %d | %s | %s |\n",
+				q.Question, q.Naive, q.GrepRead, q.Chiton, q.ChitonDepth1, q.QueryGraph,
+				ratio(q.GrepRead, q.Chiton), ratio(q.GrepRead, q.ChitonDepth1))
+			grepVals = append(grepVals, q.GrepRead)
+			d2Vals = append(d2Vals, q.Chiton)
+			d1Vals = append(d1Vals, q.ChitonDepth1)
+			qgVals = append(qgVals, q.QueryGraph)
+		}
+		mg, m2, m1, mq := medianInt(grepVals), medianInt(d2Vals), medianInt(d1Vals), medianInt(qgVals)
+		fmt.Fprintf(w, "\n**Median:** grep+read ~%d tokens; chiton depth 2 ~%d (%s), depth 1 ~%d (%s), query_graph ~%d; naive ~%d.\n\n",
+			mg, m2, ratio(mg, m2), m1, ratio(mg, m1), mq, rep.CorpusTokens)
 	}
 }
