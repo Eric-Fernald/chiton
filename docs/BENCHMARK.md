@@ -1,10 +1,9 @@
-# chiton Benchmark — token cost per query across corpora
+# chiton benchmark: token cost per query across corpora
 
-This is the honest, reproducible benchmark the plan calls for: token cost per
-query across corpora of varying size and shape, published as a **table, not a
-single hero number**. It deliberately includes the cases where chiton *loses* —
-and on raw token count vs `grep+read`, that is more often than the marketing
-version of this project would like.
+This is the reproducible benchmark the plan calls for: token cost per query
+across corpora of varying size and shape, published as a table rather than a
+single number. It includes the cases where chiton *loses*, and on raw token
+count vs `grep+read` it loses often.
 
 Generated with `chiton bench` (built into the binary). It is the Phase 5
 cross-corpus successor to the Phase 0 micro-study.
@@ -13,8 +12,8 @@ cross-corpus successor to the Phase 0 micro-study.
 
 For a corpus, chiton builds an **in-memory** graph from its AST extractors (no
 store, no running server), then answers a deterministic set of dependency
-questions — *"what does X depend on / connect to?"* — three ways, and reports
-the token cost of each:
+questions of the form *"what does X depend on / connect to?"* three ways, and
+reports the token cost of each:
 
 | Strategy | Models | Cost = tokens of… |
 |---|---|---|
@@ -22,31 +21,31 @@ the token cost of each:
 | **grep+read** | the grep_search + read_file default of Copilot / Claude Code | every file that mentions the symbol |
 | **chiton** | chiton's MCP `get_node_neighborhood` payload | the lean node/edge JSON returned (depth 2) |
 
-Methodology notes (so the numbers are honest, not flattering):
+Methodology notes:
 
 - **Token estimate = characters ÷ 4**, applied identically to all three
-  strategies — the same rough estimate the Phase 0 benchmark used.
+  strategies. The Phase 0 benchmark used the same rough estimate.
 - **The chiton payload is byte-faithful to the real MCP output.** The bench
   serialises the *exact* `leanNode`/`leanEdge` shape `internal/mcp/server.go`
-  returns — `kind`, `label`, `source_uri`, `span`, `attrs`, `provenance`,
-  `confidence`, edge `attrs`, and the neighborhood `summary` line — so the
-  chiton column is not under-counted. (An earlier draft of this benchmark
+  returns, so the chiton column is not under-counted. That shape has `kind`,
+  `label`, `source_uri`, `span`, `attrs`, `provenance`, `confidence`, edge
+  `attrs`, and the neighborhood `summary` line. (An earlier draft of this benchmark
   dropped `attrs`/`provenance`/`confidence` and thereby flattered chiton; that
   bias is fixed, which is why the numbers below are higher than a naive lean
   encoding would show.)
 - **Query targets** are the highest-degree **corpus-internal** symbols. External
   package nodes (`fmt`, `http.Get`) are excluded: nobody asks "what does `fmt`
-  depend on," and their sky-high degree would inflate every column.
-- **grep+read greps the base identifier** a developer would actually type — for
-  the method label `LinkService.Submit` it greps `Submit`, which (faithfully)
-  matches many files. This captures grep's imprecision rather than hiding it.
+  depend on," and their high degree would inflate every column.
+- **grep+read greps the base identifier** a developer would type. For the
+  method label `LinkService.Submit` it greps `Submit`, which matches many files
+  in a real search too. This captures grep's imprecision rather than hiding it.
 
-### What this does NOT measure
+### What this does not measure
 
 - **Answer quality.** This counts retrieval tokens, not whether the model got
   the right answer. chiton's typed edges (`CALLS`, `IMPORTS`, …) also reduce the
-  *reasoning* the model must do over raw file dumps — the real benefit, and one
-  this table cannot show.
+  *reasoning* the model must do over raw file dumps. That is the real benefit,
+  and this table cannot show it.
 - **Prompt caching.** Naive/grep contexts are far more cacheable than chiton's
   per-query neighborhoods; with a warm cache the input-token gap narrows further
   (see PLAN.md "Query-Cost Comparison").
@@ -71,7 +70,7 @@ Measured on the chiton repo at the `hnsw` branch (Go, `windows/amd64`,
 2026-10-06). Corpus sizes drift as the repo grows; re-run `chiton bench` to
 refresh.
 
-### A — synthetic ring (40 files) — the case chiton loses badly
+### A. Synthetic ring (40 files), where chiton loses badly
 
 40 files · 280 nodes · 240 edges · ~2 391 tokens in scope · depth 2
 
@@ -86,11 +85,11 @@ refresh.
 **Median:** chiton ~4 609 tokens vs grep+read ~120 (**38× costlier**); naive ~2 391.
 
 On a tiny corpus where each symbol is defined once and grep lands precisely on a
-small file, **grep wins decisively** — and chiton's depth-2 neighborhood of a
+small file, **grep wins decisively**, and chiton's depth-2 neighborhood of a
 ring node costs more than reading the whole corpus would. Don't reach for graph
 memory on a hobby-sized repo.
 
-### B — `internal/graph` (medium, densely connected)
+### B. `internal/graph` (medium, densely connected)
 
 26 files · 595 nodes · 735 edges · ~29 750 tokens in scope · depth 2
 
@@ -105,12 +104,12 @@ memory on a hobby-sized repo.
 **Median:** chiton ~2 013 tokens vs grep+read ~2 770 (**1.4× cheaper**); naive ~29 750 (**~15× cheaper**).
 
 For a hub symbol like `node` (referenced everywhere), grep reads nearly the whole
-package (27k tokens) while chiton returns a bounded ~1.4k-token neighborhood —
+package (27k tokens) while chiton returns a bounded ~1.4k-token neighborhood,
 **19× cheaper**. But for uniquely-named or weakly-connected symbols, grep is more
 precise and chiton's depth-2 neighborhood can cost more. It nets out to
 **modestly cheaper** vs grep, and a large win vs naive.
 
-### C — `internal/` (large, 7.2k nodes)
+### C. `internal/` (large, 7.2k nodes)
 
 285 files · 7 170 nodes · 7 953 edges · ~314 988 tokens in scope · depth 2
 
@@ -134,24 +133,24 @@ these busy test symbols is wide. The
 hub symbols still favour chiton. The reliable, large win is over **naive**
 (~14–15×).
 
-## Honest summary
+## Summary
 
 - **vs naive context dumping:** chiton is reliably **~14–15× cheaper** at
   medium/large scale. This is the dependable token win.
 - **vs `grep+read`:** **mixed on raw token count**. chiton is markedly cheaper
-  for hub symbols (where grep drags in a whole package — up to ~19×) but
+  for hub symbols (where grep drags in a whole package, up to ~19×) but
   *costlier* for uniquely-named or highly-connected symbols whose depth-2
   neighborhood is large. Medians: medium ~1.4× cheaper, large ~1.9× costlier.
   Drop to depth 1, or use `query_graph` instead of `get_node_neighborhood`,
   when token cost matters more than breadth.
 - **tiny corpora:** grep wins decisively (tens of tokens vs thousands).
-- **The token reduction vs grep is NOT the point** — on these corpora it barely
+- **The token reduction vs grep is not the point.** On these corpora it barely
   exists. The point is *better* context: a typed, bounded neighborhood
   (`CALLS`/`IMPORTS`/`DECIDED_IN` edges with provenance) the model doesn't have
   to reconstruct from raw file dumps, plus the large win over naive and the
-  capabilities (meeting→code links, findings) grep simply cannot provide.
+  capabilities (meeting→code links, findings) grep cannot provide.
 
-These are measurements, not marketing. Re-run `chiton bench` on your own corpus.
+Re-run `chiton bench` on your own corpus.
 
 ## Vector index: flat vs HNSW
 

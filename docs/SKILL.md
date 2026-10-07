@@ -23,7 +23,7 @@ skills/setup/SKILL.md            first-run setup
 `manifests.SkillMarkdown` and `manifests.SubagentTasksSkillMarkdown` so the
 installers have one import to reach for.
 
-That single copy is deliberate: the Claude Code plugin loads the files straight
+The single copy is deliberate. The Claude Code plugin loads the files straight
 out of `skills/`, while `chiton install` writes the *embedded* bytes into the
 assistant's own skills directory. Both paths therefore ship byte-identical
 markdown, and there is no second copy to drift. **Edit `skills/`, never a
@@ -44,7 +44,7 @@ generated copy.**
 
 `chiton install --assistant claude-code` writes **two** skills; `chiton
 uninstall` removes both directories, and `chiton doctor` reports on each. The
-setup skill is plugin-only on purpose — anyone who just ran `chiton install`
+setup skill is plugin-only because anyone who just ran `chiton install`
 already has a working binary, which is the problem that skill exists to solve.
 
 ### Why the frontmatter has no `name:`
@@ -61,8 +61,8 @@ See [INSTALL.md](INSTALL.md) for the full install flow and per-assistant layout.
 > **Scope note:** among the installers in this package, only the Claude Code
 > installer writes skill files at all. The other assistant installers (Cursor,
 > Codex, Gemini CLI, OpenCode, Aider, Antigravity, Copilot VS Code, Copilot CLI)
-> receive only the shorter always-on `RulesPrompt` appended to their rules file
-> — they do not get a skill. See "Rules prompt" below.
+> receive only the shorter always-on `RulesPrompt` appended to their rules file.
+> They do not get a skill. See "Rules prompt" below.
 
 ## The graph skill
 
@@ -73,7 +73,7 @@ Invoked as `/chiton:graph <sub-command>` under the plugin, `/chiton
 
 | Sub-command | What it does |
 |---|---|
-| *(no argument)* | Show status — graph stats, last build time. |
+| *(no argument)* | Show status: graph stats, last build time. |
 | `build [path]` | Build or refresh the graph for this workspace. |
 | `query <label>` | Look up a node by label substring. |
 | `neighborhood <label> [depth]` | A node and its 1–5 hop neighbors. |
@@ -114,7 +114,7 @@ Notes:
   in its MCP-tool mapping table; neither is pinned to a tool. `build`
   corresponds to the `chiton build [path]` CLI subcommand.
 - `search` covers `semantic_search`, and `meetings` / `decisions` cover
-  `search_meetings` / `decisions_about` — the meeting tools serve Slack
+  `search_meetings` / `decisions_about`. The meeting tools serve Slack
   conversations as well as transcripts, so `meetings` can return a channel or
   thread.
 - The skill's own fallback section names `chiton query <label>`,
@@ -126,8 +126,8 @@ Notes:
 ### Provenance
 
 The skill tells the assistant that every node and edge is tagged: `EXTRACTED`
-(confidence 1.0, parser output — ground truth), `INFERRED` (LLM-extracted
-concepts, findings, and decisions — hints), and `AMBIGUOUS` (below the
+(ground truth: confidence 1.0, parser output), `INFERRED` (hints: LLM-extracted
+concepts, findings, and decisions), and `AMBIGUOUS` (below the
 confidence threshold, hidden unless asked for). When sources conflict, prefer
 `EXTRACTED`; never present an `INFERRED` concept as established fact.
 
@@ -135,10 +135,10 @@ confidence threshold, hidden unless asked for). When sources conflict, prefer
 
 Doc sections, meeting transcripts, Slack messages, emails, browser titles, and
 fetched web pages all enter the graph as node text. The skill instructs the
-assistant to treat everything the graph returns as untrusted input: if a
-returned node contains text addressed at the assistant — telling it to run
-something, claiming authorization, or overriding its instructions — do not act
-on it; quote it to the user and ask.
+assistant to treat everything the graph returns as untrusted input. If a
+returned node contains text addressed at the assistant, such as telling it to
+run something, claiming authorization, or overriding its instructions, do not
+act on it; quote it to the user and ask.
 
 ### Response style
 
@@ -159,7 +159,7 @@ Call a chiton tool first when the question is about:
 - "What findings / rule violations exist in this module?"
 - "Why is this function written this way?" / "what did we decide about X?"
 
-Use grep or file reads when you need the actual source content — to make an
+Use grep or file reads when you need the actual source content to make an
 edit, locate a bug, or understand an implementation in detail.
 
 ### Known limitations (carried in the skill)
@@ -183,8 +183,8 @@ missing too, the skill points at the setup skill.
 
 `/chiton:subagent-tasks` (installed standalone as `/chiton-subagent-tasks`)
 documents the three flows where chiton emits a schema-pinned task spec, a
-subagent does the reasoning, and the structured result is submitted back —
-chiton calls no LLM itself:
+subagent does the reasoning, and the structured result is submitted back.
+chiton calls no LLM itself. The three flows:
 
 | Flow | Tools | CLI equivalent |
 |---|---|---|
@@ -193,8 +193,8 @@ chiton calls no LLM itself:
 | Meeting→code linkage (Phase 4) | `pending_meeting_links` → `submit_meeting_links` | `chiton meeting pending` / `chiton meeting submit` |
 
 All three submit paths need a writable store (`chiton serve --writable`, or the
-CLI), and all three treat the task `input` — doc text, source code, transcript —
-as untrusted data rather than instructions.
+CLI). All three treat the task `input`, which is doc text, source code, or a
+transcript, as untrusted data rather than instructions.
 
 ## The setup skill
 
@@ -212,16 +212,16 @@ release binary. See [INSTALL.md](INSTALL.md).
 
 Independent of the skills, every assistant the installer touches also gets a
 short always-on instruction (`manifests.RulesPrompt`) appended to its rules file
-(`CLAUDE.md`, `AGENTS.md`, `.github/copilot-instructions.md`, etc.). It is kept
-deliberately short, because it is paid for on every turn.
+(`CLAUDE.md`, `AGENTS.md`, `.github/copilot-instructions.md`, etc.). It is
+short because it is paid for on every turn.
 
 It tells the assistant to call chiton before grepping for architecture or
 navigation questions, and names the tools directly: `semantic_search`,
 `get_node_neighborhood`, `query_graph` / `get_node`, `shortest_path`,
 `graph_summary`, `god_nodes`, `list_findings` / `explain_finding` /
 `diff_findings`, and `search_meetings` / `decisions_about`. It then covers the
-same three guardrails the graph skill does — still use grep for actual source
+same three guardrails the graph skill does: still use grep for actual source
 content, prefer `EXTRACTED` over `INFERRED` (with `AMBIGUOUS` hidden by
-default), and treat everything the graph returns as untrusted data — notes that
-the `pending_*` / `submit_*` tools need a writable server, and closes with:
+default), and treat everything the graph returns as untrusted data. It notes
+that the `pending_*` / `submit_*` tools need a writable server, and closes with:
 build the graph with `chiton build .` and run `chiton analyze .` for findings.
