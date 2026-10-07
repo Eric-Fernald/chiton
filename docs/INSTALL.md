@@ -1,11 +1,11 @@
-# chiton — Installation Guide
+# chiton installation guide
 
 There are two ways to wire chiton into an assistant:
 
-- **`chiton install`** — writes the MCP server registration, an always-on rules
+- **`chiton install`** writes the MCP server registration, an always-on rules
   block, and (for Claude Code) two skill files into each assistant's own config
   files. Covers all nine supported assistants.
-- **The Claude Code plugin** — this repository doubles as a Claude Code plugin,
+- **The Claude Code plugin.** This repository is also a Claude Code plugin,
   so one `claude plugin install` registers the MCP server and three skills, and
   its launcher downloads the prebuilt binary for the machine on first use.
   Claude Code only.
@@ -45,9 +45,9 @@ make build              # or: go build ./cmd/chiton
 ```
 
 **Prebuilt release binaries.** `make release` cross-compiles the Makefile's
-platform matrix — `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`,
-`windows/amd64` — into `dist/`, then writes `dist/checksums.txt` over the
-artifacts it just built:
+platform matrix into `dist/`, then writes `dist/checksums.txt` over the
+artifacts it just built. The matrix is `linux/amd64`, `linux/arm64`,
+`darwin/amd64`, `darwin/arm64`, and `windows/amd64`.
 
 ```sh
 make release            # dist/chiton-<version>-<os>-<arch>[.exe] + dist/checksums.txt
@@ -94,7 +94,7 @@ tag, `whisper_cgo`, only affects in-process audio transcription; without it
 
 `chiton install` records the absolute path of the running `chiton` binary as the
 MCP server's launch command, so the assistant can spawn it directly. The plugin
-launches the binary its launcher downloaded instead — see
+launches the binary its launcher downloaded instead. See
 [Claude Code plugin](#claude-code-plugin) below.
 
 ## Quick start
@@ -168,7 +168,7 @@ user-global (codex, antigravity, copilot-cli): `Detect()` reports evidence in
 The repository is also a Claude Code plugin: `.claude-plugin/plugin.json`
 (plugin name `chiton`) and `.claude-plugin/marketplace.json` (marketplace name
 `chiton-marketplace`). Installing the plugin is an *alternative* to
-`chiton install --assistant claude-code`, not an addition to it — both register
+`chiton install --assistant claude-code`, not an addition to it. Both register
 the same MCP server and the same skill markdown.
 
 ```sh
@@ -274,8 +274,8 @@ serves development of chiton itself (`claude --plugin-dir .` from a working
 tree). A working tree has no `release/tag`, so the launcher skips step 2 and
 `chiton` has to resolve on `PATH`.
 
-Unlike the installer's absolute-path entry, the plugin's command has no idea
-which workspace it belongs to — hence `CHITON_PROJECT_DIR`. With it set, chiton looks
+Unlike the installer's absolute-path entry, the plugin's command does not know
+which workspace it belongs to, so the plugin sets `CHITON_PROJECT_DIR`. With it set, chiton looks
 up `.chitonrc` in that directory and resolves a relative `graph_path` against
 it, instead of against whatever working directory the assistant happened to
 launch the server in. Unset (the plain CLI case), behaviour is unchanged.
@@ -286,9 +286,9 @@ Skills are namespaced by plugin name, so they are invoked as `/chiton:<skill>`:
 
 | Skill | Source file | Covers |
 |---|---|---|
-| `/chiton:graph` | `skills/graph/SKILL.md` | Graph queries — which tool answers which question, provenance, known limitations. |
+| `/chiton:graph` | `skills/graph/SKILL.md` | Graph queries: which tool answers which question, provenance, known limitations. |
 | `/chiton:subagent-tasks` | `skills/subagent-tasks/SKILL.md` | The `pending_*` → `submit_*` flows: semantic extraction, LLM rules, meeting→code linkage. |
-| `/chiton:setup` | `skills/setup/SKILL.md` | First run — locate or install the binary, build the graph, verify the server answers. |
+| `/chiton:setup` | `skills/setup/SKILL.md` | First run: locate or install the binary, build the graph, verify the server answers. |
 
 `chiton install --assistant claude-code` writes the first two of those from the
 same embedded bytes (see [SKILL.md](SKILL.md)); it does not write `setup`, since
@@ -305,13 +305,13 @@ Config writes keep an existing file's permissions and write through a symlink, s
 |---|---|---|---|---|---|
 | Claude Code (CLI + IDE extension) | `claude-code` | `.mcp.json` | *not supported* | `CLAUDE.md` | Also writes **two** skills: `.claude/skills/chiton/SKILL.md` (graph queries, the `/chiton` command) and `.claude/skills/chiton-subagent-tasks/SKILL.md` (the `pending_*`/`submit_*` flows). `uninstall` removes both directories and `doctor` reports each one. `--user-scope` is rejected. `--with-hooks` only prints a "not yet implemented" note. Restart Claude Code to pick up the server. |
 | Cursor editor + CLI | `cursor` | `.cursor/mcp.json` | `~/.cursor/mcp.json` | `.cursor/rules/chiton.mdc` | Rule file uses MDC frontmatter with `alwaysApply: true`. The project rule is always written into the repo, even with `--user-scope` (only the MCP config moves). Reload the window to pick up the server. |
-| OpenAI Codex CLI | `codex` | *(none — user-scope only)* | `~/.codex/config.toml` | `AGENTS.md` | MCP config is **always** user-scope (a single TOML file with a `[mcp_servers.chiton]` table); it applies to Codex in every project. Project-scope `.codex/config.toml` is honored only for trusted projects, so the installer does not target it. |
+| OpenAI Codex CLI | `codex` | *(none, user-scope only)* | `~/.codex/config.toml` | `AGENTS.md` | MCP config is **always** user-scope (a single TOML file with a `[mcp_servers.chiton]` table); it applies to Codex in every project. Project-scope `.codex/config.toml` is honored only for trusted projects, so the installer does not target it. |
 | Google Gemini CLI | `gemini-cli` | `.gemini/settings.json` | `~/.gemini/settings.json` | `GEMINI.md` | Rules go to `GEMINI.md` (Gemini CLI auto-loads it, not `AGENTS.md`). Restart Gemini CLI to pick up the server. |
 | OpenCode terminal agent | `opencode` | `opencode.json` | `~/.config/opencode/opencode.json` | `AGENTS.md` | OpenCode's MCP servers live under a top-level `mcp` object (singular, **not** `mcpServers`); the user-scope path is the same on every platform. Restart OpenCode to pick up the server. |
-| Aider pair-programmer | `aider` | *(none — no MCP support)* | *(none)* | `CONVENTIONS.md` | **No native MCP.** The installer only wires `CONVENTIONS.md` (rules block) and adds it to the `read:` list in `.aider.conf.yml`; the rules tell Aider to shell out to the `chiton` CLI instead. Run `chiton build .` first. `--user-scope` is rejected. |
-| Google Antigravity IDE | `antigravity` | *(none — user-scope only)* | `~/.gemini/config/mcp_config.json` | `AGENTS.md` | MCP config is **always** user-scope (a separate file from Gemini CLI's `settings.json`, so they don't collide); it applies to Antigravity in every project. Rules go to `AGENTS.md` (not `GEMINI.md`) to avoid the shared `~/.gemini/GEMINI.md` collision. |
+| Aider pair-programmer | `aider` | *(none, no MCP support)* | *(none)* | `CONVENTIONS.md` | **No native MCP.** The installer only wires `CONVENTIONS.md` (rules block) and adds it to the `read:` list in `.aider.conf.yml`; the rules tell Aider to shell out to the `chiton` CLI instead. Run `chiton build .` first. `--user-scope` is rejected. |
+| Google Antigravity IDE | `antigravity` | *(none, user-scope only)* | `~/.gemini/config/mcp_config.json` | `AGENTS.md` | MCP config is **always** user-scope (a separate file from Gemini CLI's `settings.json`, so they don't collide); it applies to Antigravity in every project. Rules go to `AGENTS.md` (not `GEMINI.md`) to avoid the shared `~/.gemini/GEMINI.md` collision. |
 | GitHub Copilot Chat in VS Code | `copilot-vscode` | `.vscode/mcp.json` | *not supported* | `.github/copilot-instructions.md` | `--user-scope` is rejected. Reload the VS Code window to pick up the server. |
-| GitHub Copilot CLI (terminal agent) | `copilot-cli` | *(none — user-scope only)* | `~/.copilot/mcp-config.json` | `AGENTS.md` | MCP config is **always** user-scope (or `$COPILOT_HOME/mcp-config.json` when `COPILOT_HOME` is set, which *replaces* the whole `~/.copilot` path); it applies to Copilot CLI in every project. The entry carries `type`/`env`/`tools` fields to match Copilot's documented local-server shape. |
+| GitHub Copilot CLI (terminal agent) | `copilot-cli` | *(none, user-scope only)* | `~/.copilot/mcp-config.json` | `AGENTS.md` | MCP config is **always** user-scope (or `$COPILOT_HOME/mcp-config.json` when `COPILOT_HOME` is set, which *replaces* the whole `~/.copilot` path); it applies to Copilot CLI in every project. The entry carries `type`/`env`/`tools` fields to match Copilot's documented local-server shape. |
 
 ### Shared `AGENTS.md` (codex, opencode, antigravity, copilot-cli)
 
@@ -323,7 +323,7 @@ is still installed, the block is kept and `uninstall` notes:
 
 ## Serve transports
 
-`chiton serve` exposes the identical MCP tool surface over three transports. The
+`chiton serve` exposes the same MCP tools over three transports. The
 installers always wire **stdio** (the assistant launches `chiton serve --stdio`);
 the HTTP and Unix transports are for a shared daemon or debugging and are not
 written into any assistant config.
@@ -370,7 +370,7 @@ back to the right workspace.
 |---|---|---|
 | `CHITON_PROJECT_DIR` | every command | Anchor directory: `.chitonrc` is read from here and a relative `graph_path` resolves against it. The plugin sets it to `${CLAUDE_PROJECT_DIR}`. `.chiton/` state (baselines, LLM-rule state, keyfile lookup) resolves here too. Unset = the process working directory. |
 | `CHITON_GRAPH_PATH` | every command | Overrides `graph_path` from `.chitonrc` (the config layer maps any `CHITON_*` name onto its key, e.g. `CHITON_EMBED_PROVIDER`, `CHITON_EMBED_DIM`, `CHITON_SEMANTIC_CONFIDENCE_THRESHOLD`, `CHITON_VECTOR_INDEX`). |
-| `CHITON_PASSPHRASE` | encrypted stores | Passphrase for an encrypted graph (`chiton init` encrypts by default; `--encrypt=false` opts out). Without it, commands prompt interactively — which an assistant-launched server cannot do. `chiton init` prints this reminder. |
+| `CHITON_PASSPHRASE` | encrypted stores | Passphrase for an encrypted graph (`chiton init` encrypts by default; `--encrypt=false` opts out). Without it, commands prompt interactively, which an assistant-launched server cannot do. `chiton init` prints this reminder. |
 | `CHITON_PLAINTEXT_OK` | every command that opens a store | Set to `1` to hide the notice printed when a store has no keyfile. |
 | `CHITON_MCP_TOKEN` | `chiton serve --http` | Pins the bearer token (at least 16 characters) instead of a fresh one per start written to `<graph dir>/mcp-token`. |
 | `CHITON_BIN` | plugin `bin/chiton` / `bin/chiton.cmd` launchers | Explicit path to the real binary, checked before the plugin's pinned download and `PATH`. Setting it also skips the first-run download. |
@@ -383,11 +383,11 @@ back to the right workspace.
 | `CHITON_SLACK_TOKEN` | Bot/user OAuth token (`xoxb-…`). Needs `channels:history` / `groups:history`, plus `users:read` to resolve author names. Required by both subcommands. |
 | `CHITON_SLACK_SIGNING_SECRET` | Slack app signing secret, used to verify every Events API request. `chiton slack serve-events` **refuses to start** without it (or a file named by `--signing-secret-file`). |
 
-`serve-events` binds `127.0.0.1:8445` by default and warns loudly if `--addr`
+`serve-events` binds `127.0.0.1:8445` by default and warns if `--addr`
 points at a wildcard address; Slack needs a public HTTPS Request URL, so put a
 tunnel or reverse proxy in front rather than binding wide. The receiver acks each request immediately and ingests on a single background worker, so Slack's 3-second ack deadline is always met; on Ctrl-C it finishes queued ingests for up to 10 seconds, then cancels what is still running.
 
-**Microsoft Teams** (`chiton teams …` — requires a `-tags msgraph` build)
+**Microsoft Teams** (`chiton teams …`, requires a `-tags msgraph` build)
 
 | Variable | Meaning |
 |---|---|
@@ -402,7 +402,7 @@ warning as the Slack receiver. The receiver acks each request immediately and in
 
 | Variable | Meaning |
 |---|---|
-| `CHITON_GMAIL_TOKEN` | OAuth2 access token with the `gmail.readonly` scope, for `chiton email gmail`. Pure Go — no build tag needed. |
+| `CHITON_GMAIL_TOKEN` | OAuth2 access token with the `gmail.readonly` scope, for `chiton email gmail`. Pure Go, no build tag needed. |
 | `CHITON_OUTLOOK_TENANT_ID`, `CHITON_OUTLOOK_CLIENT_ID`, `CHITON_OUTLOOK_CLIENT_SECRET`, `CHITON_OUTLOOK_USER_ID` | App-only Graph credentials and the mailbox to read, for `chiton email outlook` (requires a `-tags msgraph` build). |
 
 `chiton email ingest` (local `.eml` / maildir / `.mbox`) and `chiton browser
@@ -434,7 +434,7 @@ ingest` read only local files and need no environment at all.
   ```
   At startup the server logs whether `semantic_search` is enabled and the
   embedding count; if no embeddings are indexed it notes
-  `semantic_search disabled (run 'chiton embed')` — the structural tools still
+  `semantic_search disabled (run 'chiton embed')`. The structural tools still
   serve.
 
 ### Wrong `--graph` path (server serves an empty / stale graph)
@@ -452,7 +452,7 @@ different store than the one `chiton build` wrote.
   the resolved store is independent of the server's working directory.
 - Verify with `chiton serve --graph /abs/path/to/store` and watch the startup
   log line for the embedding count.
-- With the **plugin**, there is no recorded `--graph` — the entry is
+- With the **plugin**, there is no recorded `--graph`. The entry is
   `${CLAUDE_PLUGIN_ROOT}/bin/chiton serve --stdio`. What locates the store instead is
   `CHITON_PROJECT_DIR`, which the plugin sets to `${CLAUDE_PROJECT_DIR}`: the
   server reads `.chitonrc` from that directory and resolves a relative
@@ -498,6 +498,6 @@ Re-running `chiton install` is safe. The chiton block inside a rules file is
 replaced in place (not appended), and the `chiton` MCP entry is upserted under
 `mcpServers` (or the Codex `[mcp_servers.chiton]` table / OpenCode `mcp` object)
 while every unrelated key, server, and note is preserved. When an entry already
-existed, the report notes `refreshed existing chiton entry`. `uninstall` is
-likewise surgical — it removes only chiton-owned content and deletes an MCP
+existed, the report notes `refreshed existing chiton entry`. `uninstall`
+likewise removes only chiton-owned content and deletes an MCP
 config file only if doing so would leave it completely empty.

@@ -1,7 +1,7 @@
 # Contributing to chiton
 
-This guide is how the project is built, tested, and extended. Read
-[Contribution status](#contribution-status) first — this document grants no
+This guide covers how to build, test, and extend the project. Read
+[Contribution status](#contribution-status) first. This document grants no
 license.
 
 ## Contribution status
@@ -32,17 +32,16 @@ to Windows, macOS, and Linux without CGo. Only the optional `whisper_cgo` tag
 needs a C compiler.
 
 **`make` is optional.** The Makefile is written for a POSIX shell (`mkdir -p`,
-`command -v`, `[ -n ... ]`), so on Windows run it from Git Bash with GNU make —
-or skip it and run the underlying `go` commands, which are listed alongside each
-target below.
+`command -v`, `[ -n ... ]`), so on Windows run it from Git Bash with GNU make,
+or skip it and run the underlying `go` commands listed beside each target below.
 
 Optional, per feature:
 
 | Tool | Needed for | Fallback |
 |---|---|---|
-| [Ollama](https://ollama.com) on `localhost:11434` | `chiton embed` / `chiton search` — the default provider is `ollama` with model `nomic-embed-text` | `CHITON_EMBED_PROVIDER=hash` is fully offline, and is what CI should use |
+| [Ollama](https://ollama.com) on `localhost:11434` | `chiton embed` / `chiton search`. The default provider is `ollama` with model `nomic-embed-text` | `CHITON_EMBED_PROVIDER=hash` is fully offline, and is what CI should use |
 | A whisper CLI on `PATH` (`whisper`, `whisper-cli`, `whisper-cpp`, `whisper.cpp`) | `chiton meeting transcribe` | `--whisper-bin <path>`, or build with `-tags whisper_cgo` for the in-process backend |
-| `yt-dlp` on `PATH` | YouTube URLs passed to `chiton add-url` | none — other URL kinds (HTML, PDF) need nothing extra |
+| `yt-dlp` on `PATH` | YouTube URLs passed to `chiton add-url` | none, since other URL kinds (HTML, PDF) need nothing extra |
 
 ## Build and test
 
@@ -65,7 +64,7 @@ go test ./...
 
 `make check` is the gate to run before merging anything. `make race` is worth
 running when you touch the watcher, the job queue, the MCP server, or anything
-else that spawns goroutines. There are no `testdata` directories — tests build
+else that spawns goroutines. There are no `testdata` directories. Tests build
 their inputs inline or in `t.TempDir()`, so the suite runs anywhere.
 
 ### Build tags
@@ -73,7 +72,7 @@ their inputs inline or in `t.TempDir()`, so the suite runs anywhere.
 Two optional tags exist. Neither is part of the default build, and neither is
 part of any release artifact.
 
-**`msgraph`** — Microsoft Graph support: `chiton teams fetch`,
+**`msgraph`** enables Microsoft Graph support: `chiton teams fetch`,
 `chiton teams serve-webhook`, and `chiton email outlook`. The Graph SDK links
 request builders for every top-level Graph resource, and kiota registers its
 serialization types through interface tables, so the linker cannot strip the
@@ -91,8 +90,8 @@ mirror the real types exactly and assert the same interfaces, so both build
 configurations compile identically from the outside.
 
 **Run `make check-msgraph` whenever you touch anything under
-`internal/ingest/teams/` or `internal/ingest/email/`** — the default `make check`
-never compiles the tagged files, so they rot silently otherwise. A test whose
+`internal/ingest/teams/` or `internal/ingest/email/`.** The default `make check`
+never compiles the tagged files, so otherwise they break without anyone noticing. A test whose
 subject takes a Graph type belongs in a `//go:build msgraph` file (see
 `internal/ingest/email/outlook_msgraph_test.go`), not in the default test
 binary, or it drags the whole SDK into a test binary the product binary does not
@@ -101,7 +100,7 @@ link.
 `chiton email ingest` (local `.eml` / `.mbox` / maildir) and `chiton email gmail`
 are pure Go and are unaffected by the tag.
 
-**`whisper_cgo`** — in-process whisper.cpp transcription. Needs a C toolchain.
+**`whisper_cgo`** enables in-process whisper.cpp transcription. Needs a C toolchain.
 Without it, `chiton meeting transcribe` shells out to a whisper CLI on `PATH`.
 There is no `make` target; build it with
 `go build -tags whisper_cgo ./cmd/chiton`.
@@ -120,20 +119,22 @@ chiton/
 │   │   └── rules/     the rules themselves, one package per category
 │   ├── mcp/           MCP server and tool handlers (stdio / SSE / unix)
 │   ├── install/       per-assistant installers + the shared markdown manifests
-│   ├── embed/ vector/ embedding providers and the flat-cosine index
+│   ├── embed/ vector/ embedding providers and the vector index (flat scan + HNSW)
 │   └── crypto/ cache/ config/ hooks/ jobs/ report/ bench/
 ├── skills/            assistant-facing skill markdown — single source of truth
 ├── .claude-plugin/    plugin.json + marketplace.json
-├── bin/ scripts/      PATH shim and the prebuilt-binary installers
+├── bin/ scripts/      plugin launchers, the prebuilt-binary installers, and build-plugin-dist.sh
+├── packaging/plugin/  .mcp.json and README for the published plugin
+├── assets/            logo and plugin icon
 ├── embed.go           //go:embed of skills/*/SKILL.md
-└── docs/              PLAN.md, INSTALL.md, MCP.md, SKILL.md, SECURITY.md, BENCHMARK.md
+└── docs/              INSTALL.md, MCP.md, SKILL.md, SECURITY.md, PRIVACY.md, BENCHMARK.md
 ```
 
 Keep `cmd/chiton` thin: it parses flags, opens a store, and calls into
-`internal/`. The `GraphStore` interface is the project's spine — depend on the
-interface, not on the BadgerDB implementation behind it.
+`internal/`. Depend on the `GraphStore` interface, not on the BadgerDB
+implementation behind it.
 
-### `skills/` is shared, so edits there are load-bearing
+### `skills/` is shared by both distribution paths
 
 `skills/graph/SKILL.md`, `skills/subagent-tasks/SKILL.md`, and
 `skills/setup/SKILL.md` are the only copies of that markdown. Root-level
@@ -147,11 +148,11 @@ distribution paths at once:
 - `chiton install`, which writes `.claude/skills/chiton/SKILL.md` and
   `.claude/skills/chiton-subagent-tasks/SKILL.md` from the embedded bytes.
 
-Two consequences. First, the two paths cannot drift — do not add a second copy
-of a skill next to the installer. Second, the frontmatter carries a
+Two consequences. First, the two paths cannot drift apart. Do not add a second
+copy of a skill next to the installer. Second, the frontmatter carries a
 `description:` but deliberately **no `name:`**: in both layouts the directory
 name supplies the skill's name, so hard-coding one would break the other layout.
-After editing a skill, rebuild — the content is compiled in, and a stale binary
+After editing a skill, rebuild. The content is compiled in, and a stale binary
 keeps writing the old text.
 
 `chiton install` writes only the graph and subagent-tasks skills. `setup` is
@@ -167,7 +168,7 @@ Rules live in `internal/analyze/rules/<category>/`, one file per rule, where
 `internal/analyze/rules/architecture/dot_import.go` is a short, complete model to
 copy.
 
-1. **Declare a type and its `Meta()`.** A rule is a struct — usually empty —
+1. **Declare a type and its `Meta()`.** A rule is a struct, usually empty,
    whose `Meta() analyze.Meta` returns its registration data. Every field is
    required except `Languages` (nil means every language) and `Fix`:
 
@@ -212,8 +213,8 @@ copy.
    `architecture_test.go`) and assert the cycle or hub the rule should find.
 
    The house pattern is **one positive test plus at least one negative test that
-   encodes a real false positive** — a case that naively matches but must not
-   fire. Existing examples: an `import "fake"` inside a comment must not count
+   encodes a real false positive**, meaning a case that naively matches but must
+   not fire. Existing examples: an `import "fake"` inside a comment must not count
    toward the import threshold; a package flagged `external: true` must not be
    reported as a circular import; a threshold rule gets both an over- and an
    under-threshold case. Comment-induced false positives are common, so reuse the
@@ -236,9 +237,9 @@ LLM rules are different: they are data, not Go logic. Add one to the `rules`
 slice in `internal/analyze/rules/llm/llm.go` using the `def()` helper. Their
 `Meta` sets `Provenance: analyze.ProvenanceLLM` and `Scope: analyze.FileScope`,
 they implement `Prompt()` instead of a matcher, and the prompt must describe what
-to look for **without** naming a file or embedding input — the code under
-inspection is supplied separately as the task payload, and the findings come back
-tagged `INFERRED` (or `AMBIGUOUS` below the confidence threshold).
+to look for **without** naming a file or embedding input. The task payload
+supplies the code under inspection separately, and the findings come back tagged
+`INFERRED` (or `AMBIGUOUS` below the confidence threshold).
 
 ## Line endings and file modes
 
@@ -249,8 +250,8 @@ shells want it) and explicit LF pins for `bin/chiton` and `scripts/*.sh`.
 If you work on Windows:
 
 - Do not commit CRLF into anything that is not one of those three extensions.
-  Leave `git config core.autocrlf` alone — `.gitattributes` already normalises on
-  commit, and the setting only fights it.
+  Leave `git config core.autocrlf` alone. `.gitattributes` already normalises on
+  commit, and the setting only conflicts with it.
 - `gofmt -l .` **must print nothing.** `make fmt` (`gofmt -w .`) fixes it, and
   `make fmt-check` is what fails the build.
 
@@ -334,16 +335,16 @@ chiton's own flags are not consumed by `claude mcp add`.
 
 `CHITON_PROJECT_DIR` is honoured by `internal/config`: when it is set, `.chitonrc`
 is looked up in that directory and a relative `graph_path` is resolved against it
-rather than against the process working directory. Unset, behaviour is exactly
-what it always was — a relative default stays relative. It exists because
+rather than against the process working directory. Unset, behaviour is
+unchanged, and a relative default stays relative. It exists because
 assistant-launched MCP servers do not reliably start in the workspace root, and a
 server that starts elsewhere would read a different store than `chiton build`
 wrote. Pass it explicitly (`-e CHITON_PROJECT_DIR=/path/to/repo`) if a dev server
 ever seems to be answering from an empty graph.
 
 The HTTP transport requires a per-start bearer token and refuses browser origins that are not allowlisted. `chiton serve --http` and the webhook
-receivers all bind loopback by default and warn loudly when pointed at a wildcard
-address — keep it that way, and read [SECURITY.md](SECURITY.md) and
+receivers all bind loopback by default and print a warning when pointed at a
+wildcard address. Keep it that way, and read [SECURITY.md](SECURITY.md) and
 [docs/SECURITY.md](docs/SECURITY.md) before changing anything in that area.
 
 ## Documentation

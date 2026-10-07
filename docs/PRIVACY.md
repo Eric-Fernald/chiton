@@ -1,4 +1,4 @@
-# chiton Privacy Policy
+# chiton privacy policy
 
 *Effective 2026-10-06. Applies to the chiton binary and the chiton Claude Code
 plugin.*

@@ -1,15 +1,15 @@
-# chiton Security & Privacy
+# chiton security & privacy
 
 chiton reads source code, documentation, images, meeting transcripts and meeting
 audio, Slack conversations, email bodies, local browser history, and web pages
-and PDFs you point it at — any of which can contain secrets, PII, customer data,
+and PDFs you point it at. Any of these can contain secrets, PII, customer data,
 or NDAed material. This document describes how chiton handles that data, what is
 encrypted, what stays on the device, what can leave it, and the threat model it
 is (and is not) designed to defend against.
 
 Throughout, **shipped** means the behaviour is implemented in the current
-codebase; **planned** means it is described in the design (`docs/PLAN.md`) but is
-not yet wired into the binary. We are explicit about the distinction so you can
+codebase; **planned** means it is part of chiton's design but is not yet wired
+into the binary. We are explicit about the distinction so you can
 make an informed trust decision.
 
 > **License note:** chiton is licensed under the PolyForm Strict License 1.0.0
@@ -22,7 +22,7 @@ make an informed trust decision.
 ## 0. What a default install actually does
 
 Most of this document describes optional commands you have to run deliberately.
-This section describes the baseline — an assistant that has chiton installed and
+This section describes the baseline, an assistant that has chiton installed and
 has not been asked to ingest anything.
 
 - The Claude Code plugin's `.mcp.json` launches **`chiton serve --stdio`**
@@ -41,30 +41,30 @@ has not been asked to ingest anything.
   stdin/stdout. Nothing is listening.
 - The store is opened **read-only** unless you pass `--writable`.
 - **19 MCP tools** are registered. 15 are read-only queries against the local
-  (normally encrypted) graph. The 4 write tools — `submit_extraction`,
-  `submit_analysis`, `submit_meeting_links`, `add_url` — are still *listed*, but
-  fail against a read-only store; `add_url` refuses **before** it fetches
-  anything (`internal/ingest/url/ingest.go`).
-- **Exactly one tool causes any socket activity: `semantic_search`.** It POSTs
-  the query text to the configured embedding provider —
-  `http://localhost:11434/api/embed` by default — to turn the question into a
-  vector. Every other read tool is pure local I/O. If you never ran
+  (normally encrypted) graph. The 4 write tools are `submit_extraction`,
+  `submit_analysis`, `submit_meeting_links` and `add_url`. They are still
+  *listed*, but fail against a read-only store; `add_url` refuses **before** it
+  fetches anything (`internal/ingest/url/ingest.go`).
+- **Exactly one tool causes any socket activity: `semantic_search`.** To turn
+  the question into a vector, it POSTs the query text to the configured
+  embedding provider, `http://localhost:11434/api/embed` by default. Every other read tool is pure local I/O. If you never ran
   `chiton embed`, `semantic_search` is disabled outright and even that call does
   not happen.
 - chiton **calls no LLM of its own**, in any mode.
 
-Apart from that first-run download, everything else in this document — Slack,
-email, Teams, browser history, URL ingest — happens only when you run the
+Apart from that first-run download, Slack, email, Teams, browser history, URL
+ingest and everything else in this document happen only when you run the
 corresponding command.
 
 ---
 
 ## 1. Data-handling posture
 
-chiton is a single, statically-linked Go binary that runs **on-device**. The
-graph it builds — code symbols, doc sections, findings, meetings, decisions,
-emails, URLs, and embeddings — is stored locally in a BadgerDB store at
-`graph_path`, **`./chiton-out/graph.kuzu` by default** (the name is historical).
+chiton is a single, statically-linked Go binary that runs **on-device**. It
+stores the graph it builds locally in a BadgerDB store at `graph_path`,
+**`./chiton-out/graph.kuzu` by default** (the name is historical). The graph
+holds code symbols, doc sections, findings, meetings, decisions, emails, URLs,
+and embeddings.
 
 **In the default subagent mode, chiton calls no LLM itself.** Semantic
 extraction, LLM rules, and meeting→code linkage all run through the host
@@ -77,9 +77,9 @@ this work.
 |---|---|
 | Single binary, on-device graph | Shipped |
 | No built-in LLM calls (subagent mode) | Shipped |
-| No telemetry / phone-home / update check | Shipped — see §1.4 |
-| Embeddings can stay local | Shipped — `chiton embed` defaults to local Ollama (`http://localhost:11434`); `CHITON_EMBED_PROVIDER=hash` is fully offline |
-| All network egress is command-triggered except `semantic_search` and the plugin's first-run binary download | Shipped — see §1.1 |
+| No telemetry / phone-home / update check | Shipped. See §1.4 |
+| Embeddings can stay local | Shipped. `chiton embed` defaults to local Ollama (`http://localhost:11434`); `CHITON_EMBED_PROVIDER=hash` is fully offline |
+| All network egress is command-triggered except `semantic_search` and the plugin's first-run binary download | Shipped. See §1.1 |
 
 ### 1.1 Complete egress inventory
 
@@ -87,8 +87,8 @@ chiton can reach eight destinations. Four are direct `net/http` call sites in
 the binary, two go through the Microsoft Graph SDK and its Azure identity
 library, one is a subprocess, and one is the Claude Code plugin's launcher
 script, which runs before the binary exists. Nothing here fires on its own
-schedule — each is triggered by the command, tool, or launch named in the third
-column.
+schedule. The command, tool, or launch named in the third column triggers each
+one.
 
 | Destination | Code | Triggered by | Data sent |
 |---|---|---|---|
@@ -99,7 +99,7 @@ column.
 | `https://login.microsoftonline.com` | `azidentity` (vendored) | The same three commands, to mint a token | **Your Teams/Outlook tenant id, client id, and client secret** |
 | **Any host you name** | `internal/ingest/url/fetch.go` | `chiton add-url`, and the **`add_url` MCP tool on a `--writable` server** | An HTTP GET with a chiton user-agent; receives the page/PDF |
 | `youtube.com` (via the `yt-dlp` subprocess) | `internal/ingest/url/fetch.go` | `chiton add-url` / `add_url` with a YouTube URL | Whatever `yt-dlp` sends; receives the transcript |
-| `https://github.com/Eric-Fernald/chiton/releases/download/<tag>/…`, redirected to GitHub's release-asset CDN (`objects.githubusercontent.com` / `release-assets.githubusercontent.com`) | `bin/chiton`, `bin/chiton.cmd` → `scripts/install-chiton.{sh,ps1}` | **Automatically, the first time the published Claude Code plugin's launcher runs for a given release tag** (MCP server start, or `chiton` from the Bash tool), and whenever you run an install script by hand | A plain unauthenticated GET for one binary, `chiton-<tag>-<os>-<arch>[.exe]`; nothing about you or the workspace. Run by hand, the scripts also fetch the release's `checksums.txt` and, for `latest`, read the redirect of `https://github.com/Eric-Fernald/chiton/releases/latest` |
+| `https://github.com/Eric-Fernald/chiton/releases/download/<tag>/…`, redirected to GitHub's release-asset CDN (`objects.githubusercontent.com` / `release-assets.githubusercontent.com`) | `bin/chiton` and `bin/chiton.cmd`, which call `scripts/install-chiton.{sh,ps1}` | **Automatically, the first time the published Claude Code plugin's launcher runs for a given release tag** (MCP server start, or `chiton` from the Bash tool), and whenever you run an install script by hand | A plain unauthenticated GET for one binary, `chiton-<tag>-<os>-<arch>[.exe]`; nothing about you or the workspace. Run by hand, the scripts also fetch the release's `checksums.txt` and, for `latest`, read the redirect of `https://github.com/Eric-Fernald/chiton/releases/latest` |
 
 Notes that materially change the picture:
 
@@ -115,7 +115,7 @@ Notes that materially change the picture:
 
 - **`semantic_search` is the only egress reachable from the default MCP surface
   without an explicit user command.** It is loopback by default, and
-  `CHITON_EMBED_PROVIDER=hash` removes it entirely — but
+  `CHITON_EMBED_PROVIDER=hash` removes it entirely. But
   `embed.endpoint` / `CHITON_EMBED_ENDPOINT` can redirect it off-device, at
   which point node text and queries go wherever you pointed it. A non-loopback
   `embed.endpoint` from the project's `.chitonrc` is refused, so a cloned
@@ -136,7 +136,7 @@ Notes that materially change the picture:
 
 ### 1.2 Subprocesses
 
-chiton is CGo-free by default, but it is not hermetic — it shells out to three
+chiton is CGo-free by default, but it is not hermetic. It shells out to three
 external programs:
 
 | Program | When | Notes |
@@ -146,7 +146,7 @@ external programs:
 | A whisper CLI | `chiton meeting transcribe` | **Auto-detected from `PATH`**, trying `whisper`, `whisper-cli`, `whisper-cpp`, `whisper.cpp` in order (`internal/ingest/audio/shellout.go`) |
 
 The whisper auto-detection is the one worth a second look before you trust a
-shared machine: chiton runs the first matching name on `PATH` and hands it your
+shared machine. chiton runs the first matching name on `PATH` and hands it your
 meeting audio. It does not verify what that binary is or where it sends data. An
 in-process whisper.cpp backend exists but requires a `-tags whisper_cgo` build.
 
@@ -159,10 +159,10 @@ in-process whisper.cpp backend exists but requires a `-tags whisper_cgo` build.
 | `chiton-out/cluster.json` | Cluster sidecar: every node's label, source URI and community | **Yes**, sealed with AES-256-GCM under a subkey of the store key when a keyfile is present (§2). A sidecar written before encryption was on loads, and is sealed on its next write |
 | `chiton-out/cache.json` | Content-hash cache | **No**: `file://` paths of repository files and their SHA-256, nothing that is not already in the working tree |
 | `.chiton/keyfile.json` | Argon2id salt, KDF parameters, and a verifier tag (HMAC-SHA256 of the key); no key, no passphrase | n/a, but not harmless: the verifier lets anyone holding this file alone test passphrase guesses offline, at Argon2id cost (§2) |
-| `.chiton/hooks.yaml`, `sources.yaml`, `schema_version`, `.gitignore` | Policy files | **No — plaintext**, and `hooks.yaml`/`sources.yaml` are meant to be committed |
-| `.chiton/baselines/<commit>.json`, `.chiton/llm-analyzed.json` | Finding baselines and LLM-rule state | **No — plaintext**. Plaintext on purpose: rule IDs and messages about repository files. |
-| `chiton export --out <file>` | Full graph snapshot, embeddings inlined | **No — plaintext JSON** |
-| OS temp dir | A copy of the browser History DB (`chiton-hist-*`), yt-dlp scratch (`chiton-yt-*`), the install scripts' download scratch (`chiton-*` on Windows, a `mktemp -d` directory elsewhere) | **No** — removed after use |
+| `.chiton/hooks.yaml`, `sources.yaml`, `schema_version`, `.gitignore` | Policy files | **No, plaintext**, and `hooks.yaml`/`sources.yaml` are meant to be committed |
+| `.chiton/baselines/<commit>.json`, `.chiton/llm-analyzed.json` | Finding baselines and LLM-rule state | **No, plaintext**. Plaintext on purpose: rule IDs and messages about repository files. |
+| `chiton export --out <file>` | Full graph snapshot, embeddings inlined | **No, plaintext JSON** |
+| OS temp dir | A copy of the browser History DB (`chiton-hist-*`), yt-dlp scratch (`chiton-yt-*`), the install scripts' download scratch (`chiton-*` on Windows, a `mktemp -d` directory elsewhere) | **No**. Removed after use |
 | `~/.chiton/versions/<tag>/chiton` (`%USERPROFILE%\.chiton\versions\<tag>\chiton.exe`) | The binary the Claude Code plugin's launcher downloaded for each release tag | n/a: a public release binary, no user data. Never cleaned up automatically; earlier tags and the directory itself survive plugin updates and uninstall |
 | `~/.chiton/bin/`, `$CLAUDE_PLUGIN_DATA/bin/` | The binary an install script run by hand put there | n/a: no user data |
 
@@ -175,12 +175,12 @@ keyfile. `chiton init` writes a `.chiton/.gitignore` that keeps everything but
 `graph_path` directory is left alone.
 
 **Outside the project directory:** `chiton install` and `chiton uninstall` write
-assistant configuration into your **home directory**, not just the repo —
+assistant configuration into your **home directory**, not just the repo:
 `~/.codex/config.toml`, `~/.config/opencode/opencode.json`,
 `~/.gemini/settings.json` and `~/.gemini/config/mcp_config.json`,
 `~/.cursor/mcp.json`, and `~/.copilot/` (or `$COPILOT_HOME`). These are MCP
 server registrations and rules files; they contain paths, not secrets. `chiton
-install` for Claude Code additionally writes `.claude/skills/chiton/SKILL.md`
+install` for Claude Code also writes `.claude/skills/chiton/SKILL.md`
 and `.claude/skills/chiton-subagent-tasks/SKILL.md` inside the project.
 
 `.chitonrc` is read from `$CHITON_PROJECT_DIR` (or the working directory) **and
@@ -194,13 +194,13 @@ There is none, and this is checkable rather than merely asserted:
 - No analytics, crash-reporting, or metrics SDK is imported anywhere
   (`go.mod` has no such dependency).
 - There is no version or update check. `chiton version` reads only ldflags and
-  the Go build info embedded in the binary — it is entirely offline. The Claude
+  the Go build info embedded in the binary. It is entirely offline. The Claude
   Code plugin's launcher downloads a binary only for the release tag pinned in
   the installed plugin, and only when that tag's cached copy is missing; it
   never asks whether a newer release exists. Plugin updates come through
   Claude Code's own plugin update mechanism.
 - OpenTelemetry appears in `go.mod` **only** as an indirect dependency of the
-  Microsoft Graph SDK, and no exporter is ever configured — so nothing is
+  Microsoft Graph SDK, and no exporter is ever configured, so nothing is
   emitted even in an `msgraph` build.
 - The eight destinations in §1.1 are the complete set: grepping `internal/` and
   `cmd/` for `http.Client`, `http.Get`, `http.Post`, `http.NewRequest`, and
@@ -211,7 +211,7 @@ There is none, and this is checkable rather than merely asserted:
 
 `chiton dashboard` and `chiton visualize` write self-contained HTML files with
 the graph data inlined. **Both load the vis-network library from
-`https://unpkg.com`.** The binary makes no such request — your *browser* does,
+`https://unpkg.com`.** The binary makes no such request. Your *browser* does,
 when you open the file, which discloses to a CDN that you opened it.
 
 Both pages carry the same restrictive CSP, quoted here in full:
@@ -222,11 +222,11 @@ style-src 'unsafe-inline'; img-src data:; connect-src 'none';
 base-uri 'none'; object-src 'none'
 ```
 
-`connect-src 'none'` is the load-bearing part: the page cannot exfiltrate the
-graph data it embeds even if the CDN script were hostile. Note that `style-src`
-and `img-src` are allowed separately, so `default-src 'none'` does not govern
-them. Still don't open either file on a machine where the inlined graph would be
-sensitive if the CDN were compromised — a CSP constrains the page, not what the
+The directive that matters is `connect-src 'none'`, which stops the page from
+exfiltrating the graph data it embeds even if the CDN script were hostile.
+`style-src` and `img-src` are allowed separately, so `default-src 'none'` does
+not govern them. Still don't open either file on a machine where the inlined graph would be
+sensitive if the CDN were compromised. A CSP constrains the page, not what the
 CDN script can read inside it.
 
 > **Planned, not shipped:** the design calls for a per-source allowlist
@@ -234,7 +234,7 @@ CDN script can read inside it.
 > gitleaks-based secret-scrubbing pass before any remote call, and an
 > `audit.jsonl` log of every remote call. `chiton init` writes a `sources.yaml`
 > template, but **there is no enforcement code, no scrubbing pass, and no audit
-> log in the current binary** — nothing in `internal/` or `cmd/` even reads
+> log in the current binary**. Nothing in `internal/` or `cmd/` even reads
 > `sources.yaml` back. Treat those as roadmap items, not active controls.
 
 ---
@@ -245,10 +245,10 @@ CDN script can read inside it.
 
 The **BadgerDB graph store is encrypted at rest** when a keyfile is present. The
 store is opened with Badger's native encryption (`WithEncryptionKey`, plus the
-required non-zero `IndexCacheSize` of 64 MiB) — see
+required non-zero `IndexCacheSize` of 64 MiB). See
 `internal/graph/store/badger/store.go` (`applyEncryption`). This covers the LSM
-tree, value log, and all node/edge/embedding data Badger persists — which, once
-you have ingested email, Slack, or transcripts, is where the sensitive text
+tree, value log, and all node/edge/embedding data Badger persists. Once you
+have ingested email, Slack, or transcripts, that is where the sensitive text
 lives. Badger encrypts with AES-256 in CTR mode (`y.XORBlock` in
 `badger/v4`), which keeps the contents confidential but does not authenticate
 them: it does not detect tampering with the files on disk.
@@ -269,8 +269,8 @@ them: it does not detect tampering with the files on disk.
 Encryption keys are derived from a **user passphrase** via **Argon2id**; the
 passphrase itself is **never written to disk**. The on-disk
 `.chiton/keyfile.json` holds the salt, KDF parameters and a passphrase
-verifier — no key and no passphrase, though the verifier allows offline
-guessing (below).
+verifier. It holds no key and no passphrase, though the verifier allows
+offline guessing (below).
 
 | Parameter | Default (`DefaultKeyFile`) | Notes |
 |---|---|---|
@@ -284,7 +284,7 @@ guessing (below).
 
 The keyfile also stores a verifier, an HMAC-SHA256 tag of the derived key over a fixed label, so a mistyped passphrase fails with `wrong passphrase` before any store is opened or created. The verifier is not secret, though: anyone holding `keyfile.json` alone can now test passphrase guesses offline, where before they also needed the encrypted store. Each guess still costs a full Argon2id run, so passphrase strength is what protects you; keep the keyfile as private as the store. Keyfiles from before this change gain a verifier on the first successful open.
 
-The derivation is deterministic: the same passphrase + same keyfile always
+The derivation is deterministic: the same passphrase and keyfile always
 produce the same 32-byte key, so the encrypted store re-opens reliably. A loaded
 keyfile is validated against the floors above so a corrupt or tampered keyfile
 fails with a clear error rather than silently deriving a weak key. The keyfile is
@@ -307,8 +307,8 @@ chiton init --encrypt=false   # no keyfile; graph stored in plaintext
 ```
 
 After `init`, subsequent commands obtain the passphrase from the
-`CHITON_PASSPHRASE` environment variable, or — if unset and a terminal is
-attached — by prompting interactively. The interactive prompt uses
+`CHITON_PASSPHRASE` environment variable, or, if unset and a terminal is
+attached, by prompting interactively. The interactive prompt uses
 `golang.org/x/term`'s `ReadPassword`, so **the passphrase is never echoed** and
 never reaches the terminal's scrollback. In CI / non-interactive environments you
 **must** set `CHITON_PASSPHRASE` or the command fails with a clear error:
@@ -332,7 +332,7 @@ exists, chiton opens the old store with a key and Badger rejects it.
 
 ### Threats this addresses
 
-Encryption at rest is aimed squarely at **data-at-rest exposure**:
+Encryption at rest targets **data-at-rest exposure**:
 
 - **Laptop theft / lost device:** an attacker with the powered-off disk cannot
   read graph contents without the passphrase.
@@ -370,10 +370,10 @@ Three ingest paths create `person` nodes, and all three tag them:
 - **Email.** `chiton email ingest` / `gmail` / `outlook` create `person` nodes
   for the sender and every recipient, also `pii: true`, **keyed on the
   lowercased literal email address** and sharing the meeting `person://` scheme
-  (`internal/ingest/email/email.go`). The address is additionally stored in
+  (`internal/ingest/email/email.go`). The address is also stored in
   `attrs.email`. So the graph holds real addresses, not just display names.
 
-### Where the gate applies — read this part
+### Where the gate applies
 
 Redaction happens at two levels.
 
@@ -407,8 +407,8 @@ their own `include_pii` argument whether or not the server flag is set:
 - `search_meetings` returns each meeting with its decisions and linked code
   symbols, but **participant names are omitted** unless `include_pii: true` is
   passed; by default only a participant *count* is returned. When `include_pii`
-  is false, a query is also **not** matched against the participant list —
-  returning a meeting because a queried name attended would itself disclose
+  is false, a query is also **not** matched against the participant list.
+  Returning a meeting because a queried name attended would itself disclose
   attendance (`matches` / `public`).
 - `decisions_about` drops **action-item assignee names** unless `include_pii` is
   set. (There is no separate "action-item tool"; the flag lives here.)
@@ -423,25 +423,26 @@ the source.
 
 > **Also out of scope today:** PII tagging covers `person` nodes only. Free-text
 > PII inside transcript bodies, email bodies, and doc sections is **never
-> detected or redacted** — meeting transcript content, titles, decision
+> detected or redacted**. Meeting transcript content, titles, decision
 > summaries, and email bodies are always searchable, which is the point of the
 > tool. The design mentions detecting email addresses and phone numbers in body
 > text; that is not shipped.
 
 ### Browser history
 
-`chiton browser ingest` reads **only page metadata** — `url`, `title`,
-`visit_count`, `last_visit_time` from the `urls` table — and it reads them from
+`chiton browser ingest` reads **only page metadata**: `url`, `title`,
+`visit_count`, `last_visit_time` from the `urls` table. It reads them from
 a **copy** of the browser's `History` SQLite file placed in a temp directory and
 deleted afterwards (`internal/ingest/browser/history.go`), using a pure-Go
 driver. Cookies, `Login Data`, saved credentials, and form autofill stores are
-**never opened**, and **no page is fetched** — the graph gets the title you saw,
+**never opened**, and **no page is fetched**. The graph gets the title you saw,
 not the page you saw. Chrome, Edge, and Brave profiles are auto-detected.
 
 By default stored URLs are `scheme://host/path`: userinfo, query string and fragment are removed before anything is written, because they carry OAuth codes, reset and magic-link tokens and presigned-URL signatures. `--keep-query` keeps the query and fragment (userinfo is always dropped). The first ingest after upgrading deletes nodes an older version stored with a query; run `chiton cluster` afterwards so `cluster.json` drops their labels. Tokens embedded in the **path** (for example `/reset/<token>`) are not detected.
 
-That still means your browsing history — every URL and title, including private
-ones — is in the graph as `url` nodes, ungated, retrievable by any read tool.
+Your browsing history is still in the graph as `url` nodes, ungated and
+retrievable by any read tool. That covers every URL and title, private ones
+included.
 
 ---
 
@@ -455,9 +456,9 @@ persisted to disk, written to a config file, or logged.
 
 | Variable | Used by | Sent to |
 |---|---|---|
-| `CHITON_PASSPHRASE` | Every command that opens an encrypted store | Nowhere — derived locally into an AES key |
+| `CHITON_PASSPHRASE` | Every command that opens an encrypted store | Nowhere. chiton derives it locally into an AES key |
 | `CHITON_SLACK_TOKEN` | `chiton slack fetch`, `slack serve-events` | `slack.com` as `Authorization: Bearer …` |
-| `CHITON_SLACK_SIGNING_SECRET` | `chiton slack serve-events` (or `--signing-secret-file`) | Nowhere — used locally to verify inbound request signatures |
+| `CHITON_SLACK_SIGNING_SECRET` | `chiton slack serve-events` (or `--signing-secret-file`) | Nowhere. chiton uses it locally to verify inbound request signatures |
 | `CHITON_GMAIL_TOKEN` | `chiton email gmail` | `gmail.googleapis.com` as `Authorization: Bearer …` |
 | `CHITON_OUTLOOK_CLIENT_SECRET` (with `_TENANT_ID`, `_CLIENT_ID`, `_USER_ID`) | `chiton email outlook` (`msgraph` builds only) | `login.microsoftonline.com` to mint a token |
 | `CHITON_TEAMS_CLIENT_SECRET` (with `_TENANT_ID`, `_CLIENT_ID`, `_USER_ID`, `_CLIENT_STATE`) | `chiton teams fetch`, `teams serve-webhook` (or `--client-state-file`) (`msgraph` builds only) | `login.microsoftonline.com` to mint a token; `CLIENT_STATE` stays local and validates inbound notifications |
@@ -465,7 +466,8 @@ persisted to disk, written to a config file, or logged.
 Handling properties worth verifying yourself:
 
 - Each token/secret is sent **only to its own vendor's API**, as an
-  `Authorization` header — never as a URL parameter, never to a third party.
+  `Authorization` header. It is never sent as a URL parameter or to a third
+  party.
 - No secret is written to stdout, stderr, or any log. Error paths name the
   **variable** ("an OAuth token is required (set `CHITON_SLACK_TOKEN`)"), never
   its value.
@@ -512,9 +514,9 @@ The HTTP/SSE transport has four controls and **no TLS**:
   stops a web page from calling tools.
 - **No wildcard CORS.** The server never sends `Access-Control-Allow-Origin: *`.
 
-Because there is no TLS, the token and the entire graph — code, findings,
-meetings, emails, browser history, PII — cross the network unencrypted if you
-bind off loopback. It binds loopback by default and prints
+Because there is no TLS, the token and the entire graph cross the network
+unencrypted if you bind off loopback. That includes code, findings, meetings,
+emails, browser history, and PII. It binds loopback by default and prints
 a loud stderr warning when asked to bind a wildcard address (`0.0.0.0`, `::`, or
 an empty host), but it will not stop you. Do not expose it, and be aware that a
 loopback bind is still reachable by every local process (any process that can
@@ -534,7 +536,7 @@ context, by any page that can talk to `127.0.0.1`.
   interfaces. They now default to `127.0.0.1` and warn on a wildcard bind. Both
   are designed to sit behind a tunnel or reverse proxy that terminates TLS.
 
-### 5.3 `add_url` — assistant-driven fetching
+### 5.3 `add_url` and assistant-driven fetching
 
 On a `--writable` server, `add_url` lets the assistant make chiton fetch **any
 http/https URL**. This is the widest capability chiton exposes over MCP. It
@@ -545,7 +547,7 @@ likewise confined to the project root and skips symlinked files.
 Shipped mitigations (`internal/ingest/url/`):
 
 - The **read-only check runs before the fetch**, so a default (non-`--writable`)
-  stdio server makes no request at all — it returns an error instead.
+  stdio server makes no request at all. It returns an error instead.
 - A dial-time guard (`net.Dialer.Control`) checks the address actually connected
   to, on the first request and on every redirect. It refuses loopback, RFC 1918,
   link-local (cloud metadata such as `169.254.169.254`), CGNAT `100.64/10`,
@@ -560,7 +562,7 @@ Shipped mitigations (`internal/ingest/url/`):
 - Over MCP `add_url` accepts only http/https, so local reads stay CLI-only
   (`chiton add-url`).
 
-Acknowledged residual gaps, stated plainly:
+Acknowledged residual gaps:
 
 - `add_url` connects directly and ignores `HTTP(S)_PROXY`.
 - **The `yt-dlp` branch bypasses the SSRF guard entirely.** A YouTube-shaped
@@ -568,14 +570,13 @@ Acknowledged residual gaps, stated plainly:
   check.
 
 If you run `chiton serve --writable`, you are trusting the assistant with those
-capabilities. The read-only default exists precisely so that you have to opt in.
+capabilities. The read-only default exists so that you have to opt in.
 
 ---
 
 ## 6. Threat model
 
-Adapted from `docs/PLAN.md` ("Security, Privacy & Threat Model"). Mitigation
-status is labelled **shipped** or **planned**.
+Mitigation status is labelled **shipped** or **planned**.
 
 ### In scope
 
@@ -587,7 +588,7 @@ status is labelled **shipped** or **planned**.
 | Plaintext sidecars / exports leaking the same data | Sealed under a key derived from the store key (§2) | **Partly mitigated:** `cluster.json` and `hnsw.idx` are sealed for encrypted stores; `cache.json`, baselines, `llm-analyzed.json` and `chiton export` output are plaintext |
 | Meeting/email PII surfaced by the two meeting tools | `person` nodes tagged `pii=true`, hidden unless `include_pii` | Shipped: redacted by default in every read tool; `--include-pii` opts out |
 | A symlink in an indexed repo pointing outside it (e.g. `notes.md -> ~/.ssh/id_rsa`) pulling its target into the graph and `pending_extractions` | `build`, `sync`, and `sync watch` index regular files only; symlinks and junctions are skipped at the walk and at the read | **Shipped** (`analyze` via Section D) |
-| Accidental upload of secrets to a remote LLM | Subagent mode = no built-in LLM calls; per-source allowlist + secret scrubbing | **Partly:** no built-in LLM egress (shipped); allowlist/scrubbing **planned** |
+| Accidental upload of secrets to a remote LLM | Subagent mode makes no built-in LLM calls; per-source allowlist + secret scrubbing | **Partly:** no built-in LLM egress (shipped); allowlist/scrubbing **planned** |
 | SSRF via assistant-driven `add_url` | Read-only default; a dial-time guard on the address actually connected to (first request and every redirect); `hostAllowed` on literal IPs; no proxy; 10-redirect cap | **Shipped; the `yt-dlp` branch is a known gap** (§5.3) |
 | Unauthenticated reader on the MCP HTTP port | Per-start bearer token, Origin allowlist, JSON-only POSTs with an 8 MiB cap, no `Access-Control-Allow-Origin: *`; loopback default + wildcard-bind warning | **Shipped** (no TLS; §5.1) |
 | Unauthenticated Teams/Slack webhook notifications | `clientState` and signing-secret checks now required to start | **Shipped** (previously fail-open for Teams) |
@@ -599,7 +600,7 @@ status is labelled **shipped** or **planned**.
 ### Out of scope (v1)
 
 - **Multi-tenant isolation.** chiton is single-user, single-machine.
-- **Network attackers on the MCP socket.** See §5.1 — loopback default, wildcard
+- **Network attackers on the MCP socket.** See §5.1: loopback default, wildcard
   warning, and a bearer token, but **no TLS**. Do not expose it.
 - **Malicious or substituted subprocesses.** The whisper CLI is auto-detected
   from `PATH`; `yt-dlp` and `git` are resolved the same way. chiton does not pin
@@ -620,12 +621,12 @@ status is labelled **shipped** or **planned**.
 - **Side-channel attacks** on the AES-NI implementation. chiton relies on the Go
   standard library's constant-time crypto.
 
-### Resource & cost controls — planned
+### Planned resource & cost controls
 
-`docs/PLAN.md` specifies per-call / per-session / lifetime LLM budget limits,
+The design calls for per-call / per-session / lifetime LLM budget limits,
 disk and memory caps, and automatic fallback from daemon to subagent mode when a
-budget is hit. **None of these are enforced in the current binary** — they are
-unnecessary today precisely because chiton makes no LLM calls of its own. Treat
+budget is hit. **None of these are enforced in the current binary**. They are
+unnecessary today because chiton makes no LLM calls of its own. Treat
 the budget knobs as roadmap, relevant only if/when a daemon LLM mode ships.
 
 ### Configuration that exists today
@@ -642,8 +643,8 @@ policy surface described in the design is **not** parsed for enforcement yet.
 
 ## 7. Reporting a vulnerability
 
-If you discover a security issue in chiton, please report it **privately** —
-**do not** open a public issue.
+If you discover a security issue in chiton, please report it **privately**.
+**Do not** open a public issue.
 
 - Preferred: open a private **GitHub Security Advisory** on the repository
   (Security → Advisories → Report a vulnerability), or

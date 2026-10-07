@@ -1,4 +1,4 @@
-# chiton — Claude Code plugin
+# chiton Claude Code plugin
 
 This branch is generated. Each chiton release adds one commit, assembled from
 the release tag of <https://github.com/Eric-Fernald/chiton>; do not edit it by

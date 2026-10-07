@@ -17,4 +17,3 @@ scripts/*.sh text eol=lf
 
 # Keep generated/vendored noise out of language statistics and diffs.
 go.sum linguist-generated=true
-docs/PLAN.md linguist-documentation=true

@@ -1,9 +1,9 @@
-# Security Policy
+# Security policy
 
 chiton is licensed under the PolyForm Strict License 1.0.0 with additional
 permissions (see [LICENSE](LICENSE)). This file covers one thing: **how to report a vulnerability**. The threat model,
 encryption-at-rest design, PII handling, and full data-handling posture live in
-[docs/SECURITY.md](docs/SECURITY.md) — read that first if you want to know what
+[docs/SECURITY.md](docs/SECURITY.md). Read that first if you want to know what
 chiton defends against and what it explicitly does not.
 
 ## Supported versions
@@ -14,12 +14,12 @@ current tip of `main` is supported.
 | Version | Supported |
 |---|---|
 | `main` (latest commit) | Yes |
-| Any older commit or branch | No — reproduce against `main` before reporting |
+| Any older commit or branch | No. Reproduce against `main` before reporting |
 
 ## Reporting a vulnerability
 
 **Report privately. Do not open a public issue**, and do not describe the
-problem in a pull request, commit message, or discussion thread — those are
+problem in a pull request, commit message, or discussion thread. Those are
 visible to everyone with repository access.
 
 - **Preferred:** open a private GitHub Security Advisory on this repository
@@ -32,16 +32,16 @@ visible to everyone with repository access.
 
 The more of this you can supply, the faster a fix lands:
 
-- **Version and commit** — output of `chiton version`, or the commit SHA you
+- **Version and commit.** The output of `chiton version`, or the commit SHA you
   built from, plus whether the binary was built with `-tags msgraph` or
   `-tags whisper_cgo`.
-- **Environment** — OS and architecture, and how chiton was invoked (CLI,
+- **Environment.** OS and architecture, and how chiton was invoked (CLI,
   `chiton serve --stdio`, `--http`, a webhook receiver, an assistant plugin).
-- **Description** — what the issue is and what an attacker gains from it.
-- **Reproduction** — minimal steps, a proof of concept, or a failing test. If
+- **Description.** What the issue is and what an attacker gains from it.
+- **Reproduction.** Minimal steps, a proof of concept, or a failing test. If
   the repro needs real data, describe the shape of the data rather than
   attaching secrets, source code, or PII.
-- **Impact assessment** — your view of severity, if you have one.
+- **Impact assessment.** Your view of severity, if you have one.
 
 Before filing, skim the *Out of scope* section of
 [docs/SECURITY.md](docs/SECURITY.md) so you do not spend effort on a risk that

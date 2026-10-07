@@ -6,18 +6,13 @@
 
 Like the mollusk it's named after, chiton is many independent plates flexing as
 one organism. AST extraction, semantic embeddings, Leiden clustering, a
-deterministic + LLM rule engine, and an MCP server, fused into a single Go
+deterministic + LLM rule engine, and an MCP server, built into a single Go
 binary that gives AI assistants a graph-grounded memory of your codebase.
 
-chiton is an **on-device knowledge-graph engine**. It walks through your code, 
-docs, and images, extracts a typed graph (symbols, files, calls, imports, doc 
-sections, concepts, findings…), stores it locally, clusters it, and serves precise,
+chiton is an **on-device knowledge-graph engine**. It walks through your code,
+docs, and images, extracts a typed graph (symbols, files, calls, imports, doc
+sections, concepts, findings…), stores it locally, clusters it, and serves
 relationship-aware neighborhoods to assistants over the Model Context Protocol.
-The point isn't cheaper context — measured against `grep`+`read` it lands roughly
-at par, and it is only dramatically cheaper than dumping whole files (see
-[docs/BENCHMARK.md](docs/BENCHMARK.md) for the numbers). The point is *better*
-context: the model gets exactly what's relevant instead of a haystack of files
-to grep through.
 
 ---
 
@@ -26,17 +21,17 @@ to grep through.
 Chiton answers structural and navigational questions with typed edges
 (`CALLS`, `IMPORTS`, `CONTAINS`, `DESCRIBES`, `VIOLATES`, …) rather than raw file
 dumps. Ask "what does `X` depend on?" or "how are `A` and `B` connected?" and the
-assistant gets a small, structured subgraph — precise, with little attention
-dilution and no manual cross-referencing. On raw token count it is dramatically
-cheaper than dumping whole files and roughly on par with `grep`+`read` (see
-[docs/BENCHMARK.md](docs/BENCHMARK.md) for honest, measured numbers); the real
-gain is *better* context, not fewer tokens.
+assistant gets a small, structured subgraph instead of whole files to
+cross-reference. On raw token count it is much cheaper than dumping whole files
+and roughly on par with `grep`+`read` (see [docs/BENCHMARK.md](docs/BENCHMARK.md)
+for measured numbers). The gain is *better* context, not fewer tokens.
 
 Every node and edge carries **provenance** and **confidence**:
 
-- `EXTRACTED` (confidence 1.0) — structural facts from the parser. Ground truth.
-- `INFERRED` — LLM-extracted concepts and findings. Useful hints.
-- `AMBIGUOUS` — below the confidence threshold; hidden by default.
+- `EXTRACTED` (confidence 1.0) marks structural facts from the parser. These are
+  ground truth.
+- `INFERRED` marks LLM-extracted concepts and findings. Treat them as hints.
+- `AMBIGUOUS` marks results below the confidence threshold, hidden by default.
 
 When sources conflict, prefer `EXTRACTED` facts over `INFERRED` ones.
 
@@ -52,152 +47,116 @@ When sources conflict, prefer `EXTRACTED` facts over `INFERRED` ones.
                     rule engine          betweenness / god nodes
 ```
 
-- **Single binary, zero runtime services.** Pure-Go throughout — BadgerDB for the
-  graph store (native AES-256 encryption at rest), a pure-Go vector index (exact
-  flat scan, or an HNSW graph for large stores, built on every core and saved to
-  disk),
-  an in-process job queue, and a from-scratch Leiden implementation. No Redis, no
-  CGo, no external database.
+- **Single binary, no runtime services.** The graph store (BadgerDB, AES-256
+  encrypted at rest), the vector index, the job queue, and Leiden clustering all
+  run in-process. There is no Redis, CGo, or external database to set up.
 - **chiton never calls an LLM itself.** Semantic extraction and LLM rules run
-  through your *host assistant's* subagents: chiton emits schema-pinned task
-  specs, the assistant runs them, and the structured results are written back.
-  No API key, no extra spend over your existing subscription. (A direct
-  daemon-mode LLM path is planned but not yet shipped.)
+  through your *host assistant's* subagents: chiton emits task specs, the
+  assistant runs them, and chiton writes the structured results back. It needs
+  no API key and costs nothing beyond your existing subscription.
 - **Incremental by default.** A SHA-256 content cache skips unchanged files;
   live sync re-indexes only what changed and re-clusters just the touched
   neighborhood.
 
-## Requirements
-
-- **Go 1.25.5 or newer** to build from source (`go.mod` pins `toolchain go1.26.4`, which
-  any recent Go downloads automatically).
-- **Git 2.30 or newer** for `sync git`, the git hooks, and `analyze --diff` /
-  `diff_findings` ref resolution, which pass `--end-of-options` to git.
-- **Optional: [Ollama](https://ollama.com)** for local embeddings (default model
-  `nomic-embed-text`, served at `http://localhost:11434`). Set
-  `CHITON_EMBED_PROVIDER=hash` for a deterministic offline/CI embedder that needs
-  no model server.
-- **Optional: an MCP-capable assistant** (Claude Code, GitHub Copilot in VS
-  Code) to consume the graph and run extraction subagents.
-
 ## Install
 
-The Claude Code plugin fetches the binary for your machine on first use (see
-[Use it as a Claude Code plugin](#use-it-as-a-claude-code-plugin)), so plugin
-users can skip this section. For a standalone binary, use any of these:
-
-- **Prebuilt release.** `scripts/install-chiton.sh` (`scripts/install-chiton.ps1`
-  on Windows) downloads the release asset for the host OS/arch from the
-  release's download URL, verifies its SHA-256 against the release's
-  `checksums.txt`, and installs into `~/.chiton/bin`. It uses no GitHub API and
-  no credentials. Releases cover linux and darwin (amd64, arm64) and
-  windows/amd64; Windows on arm64 gets the amd64 binary, which runs under
-  emulation. No release has been cut yet, so until then use one of the routes
-  below.
-- **`go install`:**
-
-  ```sh
-  go install github.com/Eric-Fernald/chiton/cmd/chiton@latest
-  ```
-
-- **From source:**
-
-  ```sh
-  git clone https://github.com/Eric-Fernald/chiton.git
-  cd chiton
-  make build              # or: go build ./cmd/chiton
-  ```
-
-`chiton --help` lists every subcommand.
-
-Microsoft Graph support — `chiton teams fetch`, `chiton teams serve-webhook`,
-and `chiton email outlook` — sits behind the `msgraph` build tag and is **not**
-in the default build or in any release artifact. The Graph SDK's generated
-request builders cost roughly 120 MB for the two API calls chiton makes through
-them (a stripped default `windows/amd64` binary is 24.0 MB; with the tag it is
-144.0 MB), so they are opt-in:
-
-```sh
-make build-msgraph      # or: go build -tags msgraph ./cmd/chiton
-```
-
-Without the tag those three commands still appear in `--help` and fail with a
-message telling you to rebuild. Everything else is unaffected, including
-`chiton email ingest` and `chiton email gmail`.
-
-Other useful targets: `make check` (gofmt + vet + test), `make check-msgraph`
-(keeps the tag-gated path compiling and passing), and `make release`, which
-cross-compiles the release binaries into `dist/` and writes
-`dist/checksums.txt` — the install scripts refuse a binary that file omits.
-
-## Use it as a Claude Code plugin
-
-The repository doubles as a Claude Code plugin and as a single-plugin
-marketplace, so Claude Code can install it in two commands:
+### As a Claude Code plugin
 
 ```sh
 claude plugin marketplace add Eric-Fernald/chiton
 claude plugin install chiton@chiton-marketplace
 ```
 
-The marketplace entry points at the `plugin-dist` branch, not at `main`. Each
-release adds one commit to that branch holding the assembled plugin: the
-manifest, the skills, the launchers, and the release it pins (`release/tag` and
-that release's `release/checksums.txt`). It carries no binaries. The branch
-does not exist until the first release is cut, so until then `plugin install`
-fails.
+Then run `/chiton:setup` in a project to build its graph.
 
-**The plugin downloads one binary on first use.** Its MCP server runs
-`${CLAUDE_PLUGIN_ROOT}/bin/chiton serve --stdio`. On Windows that command
-resolves to `bin/chiton.cmd`; on Linux and macOS it runs the `bin/chiton` sh
-launcher. The first time it runs, the launcher downloads the pinned release's
-binary for this OS and architecture (about 25 MB) from the GitHub release,
-checks its SHA-256 against the `checksums.txt` that came with the plugin, and
-caches it in `~/.chiton/versions/<tag>/`. Later launches use the cache, and a
-plugin update to a new release downloads that release's binary once. Linux and
-macOS need `curl` or `wget` plus `sha256sum` or `shasum`; Windows uses the
-built-in PowerShell. Windows on arm64 gets the amd64 binary, which runs under
-emulation.
+The plugin ships without the chiton binary. The first time its MCP server
+starts, it downloads the binary for your OS and architecture (about 25 MB) from
+the matching GitHub release, checks it against SHA-256 checksums that come with
+the plugin, and caches it in `~/.chiton/versions/<version>/`. Later starts use
+the cache. On Linux and macOS this needs `curl` or `wget` plus `sha256sum` or
+`shasum`; Windows uses the built-in PowerShell. If that first start times out
+while the download runs, reconnect with `/mcp` once it finishes.
 
-The first start waits for that download before the server answers. On a slow
-link it can outlast Claude Code's MCP startup timeout; once the download
-finishes, reconnect with `/mcp` or `/reload-plugins` and the next launch uses
-the cache. If the download fails (offline, say), the launcher falls back to
-`chiton` on `PATH`, then `$CLAUDE_PLUGIN_DATA/bin`, then `~/.chiton/bin`;
-`/chiton:setup` walks through installing one. The plugin needs a local
-filesystem, so it installs in Claude Code only, not in claude.ai or Cowork.
+The plugin provides:
 
-What the plugin provides:
-
-- **Three skills** — `/chiton:graph` (when to reach for the graph instead of
+- **Three skills:** `/chiton:graph` (when to reach for the graph instead of
   grep), `/chiton:subagent-tasks` (semantic extraction, LLM rules, meeting→code
   linkage), and `/chiton:setup` (first-run install, build, verify).
-- **The MCP server**, read-only over stdio by default. The four write tools
+- **The MCP server**, read-only by default. The four write tools
   (`submit_extraction`, `submit_analysis`, `submit_meeting_links`, `add_url`)
   report themselves unavailable until you run `chiton serve --writable` or use
   the CLI write path.
-- **`bin/` shims** that put `chiton` on the Bash tool's `PATH`, so the assistant
-  can run CLI commands even when the binary lives somewhere your own `PATH`
-  does not cover.
+- **A `chiton` command** on the assistant's shell `PATH`, so it can run CLI
+  commands even when the binary is not on yours.
 
-The plugin's MCP entry sets `CHITON_PROJECT_DIR` to the Claude Code project
-directory. chiton anchors `.chitonrc` lookup and a relative `graph_path` to that
-directory instead of to the server process's working directory — which is what
-keeps an assistant-launched server reading the same store `chiton build` wrote.
+The plugin works in Claude Code only, not in claude.ai or Cowork, because chiton
+needs a local filesystem.
 
-### Plugin or `chiton install`?
+### Standalone binary
+
+Prebuilt binaries cover Linux and macOS (amd64, arm64) and Windows (amd64;
+Windows on Arm runs it under emulation). Download one from the
+[releases page](https://github.com/Eric-Fernald/chiton/releases), or let the
+install script pick the right one and verify its checksum:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Eric-Fernald/chiton/main/scripts/install-chiton.sh | sh
+```
+
+```powershell
+irm https://raw.githubusercontent.com/Eric-Fernald/chiton/main/scripts/install-chiton.ps1 -OutFile install-chiton.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File install-chiton.ps1
+```
+
+Both install into `~/.chiton/bin` and print the line to add to your `PATH`.
+With Go 1.25.5 or newer you can also build it yourself:
+
+```sh
+go install github.com/Eric-Fernald/chiton/cmd/chiton@latest
+```
+
+`chiton --help` lists every subcommand.
+
+### Other assistants
+
+`chiton install` registers chiton with nine assistants, Claude Code included.
+See [Assistant support](#assistant-support).
 
 | | plugin | `chiton install` |
 |---|---|---|
 | Assistants | Claude Code only | nine, including Claude Code |
-| Setup | two commands, versioned through the marketplace | run per repo from a working binary |
-| Writes into your repo | nothing | `.mcp.json` (or the assistant's equivalent), a rules block, and — for Claude Code — skills |
+| Setup | two commands, updated through the marketplace | run per repo from an installed binary |
+| Writes into your repo | nothing | `.mcp.json` (or the assistant's equivalent), a rules block, and, for Claude Code, skills |
 | Skills | `/chiton:graph`, `/chiton:subagent-tasks`, `/chiton:setup` | Claude Code only: `chiton` and `chiton-subagent-tasks` |
 
-Both paths read the same skill markdown, embedded from the repository's
-`skills/` directory, so their content cannot drift apart. They are not mutually
-exclusive, but running both in one repo gives Claude Code two copies of the same
+You can use both in one repo, but Claude Code then gets two copies of the same
 guidance.
+
+### Requirements
+
+- **Git 2.30 or newer** for `sync git`, the git hooks, and `analyze --diff` /
+  `diff_findings`.
+- **Optional: [Ollama](https://ollama.com)** for local embeddings (default model
+  `nomic-embed-text` at `http://localhost:11434`). Set
+  `CHITON_EMBED_PROVIDER=hash` for an offline embedder that needs no model
+  server.
+- **Optional: an MCP-capable assistant** to query the graph and run extraction
+  subagents.
+
+### Microsoft Teams and Outlook
+
+`chiton teams fetch`, `chiton teams serve-webhook`, and `chiton email outlook`
+use Microsoft Graph, whose SDK adds about 117 MB to the binary, so release
+binaries leave it out. Those commands print a message asking you to rebuild. To
+use them, build from a clone with the `msgraph` tag:
+
+```sh
+git clone https://github.com/Eric-Fernald/chiton.git
+cd chiton
+make build-msgraph      # or: go build -tags msgraph ./cmd/chiton
+```
+
+`chiton email ingest` and `chiton email gmail` work in every build.
 
 ## Quickstart
 
@@ -210,8 +169,7 @@ chiton query Server         # look up a node and its neighborhood from the CLI
 chiton install              # register chiton's MCP server + rules with detected assistants
 ```
 
-Then point your assistant at the MCP server (a `.mcp.json` is written by
-`chiton install`) and ask architecture questions — it will call chiton's tools
+Then ask your assistant architecture questions. It will call chiton's tools
 instead of grepping. To enable natural-language search:
 
 ```sh
@@ -219,22 +177,26 @@ chiton embed                # embed symbols/docs/concepts (Ollama by default)
 chiton search "where do we handle auth?"
 ```
 
+`chiton init` encrypts the graph with a passphrase. An assistant-launched server
+cannot prompt for it, so export `CHITON_PASSPHRASE` in the environment that
+starts your assistant (see [Encryption at rest](#encryption-at-rest)).
+
 ## CLI reference
 
 | Command | Purpose |
 |---|---|
 | `chiton init` | Scaffold `.chiton/` (policy files, `.gitignore`, encryption keyfile). `--encrypt=false` for plaintext. |
-| `chiton build <path>` | Walk a tree, extract code/docs/images into the graph (SHA-256 cache skips unchanged files). Skips VCS, `node_modules`, `vendor`, virtualenv, `target`/`dist` and chiton output directories, plus anything in a repo-root `.chitonignore`. Removes symbols and files deleted since the last build, with their findings (`--prune`, default true), and extracts in parallel. |
+| `chiton build <path>` | Walk a tree and extract code, docs and images into the graph. Unchanged files are skipped, and symbols and files deleted since the last build are removed with their findings (`--prune`, default true). See [Ignoring paths](#ignoring-paths). |
 | `chiton query <label>` | Look up a node by label substring and print its neighborhood (`--depth`, `--edge-kinds`, `--json`). |
-| `chiton cluster` | Run Leiden community detection + betweenness; writes `cluster.json` sidecar. |
+| `chiton cluster` | Run Leiden community detection + betweenness; writes the `cluster.json` sidecar. |
 | `chiton report` | Generate `GRAPH_REPORT.md` (god nodes, community summaries). Needs a prior `cluster`. |
 | `chiton visualize` | Export an interactive HTML graph (`--format html`) or a Mermaid diagram (`--format mermaid`). `--scope`, `--max-nodes`. |
-| `chiton dashboard build` | Generate a read-only static dashboard (interactive graph + findings explorer) into a directory (`--out`, default `chiton-dashboard/`). `--scope`, `--max-nodes`, `--title`, `--include-ambiguous`. Not a server — open `index.html` directly. |
+| `chiton dashboard build` | Generate a static dashboard (interactive graph + findings explorer) into a directory (`--out`, default `chiton-dashboard/`). `--scope`, `--max-nodes`, `--title`, `--include-ambiguous`. Open its `index.html` directly; it is not a server. |
 | `chiton export` | Write the whole graph to a portable JSON snapshot (`--out`, default stdout). |
-| `chiton merge <snap>…` | Merge exported snapshot(s) into the current graph (cross-repo merging; idempotent, dedups shared nodes). Alias: `import`. |
+| `chiton merge <snap>…` | Merge exported snapshot(s) into the current graph, deduplicating shared nodes. Alias: `import`. |
 | `chiton bench [path]` | Benchmark token cost (chiton vs naive vs grep+read); `--synth N` for a synthetic corpus, `--json`. |
 | `chiton version` | Print version + build metadata. |
-| `chiton embed` | Embed nodes for semantic search (`--provider`, `--all`, `--link-similar`, `--exact`). Re-embeds nodes whose text or embedding model changed and prunes vectors of deleted nodes. Takes no path — it always covers the whole store. For stores of 100k+ vectors it also builds and saves the HNSW index (`hnsw.idx`) that `serve` loads, even when nothing new needed embedding. |
+| `chiton embed` | Embed nodes for semantic search (`--provider`, `--all`, `--link-similar`, `--exact`). Covers the whole store, re-embedding only nodes whose text or model changed. |
 | `chiton search <query>` | Hybrid semantic + graph search from the CLI. |
 | `chiton extract pending\|submit` | Emit semantic-extraction task specs / ingest the structured results. |
 | `chiton analyze <path>` | Run deterministic rules; persist findings as graph nodes. `--diff` / `--since <ref>`, `--no-llm`. |
@@ -245,32 +207,31 @@ chiton search "where do we handle auth?"
 | `chiton install\|uninstall\|doctor` | Register/remove chiton with AI assistants; report install state. `--assistant <name>` (claude-code, copilot-vscode, cursor, codex, gemini-cli, opencode, aider, antigravity, copilot-cli), `all`, or `auto` (default: detected). |
 | `chiton meeting ingest\|transcribe\|pending\|submit` | Ingest meeting transcripts (`.vtt`/`.srt`/`.txt`), whisper-transcribe audio first, or emit/ingest meeting→code linkage task specs. |
 | `chiton add-url <url-or-path>` | Ingest a web page, PDF, or YouTube transcript as a `url` node with `doc_section` children (`--kind`, `--author`, `--contributor`). |
-| `chiton teams fetch\|serve-webhook` | Fetch + ingest all transcripts for one Teams meeting (`--meeting <id>`), or run the Graph change-notification webhook receiver. Needs `CHITON_TEAMS_{TENANT_ID,CLIENT_ID,CLIENT_SECRET,USER_ID}` and a `-tags msgraph` build. The receiver refuses to start without `CHITON_TEAMS_CLIENT_STATE`; `--addr` defaults to `127.0.0.1:8444`. It acks immediately and ingests on one background worker, coalescing bursts. |
-| `chiton slack fetch --channel <id>` | Fetch a Slack channel — or one thread with `--thread <ts>` — and ingest it as a meeting subgraph (`CHITON_SLACK_TOKEN`). |
-| `chiton slack serve-events` | Run the Slack Events API receiver: a new message re-ingests its thread (or channel). Refuses to start without `CHITON_SLACK_SIGNING_SECRET`; `--addr` defaults to `127.0.0.1:8445`. It acks immediately and ingests on one background worker, coalescing bursts, and ignores Slack's redeliveries of an already-seen `event_id`. |
+| `chiton teams fetch\|serve-webhook` | Fetch + ingest all transcripts for one Teams meeting (`--meeting <id>`), or run the Graph change-notification receiver. Needs `CHITON_TEAMS_{TENANT_ID,CLIENT_ID,CLIENT_SECRET,USER_ID}` and an `msgraph` build. The receiver refuses to start without `CHITON_TEAMS_CLIENT_STATE`; `--addr` defaults to `127.0.0.1:8444`. |
+| `chiton slack fetch --channel <id>` | Fetch a Slack channel, or one thread with `--thread <ts>`, and ingest it as a meeting subgraph (`CHITON_SLACK_TOKEN`). |
+| `chiton slack serve-events` | Run the Slack Events API receiver: a new message re-ingests its thread (or channel). Refuses to start without `CHITON_SLACK_SIGNING_SECRET`; `--addr` defaults to `127.0.0.1:8445`. |
 | `chiton browser ingest\|watch` | Ingest local browser history (Chrome/Edge/Brave) as `url` nodes; `watch` re-ingests on change. `--db <History>`, `--browser`, `--since`, `--min-visits`, `--keep-query`. |
-| `chiton email ingest\|gmail\|outlook` | Ingest email: local `.eml`/`.mbox` files, the Gmail API (`CHITON_GMAIL_TOKEN`, `--query`), or Microsoft Graph (`CHITON_OUTLOOK_*`, `--max`; needs a `-tags msgraph` build). |
-| `chiton serve` | Start the MCP server: stdio by default (`--stdio` still accepted), `--http 127.0.0.1:7474` (SSE / shared daemon; needs an explicit address), or `--unix <path>` (socket). `--writable` for submit tools. `--include-pii` returns people's names and addresses from the graph tools, which redact them by default. HTTP requires the bearer token from `<graph dir>/mcp-token`. |
+| `chiton email ingest\|gmail\|outlook` | Ingest email: local `.eml`/`.mbox` files, the Gmail API (`CHITON_GMAIL_TOKEN`, `--query`), or Microsoft Graph (`CHITON_OUTLOOK_*`, `--max`; needs an `msgraph` build). |
+| `chiton serve` | Start the MCP server: stdio by default, `--http 127.0.0.1:7474` (SSE; a shared daemon), or `--unix <path>` (socket). `--writable` for submit tools. `--include-pii` returns people's names and addresses from the graph tools, which redact them by default. HTTP requires the bearer token from `<graph dir>/mcp-token`. |
 
-> **Note:** the two event receivers — `teams serve-webhook` and `slack
-> serve-events` — bind loopback by default and print a warning when `--addr`
-> points at a wildcard address, since both providers need a public HTTPS URL and
-> the intended shape is a tunnel or reverse proxy in front of localhost. Each
-> also fails fast without its shared secret rather than starting a receiver that
-> cannot authenticate a caller.
+> **Note:** the two event receivers, `teams serve-webhook` and `slack
+> serve-events`, bind loopback by default and print a warning when `--addr`
+> points at a wildcard address. Both providers need a public HTTPS URL, so put a
+> tunnel or reverse proxy in front of localhost. Each also refuses to start
+> without its shared secret.
 
 ## MCP tools
 
-The server (`chiton serve --stdio`) exposes these tools. The CLI is a thin local
+The server (`chiton serve`) exposes these tools. The CLI is a thin local
 wrapper over the same logic.
 
 | Tool | Use when |
 |---|---|
 | `get_node` | Fetch a single node by label (exact or substring). |
-| `get_node_neighborhood` | "What does X depend on / call / import?" — node + N-hop neighbors. |
+| `get_node_neighborhood` | "What does X depend on / call / import?" Returns the node and its N-hop neighbors. |
 | `query_graph` | Find nodes whose label matches a known substring. |
 | `shortest_path` | "How are A and B connected?" |
-| `god_nodes` | Highest-betweenness nodes — the architectural hubs (needs `cluster`). |
+| `god_nodes` | Highest-betweenness nodes, which are the architectural hubs (needs `cluster`). |
 | `graph_summary` | Token-budgeted overview: counts by kind, communities, god nodes. |
 | `semantic_search` | Natural-language questions, ranked by meaning then graph-expanded (needs `embed`). |
 | `list_findings` / `explain_finding` | Rule-engine findings as graph nodes. AMBIGUOUS LLM findings hidden unless `include_ambiguous`. |
@@ -278,29 +239,22 @@ wrapper over the same logic.
 | `pending_extractions` / `submit_extraction` | Subagent semantic extraction: task specs in, concepts + edges out. |
 | `pending_analyses` / `submit_analysis` | Subagent LLM-rule analysis: task specs in, findings out. |
 | `search_meetings` | Find ingested meetings by content, with their decisions and linked code symbols. Participant names (PII) hidden unless `include_pii`. |
-| `decisions_about` | Decisions made about a topic or code symbol — rationale, the meeting they were decided in, and the code they govern. |
+| `decisions_about` | Decisions made about a topic or code symbol, with their rationale, the meeting they were decided in, and the code they govern. |
 | `pending_meeting_links` / `submit_meeting_links` | Subagent meeting→code linkage: transcript + candidate-symbol task specs in, decisions + edges out. |
 | `add_url` | Fetch a URL (article, paper PDF, or YouTube transcript) and ingest it as a `url` node with `doc_section` children. |
 
-> **Note:** `query_graph` matches node *labels*, not call sites — chiton indexes
+> **Note:** `query_graph` matches node *labels*, not call sites. chiton indexes
 > package-level `IMPORTS` but not individual call expressions, so use grep for
 > "which lines call X?". `CALLS` edges connect symbol nodes, not file nodes.
 
 Write tools (`submit_extraction`, `submit_analysis`, `submit_meeting_links`,
 `add_url`) need a writable store: run `chiton serve --writable`, or use the CLI
 write path (`chiton extract submit`, `chiton analyze submit`, `chiton meeting
-submit`, `chiton add-url`). The default read-only server shares the store with
-other read-only commands (`query`, `cluster`, `search`). On Linux/macOS, writers
-such as `build` and `embed` can also run beside it (restart the server to see
-their changes). On Windows they fail fast with `in use by another chiton
-process` until the server exits, so submit through `chiton serve --writable`
-there.
+submit`, `chiton add-url`). On Windows, writers such as `build` and `embed`
+fail with `in use by another chiton process` while a server is running, so stop
+it first or submit through `chiton serve --writable`.
 
-The server speaks the same tool surface over three transports: stdio (the
-default; assistant-launched), `--http 127.0.0.1:7474` (SSE; a shared daemon
-across sessions or for debugging, started only when `--http <addr>` is given),
-and `--unix <path>` (a Unix-domain socket for Linux/macOS power users). Full
-reference: [docs/MCP.md](docs/MCP.md).
+The full reference is in [docs/MCP.md](docs/MCP.md).
 
 ## Assistant support
 
@@ -310,11 +264,11 @@ every one, `--assistant <name>` for a specific one, or `--user-scope` for
 user-global config. `chiton doctor` reports the state; `chiton uninstall`
 reverses it.
 
-Skills are Claude-Code-specific: only that installer writes them, and it writes
-two — `.claude/skills/chiton/` (graph queries) and
+Only the Claude Code installer writes skills, two of them:
+`.claude/skills/chiton/` (graph queries) and
 `.claude/skills/chiton-subagent-tasks/` (extraction, LLM rules, meeting→code
 linkage). The other eight assistants get the MCP registration and the rules
-block, which is the surface they support.
+block.
 
 | Assistant (`--assistant`) | MCP config | Rules file | MCP? |
 |---|---|---|---|
@@ -335,11 +289,11 @@ The slash-command reference is in [docs/SKILL.md](docs/SKILL.md).
 ## The rule engine
 
 Deterministic rules run free and inline via `chiton analyze` across eight
-categories — security, bugs, quality, architecture, performance, reliability,
+categories: security, bugs, quality, architecture, performance, reliability,
 database, and style. Findings become `finding` nodes (`EXTRACTED`,
 `rule_provenance=DETERMINISTIC`) with `VIOLATES → rule` and `AFFECTS → code`
 edges; re-analyzing a file prunes findings that no longer fire, so the store
-reflects live truth.
+reflects the current code.
 
 LLM rules (`llm/…`) cover the semantic cases AST rules can't reach
 (abstraction leaks, contract-vs-comment drift, missing authz checks, N+1
@@ -350,7 +304,7 @@ findings, and never block the pre-commit gate.
 Wire findings into git with `chiton hooks install`; the per-repo
 `.chiton/hooks.yaml` sets the block-on severity threshold per stage. The
 pre-commit gate checks the staged content of the files in the commit (file
-rules only), pre-push scans the whole tree, and both run in memory. A locked or
+rules only), and pre-push scans the whole tree. A locked or
 passphrase-protected store, a git error, or a run past `timeout-seconds` prints
 a warning instead of blocking, and a bad policy file falls back to the defaults.
 
@@ -365,18 +319,15 @@ chiton sync git --since <ref>  # re-index files changed since a git ref
 chiton hooks install --stage post-commit,post-checkout   # auto-sync on git ops
 ```
 
-Each changed file is re-extracted (stale nodes/edges replaced; edges meetings
-and concepts attached to surviving symbols are kept), its deterministic
-findings refreshed (`--analyze`, on by default), and — with `--embed` — its
-embeddings refreshed. Re-embedding makes the saved HNSW index stale; run
-`chiton embed` afterwards to save a current one.
-After a batch settles, the 2-hop neighborhood of the changed files is
-re-clustered, read straight from the store (shared package stubs are not
-expanded); everything else keeps its community. Betweenness is a global metric
-carried forward between full `chiton cluster` passes, which also pick up nodes
-no change reached.
-If the OS drops file events (a bulk checkout can overflow the Windows buffer),
-`sync watch` rescans the tree automatically.
+For each changed file, sync re-extracts it, refreshes its deterministic findings
+(`--analyze`, on by default), and, with `--embed`, its embeddings. It keeps the
+edges that meetings and concepts attached to symbols that still exist, then
+re-clusters the neighborhood of the changed files. Run `chiton cluster` now and
+then for a full pass, and `chiton embed` after syncing with `--embed` to save a
+current search index.
+
+Stop the watcher with Ctrl-C so the store closes cleanly; a hard kill can leave
+it needing recovery on the next open.
 
 ### Ignoring paths
 
@@ -395,9 +346,6 @@ A repo-root `.chitonignore` adds more, one entry per line:
 
 `sync watch` reads the file at start, so restart it after an edit.
 
-> Stop the watcher with Ctrl-C so BadgerDB closes cleanly; a hard kill can leave
-> the write-ahead log needing recovery on the next open.
-
 ## Visualizing & sharing the graph
 
 ```sh
@@ -408,148 +356,96 @@ chiton export --out graph.json                     # portable JSON snapshot of t
 chiton merge other-repo.json                       # merge another repo's snapshot into this graph
 ```
 
-The HTML export is a self-contained page: nodes coloured by community, sized by
-degree, with a live search box. Mermaid output drops straight into a Markdown
-file a renderer (GitHub, Obsidian, mkdocs) draws inline; both honour `--scope`
-and `--max-nodes`. `dashboard build` adds a read-only **findings explorer** next
-to that graph — filter findings by severity, category, community, file, and
-provenance, and click any finding to focus its node in the graph — written as
-static `index.html` you open directly (no server). `export`/`merge` are the
-portable interchange path — node IDs are stable content hashes, so merging
-several repos' snapshots into one store dedups shared nodes and builds a
-**cross-repo** graph. The honest token-cost benchmark lives in
-[docs/BENCHMARK.md](docs/BENCHMARK.md) (`chiton bench`).
+The HTML export is a self-contained page with nodes coloured by community, sized
+by degree, and a search box. Mermaid output renders inline on GitHub, Obsidian,
+or mkdocs; both honour `--scope` and `--max-nodes`. `dashboard build` adds a
+**findings explorer** that filters findings by severity, category, community,
+file, and provenance; clicking a finding focuses its node in the graph. Node IDs
+are stable content hashes, so merging several repos' snapshots into one store
+deduplicates shared nodes and builds a **cross-repo** graph.
 
 ## Configuration
 
 chiton reads `.chitonrc` (TOML) from the project directory or `$HOME`, with
 `CHITON_*` environment overrides (e.g. `CHITON_EMBED_PROVIDER=hash`). The
-project directory is `$CHITON_PROJECT_DIR` when that is set — the Claude Code
-plugin sets it — and the process working directory otherwise. When it is set, a
-relative `graph_path` resolves against it too, so an assistant-launched server
-cannot drift onto a different store than `chiton build` wrote. The `.chiton/` state directory (keyfile lookup, `analyze --diff` baselines, LLM-rule state) lives under it too. A `.chitonrc` that exists but fails to parse is an
-error that names the file.
+project directory is `$CHITON_PROJECT_DIR` when set (the Claude Code plugin sets
+it), and the working directory otherwise. A relative `graph_path` and the
+`.chiton/` state directory resolve against it, so an assistant-launched server
+reads the same store `chiton build` wrote. A `.chitonrc` that fails to parse is
+an error that names the file.
 
 | Key | Default | Notes |
 |---|---|---|
-| `graph_path` | `./chiton-out/graph.kuzu` | Where the BadgerDB store lives (the name is historical). |
+| `graph_path` | `./chiton-out/graph.kuzu` | Where the graph store lives (the name is historical). |
 | `log_level` | `info` | |
 | `embed.provider` | `ollama` | `ollama` or `hash` (offline/CI). |
 | `embed.model` | `nomic-embed-text` | |
 | `embed.endpoint` | `http://localhost:11434` | Ollama endpoint. A non-loopback value in the project's `.chitonrc` is refused; set `CHITON_EMBED_ENDPOINT` (or `$HOME/.chitonrc`, read only when the project has none) to use a remote server. |
-| `embed.dim` | *(unset)* | Embedding dimension. Deliberately has no default: left at 0, each provider applies its native size (Ollama 768, hash 256) instead of the Ollama size being forced onto the hash provider. Set it only to override. |
+| `embed.dim` | *(unset)* | Embedding dimension. Unset, each provider uses its native size (Ollama 768, hash 256). Set it only to override. |
 | `semantic.confidence_threshold` | `0.5` | Splits `INFERRED` from `AMBIGUOUS`. |
-| `vector.index` | `auto` | Index behind semantic search: `flat` (exact scan), `hnsw` (approximate graph), or `auto`, which uses `hnsw` at or above `vector.hnsw_threshold` vectors. `chiton embed` builds the `hnsw` graph and saves it as `hnsw.idx` beside the store, and `serve` loads it at startup. If it is missing or out of date, `serve` starts on `flat` and builds `hnsw` in the background, then switches over; rerun `chiton embed` to save it again. A one-shot `chiton search` stays exact unless this is set to `hnsw`. |
+| `vector.index` | `auto` | Index behind semantic search: `flat` (exact scan), `hnsw` (approximate graph), or `auto`, which uses `hnsw` at or above `vector.hnsw_threshold` vectors. `chiton embed` saves the `hnsw` index beside the store; if it is missing or stale, `serve` answers exactly and builds it in the background. |
 | `vector.hnsw_threshold` | `100000` | Vector count at which `auto` switches to `hnsw`. 0 or less means the default. |
 | `vector.hnsw_m` | `16` | Maximum links per HNSW node (twice that on the bottom layer). Higher raises recall, memory, and build time. |
 | `vector.hnsw_ef_search` | `128` | HNSW candidate list per query. Higher raises recall and query time. |
 | `vector.hnsw_ef_construction` | `100` | HNSW candidate list while building. Higher raises graph quality and build time. |
 
-The committed `.chiton/` files (`hooks.yaml`, `sources.yaml`) are the only shared
-state — `chiton init` writes a `.chiton/.gitignore` that keeps everything else
-under `.chiton/` (including the encryption keyfile) out of git. The graph store,
-cache, cluster sidecar, and saved HNSW index (`hnsw.idx`) live under
-`chiton-out/`; chiton writes `chiton-out/.gitignore` (`*`) the first time it
-opens the store for writing.
+Commit `.chiton/hooks.yaml` and `.chiton/sources.yaml` to share hook policy with
+your team. `chiton init` writes a `.chiton/.gitignore` that keeps everything
+else under `.chiton/`, including the encryption keyfile, out of git, and chiton
+writes `chiton-out/.gitignore` so the graph store is never committed.
 
 ## Encryption at rest
 
-The graph is encrypted by default with BadgerDB's native AES-256 encryption
-(CTR mode), under a key derived from a passphrase with argon2id. The salt and KDF
-parameters live in `.chiton/keyfile.json`; the passphrase and key are never
-written to disk. The passphrase is read from `CHITON_PASSPHRASE` or prompted
-interactively. An assistant-launched `chiton serve --stdio` cannot prompt, so export `CHITON_PASSPHRASE` in the environment that starts the assistant. The saved HNSW index and the cluster sidecar are sealed too
-(AES-256-GCM, under a key derived from the store's); the other files in
-`chiton-out/` and `.chiton/` stay plaintext. Opt out for CI or synthetic data
-with `chiton init --encrypt=false`. Opening a store with no keyfile prints a
-one-line notice on stderr; set `CHITON_PLAINTEXT_OK=1` to hide it.
+The graph is encrypted by default with AES-256 under a key derived from a
+passphrase with argon2id. `.chiton/keyfile.json` holds the salt and KDF
+parameters; the passphrase and key are never written to disk. chiton reads the
+passphrase from `CHITON_PASSPHRASE` or prompts for it. An assistant-launched
+`chiton serve` cannot prompt, so export `CHITON_PASSPHRASE` in the environment
+that starts the assistant. The saved search index and cluster sidecar are
+encrypted too; the other files in `chiton-out/` and `.chiton/` are plaintext.
+Opt out for CI or synthetic data with `chiton init --encrypt=false`.
 
 ## Supported sources
 
-- **Go** — full AST extraction via the standard-library parser (`go/ast`):
+- **Go.** Full AST extraction via the standard-library parser (`go/ast`):
   files, symbols, `CONTAINS`, `IMPORTS`, and intra-corpus `CALLS` edges.
-- **Python, JavaScript/TypeScript, Rust, Java** — lightweight line-scanning
+- **Python, JavaScript/TypeScript, Rust, Java.** Lightweight line-scanning
   extractors for symbols and imports.
-- **Markdown** — `doc_section` nodes per heading with `CONTAINS` nesting.
-- **Images** — image nodes at build time, described via vision subagents.
-- **Meetings** — Teams/Zoom/whisper transcripts (WebVTT/SRT) become `meeting`,
+- **Markdown.** `doc_section` nodes per heading with `CONTAINS` nesting.
+- **Images.** Image nodes at build time, described via vision subagents.
+- **Meetings.** Teams/Zoom/whisper transcripts (WebVTT/SRT) become `meeting`,
   `meeting_turn`, and `person` nodes; subagent linkage ties the decisions made
   in them back to the code symbols they reference (`chiton meeting`).
-- **Slack** — channels and threads via `chiton slack fetch`. Each conversation
-  becomes the same `meeting` + `meeting_turn` + `person` subgraph a transcript
-  does, keyed on a stable `slack://` URI so re-ingest replaces rather than
-  duplicates — which means `search_meetings` and `decisions_about` serve Slack
-  discussions unchanged.
-- **URLs** — articles, PDFs, and YouTube transcripts via `chiton add-url`.
-- **Email** — local `.eml`/`.mbox`, Gmail, or Outlook (`chiton email`). Messages
-  become `email` nodes with `doc_section` body children — so semantic extraction
-  picks up their concepts for free — plus PII-tagged `person` participants that
-  share the meeting subsystem's `person://` scheme, keyed on the address.
-- **Browser history** — Chrome/Edge/Brave (`chiton browser`). Only the local
-  History database's page *metadata* is read (title, visit count, last visit),
-  as `url` nodes; chiton never fetches the pages, so this does no network I/O.
-  URLs are stored without userinfo, query or fragment unless you pass `--keep-query`.
+- **Slack.** Channels and threads via `chiton slack fetch`. Each conversation
+  becomes the same meeting subgraph a transcript does, so `search_meetings` and
+  `decisions_about` cover Slack discussions too. Re-ingesting replaces rather
+  than duplicates.
+- **URLs.** Articles, PDFs, and YouTube transcripts via `chiton add-url`.
+- **Email.** Local `.eml`/`.mbox`, Gmail, or Outlook (`chiton email`). Messages
+  become `email` nodes with body sections and `person` participants, so
+  semantic extraction picks up their concepts too.
+- **Browser history.** Chrome/Edge/Brave (`chiton browser`). chiton reads only
+  page *metadata* from the local History database (title, visit count, last
+  visit) and never fetches the pages. URLs are stored without userinfo, query
+  or fragment unless you pass `--keep-query`.
 
-Encryption at rest, secrets, and meeting PII are covered in
-[docs/SECURITY.md](docs/SECURITY.md).
-
-## Architecture
-
-```
-chiton/
-├── cmd/chiton/            CLI entrypoint (cobra)
-├── internal/
-│   ├── extract/ast/       per-language extractors + Markdown + images
-│   ├── extract/meeting/   transcript parsing, meeting subgraphs, code linkage
-│   ├── extract/subagent/  schema-pinned task specs for host-assistant extraction
-│   ├── graph/model/       node/edge kinds, provenance, confidence
-│   ├── graph/store/       GraphStore interface + BadgerDB impl (Kuzu stub)
-│   ├── graph/cluster/     Leiden community detection (full + incremental)
-│   ├── graph/metrics/     betweenness, degree, god-node surfacing
-│   ├── graph/retrieve/    hybrid vector + graph retrieval policy
-│   ├── graph/portable/    JSON snapshot read/merge (export, cross-repo merging)
-│   ├── vector/            nearest-neighbour index: flat scan + HNSW (hnswlib/)
-│   ├── embed/             embedding provider interface (Ollama + hash)
-│   ├── analyze/           rule engine, findings, diff, LLM-rule dispatch
-│   ├── ingest/            incremental updater + source front-ends:
-│   │                        fswatch/ git/ audio/ url/ browser/ email/ slack/
-│   │                        teams/  (teams + email's Outlook source: -tags msgraph)
-│   │                        plus shared chunk/ (doc splitting) and bearer/ (HTTP auth)
-│   ├── cache/             content-SHA-256 cache that skips unchanged files
-│   ├── config/            .chitonrc + CHITON_* env, CHITON_PROJECT_DIR anchoring
-│   ├── jobs/              in-process debouncing/coalescing job queue
-│   ├── crypto/            argon2id KDF + keyfile for encryption at rest, file sealing
-│   ├── fsutil/            atomic file writes
-│   ├── install/           per-assistant installers (Claude Code, Copilot, Cursor, Codex, Gemini CLI, OpenCode, Aider, Antigravity, Copilot CLI)
-│   ├── hooks/             git hook install + gating runner
-│   ├── mcp/               MCP server and tool handlers (stdio / SSE / unix)
-│   ├── report/            GRAPH_REPORT.md + interactive HTML + Mermaid + dashboard
-│   └── bench/             token-cost benchmark harness + synthetic corpus
-├── skills/                skill markdown, embedded (plugin + `chiton install` share it)
-├── .claude-plugin/        plugin.json + marketplace.json
-├── bin/                   chiton shims that resolve the binary for the plugin
-├── scripts/               install-chiton.sh / .ps1 (release download + checksum)
-└── docs/                  PLAN.md, INSTALL.md, MCP.md, SKILL.md, SECURITY.md, BENCHMARK.md
-```
-
-The `GraphStore` interface is the project's spine — every package depends on it,
-not on a concrete store. BadgerDB ships in v1; Kuzu lives as a stub
-(`internal/graph/store/kuzu/`) so it can slot in behind the same interface once
-its Go bindings stabilize on Windows. The same boundary-first approach applies to
-the vector index (flat and HNSW behind one `Index` interface) and the job queue
-(in-process today, distributed later).
+Everything beyond your code is opt-in: nothing is read until you run the command
+for it. Names of people (speakers, participants, authors) are tagged as personal
+data and hidden from the MCP tools by default. See
+[docs/PRIVACY.md](docs/PRIVACY.md) and [docs/SECURITY.md](docs/SECURITY.md).
 
 ## Roadmap
 
-Shipped through **Phase 6** — core graph, rule engine, install layer, semantic
-layer, LLM rules + diff analysis, live sync, broad multi-assistant installers,
-meeting/transcript ingestion with decision-to-code linkage, Slack conversation
-ingestion (Phase 4.5), the polish layer (HTML + Mermaid export, cross-repo
-merging, Unix-socket transport, cross-corpus benchmark), the static
-findings/graph dashboard (Phase 5.5), and browser-history + email ingestion
-(Phase 6). Remaining: a first release, a first-party VS Code extension, and an
-optional daemon-mode LLM path. See
-[docs/PLAN.md](docs/PLAN.md) for the full plan and design rationale.
+Planned: a first-party VS Code extension and an optional daemon-mode LLM path
+for running extraction without a host assistant.
+
+## Contributing and support
+
+Report bugs and request features in
+[GitHub issues](https://github.com/Eric-Fernald/chiton/issues). Report security
+problems privately as described in [SECURITY.md](SECURITY.md). Pull requests are
+not accepted; see [CONTRIBUTING.md](CONTRIBUTING.md), which also covers building
+from source, the repository layout, and adding rules.
 
 ## License
 
