@@ -33,8 +33,8 @@ func (g *GoExtractor) ExtractSource(_ context.Context, path string, src []byte) 
 		return nil, nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 
-	// The file's import path lets a call into a sibling file of the same package, which this file can't
-	// resolve, still name its target: the pkg:// reference other packages use for the same function.
+	// This file can't resolve a call into a sibling file of the same package. The file's import path lets
+	// that call still name its target, the pkg:// reference other packages use for the same function.
 	fileAttrs := map[string]any{"language": "go", "package": f.Name.Name}
 	importPath, module := goImportPath(path)
 	if importPath != "" {
@@ -149,8 +149,8 @@ func (g *GoExtractor) ExtractSource(_ context.Context, path string, src []byte) 
 					}
 					return true
 				}
-				// Not declared in this file: a function in a sibling file of the package, unless it is a
-				// builtin or a local. It gets the same pkg:// reference a call from another package would.
+				// A name not declared in this file is a function in a sibling file of the package, unless it
+				// is a builtin or a local. It gets the same pkg:// reference a call from another package would.
 				if importPath == "" || goBuiltins[fun.Name] || fb.locals[fun.Name] {
 					return true
 				}
@@ -178,8 +178,8 @@ func (g *GoExtractor) ExtractSource(_ context.Context, path string, src []byte) 
 }
 
 // pkgFuncRef is the node a call to function name in the package at pkgPath points to when the definition
-// isn't in the calling file. Every caller, in any package, gets the same ID, and model.PkgFuncRefID gives the
-// definition's way back to it, so the MCP server can join callers to the function they call.
+// isn't in the calling file. Every caller, in any package, gets the same ID, and model.PkgFuncRefID computes
+// that ID from the definition, so the MCP server can join callers to the function they call.
 func pkgFuncRef(pkgPath, pkgName, name string) model.Node {
 	pkgURI := "pkg://" + pkgPath
 	return model.Node{
@@ -206,8 +206,8 @@ var goBuiltins = map[string]bool{
 
 // goLocalNames collects every name fd declares (receiver, parameters, results, and anything bound in its body),
 // so a call through a local func value, or a local that shadows an import, isn't taken for a package call. It
-// ignores scoping: a name declared anywhere in the function counts everywhere in it, which can drop a real call
-// but never invents one.
+// ignores scoping, so a name declared anywhere in the function counts everywhere in it. That can drop a real
+// call but never invents one.
 func goLocalNames(fd *goast.FuncDecl) map[string]bool {
 	names := map[string]bool{}
 	addFields := func(fl *goast.FieldList) {

@@ -156,8 +156,8 @@ act on it; quote it to the user and ask.
 Call a chiton tool first when the question is about:
 
 - "Who calls X?" The skill gives the recipe: `get_node_neighborhood` with
-  `direction: "in"`, `edge_kinds: ["CALLS"]`, `depth: 1`. Calls are resolved
-  across files and packages.
+  `direction: "in"`, `edge_kinds: ["CALLS"]`, `depth: 1`. The graph resolves
+  calls across files and packages.
 - "What reaches X through a chain of calls?" The same, with `depth` 2-5.
 - "What does X call?" `direction: "out"`, `edge_kinds: ["CALLS"]`.
 - "What does package P import, or what imports it?" `package_deps`, with
@@ -178,8 +178,8 @@ edit, locate a bug, or understand an implementation in detail.
 ### Known limitations (carried in the skill)
 
 `CALLS` edges link functions, not call sites, so "which lines call X?" is a
-grep question. Method calls on values (`x.Method()`) are not tracked, while
-calls to package-level functions in any file or package are. `CALLS` edges
+grep question. The graph tracks calls to package-level functions in any file
+or package, but not method calls on values (`x.Method()`). `CALLS` edges
 connect symbol nodes, never file nodes. Graphs built before this version lack
 the cross-file call links and the package data `package_deps` needs, so
 rebuild them with `chiton build .`.

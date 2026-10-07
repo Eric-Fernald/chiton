@@ -65,8 +65,8 @@ func ask(ctx context.Context, cfg RunConfig, condition string, worker int, q Que
 	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 
-	// The prompt goes on stdin: on Windows claude is often an npm .cmd shim, and cmd.exe truncates or
-	// mangles an argument holding newlines and quotes.
+	// The prompt goes on stdin because on Windows claude is often an npm .cmd shim, and cmd.exe truncates
+	// or mangles an argument holding newlines and quotes.
 	tools := builtinTools
 	if condition == "chiton-only" {
 		tools = "Read"

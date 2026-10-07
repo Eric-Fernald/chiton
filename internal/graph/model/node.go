@@ -82,8 +82,8 @@ const (
 	AttrModule     = "module"
 )
 
-// PkgFuncRefID is the ID of the pkg:// reference node a Go call names when the called package-level function
-// is defined outside the calling file: funcName in the package at importPath.
+// PkgFuncRefID is the ID of the pkg:// reference node for funcName in the package at importPath. A Go call
+// names it when the called package-level function is defined outside the calling file.
 func PkgFuncRefID(importPath, funcName string) string {
 	return NewNodeID("pkg://"+importPath, funcName)
 }

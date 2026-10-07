@@ -170,7 +170,7 @@ func (r *resolver) walk(ctx context.Context, seed model.Node, depth int, kinds [
 	for d := 0; d < depth && len(frontier) > 0; d++ {
 		var next []model.Node
 		for _, x := range frontier {
-			// x and its reference, so callers of either count as callers of x.
+			// Walk from both x and its reference, so callers of either count as callers of x.
 			members := []string{x.ID}
 			if ref, err := r.reference(ctx, x); err != nil {
 				return nil, nil, err

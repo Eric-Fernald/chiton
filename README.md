@@ -246,8 +246,8 @@ wrapper over the same logic.
 
 > **Note:** `query_graph` matches node *labels*, not call sites. A `CALLS` edge
 > says that function A calls function B, not on which line, so use grep for
-> "which lines call X?". Method calls on values (`x.Method()`) are not tracked;
-> calls to package-level functions are. `CALLS` edges connect symbol nodes, not
+> "which lines call X?". chiton tracks calls to package-level functions but not
+> method calls on values (`x.Method()`). `CALLS` edges connect symbol nodes, not
 > file nodes.
 
 Write tools (`submit_extraction`, `submit_analysis`, `submit_meeting_links`,

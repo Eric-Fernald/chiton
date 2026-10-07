@@ -268,7 +268,7 @@ call?", "what does this file import or contain?".
 | `depth` | integer | default `2`, min `1`, max `5` | Hop depth. Depth 1 with `direction: "in"` and `edge_kinds: ["CALLS"]` lists direct callers; depth N lists every caller within N calls. |
 | `edge_kinds` | string[] | optional | Filter to these edge types, e.g. `["CALLS","IMPORTS"]`. Empty means all kinds. |
 | `source_prefix` | string | optional | Only return neighbor nodes whose `source_uri` contains this substring. |
-| `exclude_tests` | boolean | default `false` | Leave out nodes from `_test.go` files and don't walk through them, along with their edges. The seed is kept even when it is in a test file. Set it when the question is about non-test code. |
+| `exclude_tests` | boolean | default `false` | Leave out nodes from `_test.go` files and don't walk through them, along with their edges. The walk keeps the seed even when it is in a test file. Set it when the question is about non-test code. |
 | `max_nodes` | integer | default `100`, min `1`, max `500` | Max nodes to return, nearest hops first. |
 | `max_tokens` | integer | default `4000`, min `500`, max `16000` | Approximate token budget for the returned nodes and edges. |
 
@@ -337,26 +337,26 @@ to `depth`:
 ```
 
 **Calls across files and packages.** The Go extractor parses one file at a
-time, so a call to a package-level function defined in another file (a
-`client.FetchAll` call from another package, or a bare `doRequest()` call into a
-sibling file of the same package) points at a `pkg://` reference node, not at
-the definition. The walk treats a function and its reference as one node and
-reports it as the definition, so callers in every file and package appear, and
-a multi-hop walk continues across package boundaries. Edges through a
-reference are reported between the definitions, as above. Method calls on
-values (`x.Method()`) need type information the extractor does not have, so
-they are not tracked. Graphs built before this version lack the sibling-file
-call edges and the file `import_path` attributes the join needs; rebuild with
-`chiton build .`.
+time. A call to a package-level function defined in another file points at a
+`pkg://` reference node, not at the definition. Examples are a
+`client.FetchAll` call from another package and a bare `doRequest()` call into
+a sibling file of the same package. The walk treats a function and its
+reference as one node and reports it as the definition, so callers in every
+file and package appear, and a multi-hop walk continues across package
+boundaries. The walk reports edges through a reference as edges between the
+definitions, as above. Method calls on values (`x.Method()`) need type
+information the extractor does not have, so the graph does not track them.
+Graphs built before this version lack the sibling-file call edges and the file
+`import_path` attributes the join needs; rebuild with `chiton build .`.
 
 ## package_deps
 
 Return the package-level dependencies of a Go package in one call: the
 packages it imports, or the packages that import it, optionally followed
 transitively. The tool joins the `IMPORTS` edges of every indexed non-test file
-in the package's directory, which per-file `IMPORTS` edges and grep leave you
-to piece together. Use it for "what does package P depend on?" and "what depends on
-package P?".
+in the package's directory. Without it you would combine per-file `IMPORTS`
+edges or grep output yourself. Use it for "what does package P depend on?" and
+"what depends on package P?".
 
 | Parameter | Type | Required / default | Description |
 |---|---|---|---|
@@ -1128,7 +1128,7 @@ resolver. Plan queries accordingly.
 
 - **Method calls on values are not tracked.** `x.Method()` needs type
   information the extractor does not have, so a method's callers are missing.
-  Calls to package-level functions, in any file or package, are tracked.
+  The graph tracks calls to package-level functions in any file or package.
 
 - **Shared names.** Several symbols can share a name (`New`, `Close`). Label
   lookup picks one by the [ranking above](#label-lookup) and adds a `note`

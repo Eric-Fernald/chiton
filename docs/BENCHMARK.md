@@ -160,19 +160,19 @@ cheaper for the hubs, costlier for `RunIncremental`, which few files name. Depth
 **Median:** grep+read ~64 532 tokens; chiton d2 ~18 116 (**3.6× cheaper**), d1
 ~4 674 (**14× cheaper**), query_graph ~608; naive ~414 736 (d2 **~23× cheaper**).
 
-At scale, naive context dumping is hopeless (400k tokens), and the hubs grep has
-to chase through dozens of files favour the graph: depth 2 wins all six
-questions. Remember the sampling note above: these are the most connected
-symbols in the tree, and `New` and `Open` are names every package uses.
+At scale, naive context dumping costs 400k tokens. Grep has to read dozens of
+files for these hubs, so depth 2 wins all six questions. Remember the sampling
+note above: these are the most connected symbols in the tree, and `New` and
+`Open` are names every package uses.
 
 ### How these numbers changed
 
-Two changes since the previous version of this page moved the results, and both
-are in the bench code:
+Two changes since the previous version of this page moved the results:
 
 - **Calls now resolve across files and packages.** Before, the extractor linked
   a call only when caller and callee shared a file, so a function's neighborhood
-  missed its callers elsewhere. Neighborhoods now include them, which makes them
+  missed its callers elsewhere. The extractor and MCP server now link them, and
+  the bench does the same. Neighborhoods include those callers, which makes them
   larger, and the most connected symbols are now real cross-package hubs rather
   than test helpers.
 - **grep+read matches whole words.** It used to match substrings, so `Open` also
@@ -195,7 +195,8 @@ none in `internal/` do.
 - **Depth 1 is the cheap setting:** ~9× cheaper than grep+read on the medium
   package and ~14× cheaper on the large tree, when direct callers and callees are
   enough. `query_graph` costs a few hundred tokens to find a symbol.
-- **Tiny corpora:** grep wins decisively (tens of tokens vs hundreds or thousands).
+- **Tiny corpora:** grep wins decisively (about 120 tokens, against 265 at depth
+  1 and 4 609 at depth 2).
 - **Tokens are only part of it.** [Answer quality](#answer-quality) measures
   what the model does with the context: on multi-hop questions, chiton's answers
   were exact every time and took a third of the time.
@@ -224,7 +225,7 @@ a real repository and grades the answers.
   chiton's extractor. It covers every non-test `.go` file regardless of build
   tags. Spot checks against `git grep` matched.
 - **Model.** Claude Code 2.1.289 in headless mode (`claude -p`) with Claude
-  Sonnet 5.5 (`--model sonnet`). Each question was asked twice under each
+  Sonnet 5.5 (`--model sonnet`). Each question ran twice under each
   condition. `--tools` limits the built-in tools, `--setting-sources project`
   keeps user plugins and hooks out, and `--strict-mcp-config` loads only the MCP
   servers a condition names.
@@ -248,7 +249,7 @@ Commit `e3b40c0`, 120 runs.
 | Condition | Mean F1 | Exact answers | Median input tokens | Median output tokens | Median turns | Median time | Total cost |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | grep | 0.99 | 35 / 40 | 52 666 | 1 629 | 8 | 16 s | $2.66 |
-| chiton | **1.00** | **40 / 40** | **32 069** | **493** | **3** | **5 s** | **$1.62** |
+| chiton | **1.00** | **40 / 40** | 32 069 | 493 | 3 | 5 s | $1.62 |
 | chiton-only | **1.00** | **40 / 40** | 28 640 | 345 | 2 | 5 s | $1.34 |
 
 | Question kind | grep | chiton | chiton-only |
@@ -297,10 +298,10 @@ runs, against none before the fixes.
 ### What changed between runs
 
 The first run of this benchmark, on the direct questions at commit `b535d99`,
-found that chiton added nothing: the model made about 2.9 grep calls per
+found that chiton added nothing. The model made about 2.9 grep calls per
 question and **no** chiton calls, even with chiton's rules block telling it to
-prefer them, while chiton's rules, skills and tool definitions doubled the input
-tokens. Graph-only answers were never wrong but missed items (F1 0.96).
+prefer them. Meanwhile chiton's rules, skills and tool definitions doubled the
+input tokens. Graph-only answers were never wrong but missed items (F1 0.96).
 Investigating those results found real gaps in chiton:
 
 - **Calls between files were missing.** The Go extractor only linked a call when
@@ -311,11 +312,11 @@ Investigating those results found real gaps in chiton:
 - **Common names resolved to the wrong symbol.** A lookup for `New` returned the
   first label containing "New".
 
-The fixes, all in this release: calls now resolve across files and packages;
+The fixes are all in this release. Calls now resolve across files and packages.
 `get_node_neighborhood` takes a `direction` (callers with `"in"`, callees with
-`"out"`) and `exclude_tests`; a new `package_deps` tool lists a package's direct
-or transitive imports and importers; lookups rank exact names first, accept
-`"<dir>:<Name>"`, and say when a name is shared; and the tool descriptions, the
+`"out"`) and `exclude_tests`. A new `package_deps` tool lists a package's direct
+or transitive imports and importers. Lookups rank exact names first, accept
+`"<dir>:<Name>"`, and say when a name is shared. The tool descriptions, the
 `chiton install` rules block and the graph skill now give a recipe for each kind
 of question.
 

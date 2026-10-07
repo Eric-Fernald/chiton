@@ -186,9 +186,9 @@ func Run(ctx context.Context, name, path string, opts Options) (*Report, error) 
 }
 
 // resolveFuncRefs merges each pkg:// function reference into the definition it names, as the MCP server does
-// when it walks the graph, so a neighborhood here holds the same nodes the server would return: the callers in
-// other files and packages, attached to the definition. A reference naming no definition, or more than one
-// (build-tag variants), stays as it is.
+// when it walks the graph. A neighborhood here then holds the same nodes the server would return, with the
+// callers in other files and packages attached to the definition. A reference naming no definition, or more
+// than one (build-tag variants), stays as it is.
 func resolveFuncRefs(nodes []model.Node, edges []model.Edge) ([]model.Node, []model.Edge) {
 	importPath := map[string]string{} // file URI → import path
 	for _, n := range nodes {
@@ -309,8 +309,8 @@ func newGraph(nodes []model.Node, edges []model.Edge) *graph {
 }
 
 // topSymbols returns the IDs of the n highest-degree symbol nodes, ties broken by ID for reproducibility.
-// Unless includeTests is set, symbols defined in test files are skipped: a busy test helper is rarely what
-// a developer asks about, and its wide neighborhood would dominate the sample.
+// Unless includeTests is set, it skips symbols defined in test files. A busy test helper is rarely what a
+// developer asks about, and its wide neighborhood would dominate the sample.
 func (g *graph) topSymbols(n int, includeTests bool) []string {
 	type ranked struct {
 		id  string
