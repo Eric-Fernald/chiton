@@ -118,13 +118,23 @@ func WriteReport(w io.Writer, set QuestionSet, runs []Run) {
 		for _, t := range names {
 			parts = append(parts, fmt.Sprintf("%s %.1f", t, float64(totals[t])/float64(len(byCond[c]))))
 		}
-		fmt.Fprintf(w, "- **%s:** %s\n", c, strings.Join(parts, ", "))
+		blocked := 0
+		for _, r := range byCond[c] {
+			for _, n := range r.Blocked {
+				blocked += n
+			}
+		}
+		line := strings.Join(parts, ", ")
+		if blocked > 0 {
+			line += fmt.Sprintf(" (plus %.1f rejected calls to withheld tools)", float64(blocked)/float64(len(byCond[c])))
+		}
+		fmt.Fprintf(w, "- **%s:** %s\n", c, line)
 	}
 }
 
 func conditionsOf(runs []Run) []string {
 	var out []string
-	for _, preferred := range []string{"grep", "chiton"} {
+	for _, preferred := range []string{"grep", "chiton", "chiton-only"} {
 		for _, r := range runs {
 			if r.Condition == preferred {
 				out = append(out, preferred)

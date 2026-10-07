@@ -16,11 +16,13 @@ import (
 
 // Run is one question answered under one condition.
 type Run struct {
-	Condition     string         `json:"condition"`
-	QuestionID    string         `json:"question_id"`
-	Repeat        int            `json:"repeat"`
-	Reply         string         `json:"reply"`
-	ToolCalls     map[string]int `json:"tool_calls"`
+	Condition  string         `json:"condition"`
+	QuestionID string         `json:"question_id"`
+	Repeat     int            `json:"repeat"`
+	Reply      string         `json:"reply"`
+	ToolCalls  map[string]int `json:"tool_calls"`
+	// Blocked counts calls to tools the condition withholds, which Claude Code rejected without running them.
+	Blocked       map[string]int `json:"blocked,omitempty"`
 	NumTurns      int            `json:"num_turns"`
 	DurationMS    int64          `json:"duration_ms"`
 	CostUSD       float64        `json:"cost_usd"`
@@ -36,8 +38,13 @@ type Run struct {
 // TotalInput is every input token the model processed, cached or not.
 func (r Run) TotalInput() int { return r.InputTokens + r.CacheCreation + r.CacheRead }
 
-// RunConfig describes the two conditions. Both get the same built-in tools (Read, Grep, Glob) and no others;
-// the chiton condition adds chiton's MCP server and runs in a checkout where `chiton install` wrote its rules.
+// RunConfig describes the conditions:
+//
+//   - grep: the built-in Read, Grep and Glob tools only.
+//   - chiton: the same built-ins plus chiton's MCP server, in a checkout where `chiton install` wrote its rules
+//     and skills. The model chooses which tools to use, as it would in practice.
+//   - chiton-only: chiton's MCP server plus Read, with Grep and Glob removed, so the answer has to come from the
+//     graph. It measures what the graph itself can answer.
 type RunConfig struct {
 	Model     string
 	GrepDir   string   // checkout used as the working directory without chiton
@@ -49,7 +56,7 @@ type RunConfig struct {
 
 const preamble = "You are answering a question about the Go repository in the current working directory. Use the tools available to you to find the answer from the code; do not guess.\n\n"
 
-// builtinTools is the same for both conditions so that chiton's MCP tools are the only difference.
+// builtinTools is the same for grep and chiton, so chiton's MCP tools are the only difference between them.
 const builtinTools = "Read,Grep,Glob"
 
 // ask runs claude -p once and parses its stream-json transcript.
@@ -58,18 +65,26 @@ func ask(ctx context.Context, cfg RunConfig, condition string, worker int, q Que
 	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 
+	// The prompt goes on stdin: on Windows claude is often an npm .cmd shim, and cmd.exe truncates or
+	// mangles an argument holding newlines and quotes.
+	tools := builtinTools
+	if condition == "chiton-only" {
+		tools = "Read"
+	}
 	args := []string{
-		"-p", preamble + q.Prompt,
+		"-p",
 		"--output-format", "stream-json", "--verbose",
 		"--model", cfg.Model,
 		"--setting-sources", "project",
 		"--strict-mcp-config",
-		"--tools", builtinTools,
+		"--tools", tools,
 		"--no-session-persistence",
 	}
 	dir := cfg.GrepDir
-	allowed := builtinTools
-	if condition == "chiton" {
+	allowed := tools
+	switch condition {
+	case "grep":
+	case "chiton", "chiton-only":
 		dir = cfg.ChitonDir
 		mcpCfg, err := writeMCPConfig(cfg.ChitonBin, cfg.GraphDirs[worker%len(cfg.GraphDirs)], worker)
 		if err != nil {
@@ -79,17 +94,24 @@ func ask(ctx context.Context, cfg RunConfig, condition string, worker int, q Que
 		defer os.Remove(mcpCfg)
 		args = append(args, "--mcp-config", mcpCfg)
 		allowed += ",mcp__chiton"
+	default:
+		run.Error = "unknown condition " + condition
+		return run
 	}
 	args = append(args, "--allowedTools", allowed)
 
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Dir = dir
+	cmd.Stdin = strings.NewReader(preamble + q.Prompt)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	parseStream(out, &run)
-	if err != nil && run.Reply == "" {
+	switch {
+	case err != nil && run.Reply == "":
 		run.Error = strings.TrimSpace(err.Error() + ": " + lastLine(stderr.String()))
+	case run.Reply == "" && run.Error == "":
+		run.Error = "no result from claude: " + lastLine(stderr.String())
 	}
 	return run
 }
@@ -118,8 +140,10 @@ func parseStream(out []byte, run *Run) {
 			Type    string `json:"type"`
 			Message struct {
 				Content []struct {
-					Type string `json:"type"`
-					Name string `json:"name"`
+					Type    string          `json:"type"`
+					Name    string          `json:"name"`
+					IsError bool            `json:"is_error"`
+					Content json.RawMessage `json:"content"`
 				} `json:"content"`
 			} `json:"message"`
 			Subtype    string  `json:"subtype"`
@@ -145,6 +169,28 @@ func parseStream(out []byte, run *Run) {
 				if c.Type == "tool_use" {
 					run.ToolCalls[c.Name]++
 				}
+			}
+		case "user":
+			// A withheld tool comes back as an error result naming it; move it from ToolCalls to Blocked.
+			for _, c := range ev.Message.Content {
+				if c.Type != "tool_result" || !c.IsError {
+					continue
+				}
+				_, rest, ok := strings.Cut(string(c.Content), "No such tool available: ")
+				if !ok {
+					continue
+				}
+				name, _, _ := strings.Cut(rest, ".")
+				if run.ToolCalls[name] > 0 {
+					run.ToolCalls[name]--
+					if run.ToolCalls[name] == 0 {
+						delete(run.ToolCalls, name)
+					}
+				}
+				if run.Blocked == nil {
+					run.Blocked = map[string]int{}
+				}
+				run.Blocked[name]++
 			}
 		case "result":
 			run.Reply = ev.Result

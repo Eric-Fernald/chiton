@@ -1,6 +1,7 @@
 // Command qualbench is chiton's answer-quality benchmark. It asks Claude Code structural questions about a Go
-// repository twice, once with only the built-in Read, Grep and Glob tools and once with chiton's MCP server
-// added, and grades both answers against ground truth computed from the source with go/ast.
+// repository with only the built-in Read, Grep and Glob tools, with chiton's MCP server added, and with
+// chiton's server plus Read alone, and grades each answer against ground truth computed from the source with
+// go/ast.
 //
 //	go run ./internal/bench/qualbench gen    -repo <checkout> -out questions.json
 //	go run ./internal/bench/qualbench run    -questions questions.json -grep-dir <checkout> \
@@ -70,7 +71,7 @@ func cmdRun(args []string) error {
 	chitonBin := fs.String("chiton-bin", "chiton", "chiton binary the MCP server runs")
 	graphDirs := fs.String("graph-dirs", "", "comma-separated CHITON_PROJECT_DIRs, one per parallel worker (default: -chiton-dir)")
 	model := fs.String("model", "sonnet", "model passed to claude --model")
-	conditions := fs.String("conditions", "grep,chiton", "conditions to run")
+	conditions := fs.String("conditions", "grep,chiton,chiton-only", "conditions to run (grep, chiton, chiton-only)")
 	repeat := fs.Int("repeat", 1, "times to ask each question under each condition")
 	parallel := fs.Int("parallel", 1, "concurrent claude runs; give each its own -graph-dirs entry")
 	timeout := fs.Duration("timeout", 10*time.Minute, "limit per run")
