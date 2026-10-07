@@ -12,9 +12,9 @@ codebase; **planned** means it is described in the design (`docs/PLAN.md`) but i
 not yet wired into the binary. We are explicit about the distinction so you can
 make an informed trust decision.
 
-> **License note:** chiton is proprietary software (see `LICENSE`: "All rights
-> reserved"; the repository is private). This document describes its security
-> posture; it is not a warranty.
+> **License note:** chiton is MIT-licensed and provided "as is" (see
+> `LICENSE`). This document describes its security posture; it is not a
+> warranty.
 
 ---
 
@@ -25,9 +25,12 @@ This section describes the baseline — an assistant that has chiton installed a
 has not been asked to ingest anything.
 
 - The Claude Code plugin's `.mcp.json` launches **`chiton serve --stdio`**. It
-  invokes the binary by **bare name**, so `chiton` must be on `PATH`, and sets
+  invokes the binary bundled with the plugin
+  (`${CLAUDE_PLUGIN_ROOT}/bin/chiton`), and sets
   `CHITON_PROJECT_DIR=${CLAUDE_PROJECT_DIR}` so the server reads the same store
-  `chiton build` wrote regardless of its working directory.
+  `chiton build` wrote regardless of its working directory. Only the repo-root
+  `.mcp.json` used to develop chiton itself launches `chiton` by bare name from
+  `PATH`.
 - **stdio binds no port.** The process talks to the assistant over its own
   stdin/stdout. Nothing is listening.
 - The store is opened **read-only** unless you pass `--writable`.

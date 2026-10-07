@@ -78,14 +78,29 @@ When sources conflict, prefer `EXTRACTED` facts over `INFERRED` ones.
 
 ## Install
 
-chiton is proprietary and the repository is private, so installing means
-building from source with repository access:
+The Claude Code plugin bundles the binary (see
+[Use it as a Claude Code plugin](#use-it-as-a-claude-code-plugin)), so plugin
+users can skip this section. For a standalone binary, use any of these:
 
-```sh
-git clone https://github.com/Eric-Fernald/chiton.git
-cd chiton
-make build              # or: go build ./cmd/chiton
-```
+- **Prebuilt release.** `scripts/install-chiton.sh` (`scripts/install-chiton.ps1`
+  on Windows) downloads the release asset for the host OS/arch, verifies its
+  SHA-256 against the release's `checksums.txt`, and installs into
+  `~/.chiton/bin`. Releases cover linux and darwin (amd64, arm64) and
+  windows/amd64. No release has been cut yet, so until then use one of the
+  routes below.
+- **`go install`:**
+
+  ```sh
+  go install github.com/Eric-Fernald/chiton/cmd/chiton@latest
+  ```
+
+- **From source:**
+
+  ```sh
+  git clone https://github.com/Eric-Fernald/chiton.git
+  cd chiton
+  make build              # or: go build ./cmd/chiton
+  ```
 
 `chiton --help` lists every subcommand.
 
@@ -119,23 +134,23 @@ claude plugin marketplace add Eric-Fernald/chiton
 claude plugin install chiton@chiton-marketplace
 ```
 
-The repository is private, so both commands go through your existing git
-credential setup. `owner/repo` shorthand clones over SSH by default; set
-`CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` to use HTTPS instead. For background
-auto-updates against a private repo, use SSH with a key loaded in `ssh-agent`,
-or run `gh auth setup-git` and set
-`CLAUDE_CODE_PLUGIN_KEEP_MARKETPLACE_ON_FAILURE=1` — a bare `GITHUB_TOKEN` in
-the environment is not enough on its own.
+The marketplace entry points at the `plugin-dist` branch, not at `main`. Each
+release adds one commit to that branch holding the assembled
+plugin: the manifest, the skills, and prebuilt binaries for linux and darwin
+(amd64, arm64) and windows/amd64. Windows on arm64 runs the amd64 binary under
+emulation. On those platforms the plugin works with no separate binary install.
+The branch does not exist until the first release is cut, so until then
+`plugin install` fails.
 
-**The plugin does not ship the binary.** It registers the MCP server, and that
-server is launched by bare name (`chiton serve --stdio`), so `chiton` has to be
-resolvable on `PATH` before any graph tool answers. Run `/chiton:setup`, which
-walks through locating or installing it, or install it directly with
-`scripts/install-chiton.sh` (`scripts/install-chiton.ps1` on Windows): each
-detects OS/arch, downloads the matching release asset, verifies its SHA-256
-against the release's `checksums.txt`, refuses to install a binary that checksum
-file does not list, and prints the line to add to your shell profile when its
-install directory is not already on `PATH`.
+**The plugin bundles the binary.** Its MCP server runs
+`${CLAUDE_PLUGIN_ROOT}/bin/chiton serve --stdio`. On Windows that command
+resolves to the bundled `bin/chiton.exe`. On Linux and macOS it runs the
+`bin/chiton` launcher, which execs `libexec/<os>-<arch>/chiton`. The bundled
+binary comes from the same release as the plugin's skills, so the two always
+match. On a platform with no bundled binary, the launcher falls back to
+`chiton` on `PATH`, then `$CLAUDE_PLUGIN_DATA/bin`, then `~/.chiton/bin`;
+`/chiton:setup` walks through installing one. The plugin needs a local
+filesystem, so it installs in Claude Code only, not in claude.ai or Cowork.
 
 What the plugin provides:
 
@@ -523,6 +538,6 @@ optional daemon-mode LLM path. See
 
 ## License
 
-Proprietary — Copyright © 2026 Eric Fernald. All rights reserved. See
-[LICENSE](LICENSE) and [NOTICE.md](NOTICE.md). Third-party dependencies remain
-under their own licenses.
+MIT — Copyright © 2026 Eric Fernald. See [LICENSE](LICENSE) and
+[NOTICE.md](NOTICE.md). Third-party dependencies remain under their own
+licenses.

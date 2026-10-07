@@ -6,23 +6,30 @@ There are two ways to wire chiton into an assistant:
   block, and (for Claude Code) two skill files into each assistant's own config
   files. Covers all nine supported assistants.
 - **The Claude Code plugin** — this repository doubles as a Claude Code plugin,
-  so one `claude plugin install` registers the MCP server and three skills.
-  Claude Code only.
+  so one `claude plugin install` registers the MCP server and three skills, and
+  brings a prebuilt binary with it. Claude Code only.
 
 This document covers both, plus getting the binary, the per-assistant config
 matrix, the three serve transports, the environment variables the ingest
 commands read, and troubleshooting.
 
-> chiton is distributed under a proprietary license — see [`LICENSE`](../LICENSE).
+> chiton is MIT-licensed — see [`LICENSE`](../LICENSE).
 
 ## Prerequisites: the `chiton` binary
 
-Every path below needs the `chiton` binary, and none of them ships it — not even
-the plugin. The repository is private and the license proprietary, so each route
-requires repository access.
+The Claude Code plugin bundles the binary on linux and darwin (amd64, arm64)
+and windows/amd64, so a plugin install needs nothing from this section (see
+[Claude Code plugin](#claude-code-plugin)). `chiton install`, and the plugin on
+any other platform, need a `chiton` binary installed by one of the routes below.
 
 Git 2.30 or newer is needed at runtime for `chiton sync git`, the git hooks, and
 `analyze --diff` / `diff_findings` ref resolution (they pass `--end-of-options`).
+
+**`go install`** (needs a Go toolchain):
+
+```sh
+go install github.com/Eric-Fernald/chiton/cmd/chiton@latest
+```
 
 **Build from source** (needs a Go toolchain):
 
@@ -47,8 +54,10 @@ verify its SHA-256 against that `checksums.txt`; a binary not listed there is
 refused, so `checksums.txt` has to ship with every release. They install into
 `$CLAUDE_PLUGIN_DATA/bin` when run as part of the plugin and `~/.chiton/bin`
 otherwise (`CHITON_INSTALL_DIR` / `--dir` overrides; `CHITON_VERSION` /
-`--version` picks the tag). Because the repository is private, set
-`GITHUB_TOKEN` — or authenticate `gh` — before running either.
+`--version` picks the tag). They need no credentials. The GitHub API allows 60
+unauthenticated requests an hour; set `GITHUB_TOKEN`, or authenticate `gh`, to
+lift that limit. No release has been cut yet, so until one is, use `go install`
+or build from source.
 
 **Teams and Outlook need a tagged build.** Microsoft Graph support is behind
 `//go:build msgraph`, which the default build *and every release artifact*
@@ -68,7 +77,8 @@ tag, `whisper_cgo`, only affects in-process audio transcription; without it
 
 `chiton install` records the absolute path of the running `chiton` binary as the
 MCP server's launch command, so the assistant can spawn it directly. The plugin
-does not — see [Claude Code plugin](#claude-code-plugin) below.
+launches the binary it bundles instead — see
+[Claude Code plugin](#claude-code-plugin) below.
 
 ## Quick start
 
@@ -139,29 +149,54 @@ user-global (codex, antigravity, copilot-cli): `Detect()` reports evidence in
 ## Claude Code plugin
 
 The repository is also a Claude Code plugin: `.claude-plugin/plugin.json`
-(plugin name `chiton`, version `0.1.0`) and `.claude-plugin/marketplace.json`
-(marketplace name `chiton-marketplace`). Installing the plugin is an
-*alternative* to `chiton install --assistant claude-code`, not an addition to
-it — both register the same MCP server and the same skill markdown.
+(plugin name `chiton`) and `.claude-plugin/marketplace.json` (marketplace name
+`chiton-marketplace`). Installing the plugin is an *alternative* to
+`chiton install --assistant claude-code`, not an addition to it — both register
+the same MCP server and the same skill markdown.
 
 ```sh
 claude plugin marketplace add Eric-Fernald/chiton
 claude plugin install chiton@chiton-marketplace
 ```
 
-Because the repository is private, the marketplace add needs an account with
-access to it.
+### Where the published plugin comes from
 
-### The plugin does not ship the binary
+`main` is the source tree. Its marketplace entry points Claude Code at the
+`plugin-dist` branch (`{"source": "github", "repo": "Eric-Fernald/chiton",
+"ref": "plugin-dist"}`). Each release (`.github/workflows/release.yml`,
+dispatched by hand with a tag) cross-compiles five binaries and pushes one
+commit to `plugin-dist`, parented on the previous release's so installed
+plugins fast-forward, holding the assembled plugin:
 
-The plugin's `.mcp.json` launches the server by **bare name**:
+| Path | Contents |
+|---|---|
+| `.claude-plugin/plugin.json` | the manifest, with `version` set to the tag minus its leading `v` |
+| `.mcp.json` | launches `${CLAUDE_PLUGIN_ROOT}/bin/chiton serve --stdio` |
+| `skills/` | the three plugin skills |
+| `bin/chiton`, `bin/chiton.cmd` | the POSIX `sh` launcher and the Windows shim |
+| `bin/chiton.exe` | the native windows/amd64 binary |
+| `libexec/<os>-<arch>/chiton` | native binaries for linux and darwin, amd64 and arm64 |
+| `scripts/install-chiton.{sh,ps1}` | the release installers |
+| `assets/icon.png`, `LICENSE`, `README.md` | the plugin icon, license, and readme |
+
+`scripts/build-plugin-dist.sh` (`make plugin-dist`) assembles it. Until the
+first release is cut, `plugin-dist` does not exist and `claude plugin install`
+fails.
+
+Because the plugin directory contains `bin/`, claude.ai and Cowork will not
+install it. chiton needs a local filesystem, so Claude Code is the only target.
+
+### The plugin bundles the binary
+
+The published plugin's `.mcp.json` (template: `packaging/plugin/.mcp.json`)
+launches the bundled binary:
 
 ```jsonc
-// .mcp.json (plugin root)
+// .mcp.json (published plugin root)
 {
   "mcpServers": {
     "chiton": {
-      "command": "chiton",
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/chiton",
       "args": ["serve", "--stdio"],
       "env": { "CHITON_PROJECT_DIR": "${CLAUDE_PROJECT_DIR}" }
     }
@@ -169,15 +204,26 @@ The plugin's `.mcp.json` launches the server by **bare name**:
 }
 ```
 
-So `chiton` has to resolve on `PATH`. Install it first — from source, or with
-`scripts/install-chiton.sh` / `scripts/install-chiton.ps1` (above). The plugin's
-`bin/` holds a `chiton` shim that is on the Bash tool's `PATH` while the plugin
-is enabled and resolves the real binary in order: `$CHITON_BIN`, `chiton` on
-`PATH`, `$CLAUDE_PLUGIN_DATA/bin/chiton`, `$HOME/.chiton/bin/chiton`. The
-`/chiton:setup` skill walks a user through exactly this.
+On Windows that command resolves to `bin/chiton.exe`, so no separate install is
+needed on windows/amd64; Windows on arm64 runs the same binary under emulation.
+On Linux and macOS it runs the `bin/chiton` launcher, which execs
+`libexec/<os>-<arch>/chiton`. The bundled binary comes from the same release as
+the plugin's skills, so the two always match.
 
-Unlike the installer's absolute-path entry, a bare command has no idea which
-workspace it belongs to — hence `CHITON_PROJECT_DIR`. With it set, chiton looks
+`bin/` is also on the Bash tool's `PATH` while the plugin is enabled. Both
+launchers (`bin/chiton` and `bin/chiton.cmd`) resolve the real binary in order:
+`$CHITON_BIN`, the bundled binary, `chiton` on `PATH`,
+`$CLAUDE_PLUGIN_DATA/bin/chiton`, `$HOME/.chiton/bin/chiton`. On a platform
+with no bundled binary, install one by a route under
+[Prerequisites](#prerequisites-the-chiton-binary); the `/chiton:setup` skill
+walks a user through this.
+
+The repo-root `.mcp.json` on `main` still launches `chiton` by bare name. It
+serves development of chiton itself (`claude --plugin-dir .` from a working
+tree), where there is no bundled binary, so `chiton` has to resolve on `PATH`.
+
+Unlike the installer's absolute-path entry, the plugin's command has no idea
+which workspace it belongs to — hence `CHITON_PROJECT_DIR`. With it set, chiton looks
 up `.chitonrc` in that directory and resolves a relative `graph_path` against
 it, instead of against whatever working directory the assistant happened to
 launch the server in. Unset (the plain CLI case), behaviour is unchanged.
@@ -275,8 +321,8 @@ back to the right workspace.
 | `CHITON_PASSPHRASE` | encrypted stores | Passphrase for an encrypted graph (`chiton init` encrypts by default; `--encrypt=false` opts out). Without it, commands prompt interactively — which an assistant-launched server cannot do. `chiton init` prints this reminder. |
 | `CHITON_PLAINTEXT_OK` | every command that opens a store | Set to `1` to hide the notice printed when a store has no keyfile. |
 | `CHITON_MCP_TOKEN` | `chiton serve --http` | Pins the bearer token (at least 16 characters) instead of a fresh one per start written to `<graph dir>/mcp-token`. |
-| `CHITON_BIN` | plugin `bin/chiton` shim | Explicit path to the real binary, checked before `PATH`. |
-| `CHITON_VERSION`, `CHITON_INSTALL_DIR`, `GITHUB_TOKEN` | `scripts/install-chiton.{sh,ps1}` | Release tag to fetch, install directory, and the token the private repo needs. |
+| `CHITON_BIN` | plugin `bin/chiton` shim | Explicit path to the real binary, checked before the bundled binary and `PATH`. |
+| `CHITON_VERSION`, `CHITON_INSTALL_DIR`, `GITHUB_TOKEN` | `scripts/install-chiton.{sh,ps1}` | Release tag to fetch, install directory, and an optional token that lifts the GitHub API's unauthenticated rate limit. |
 
 **Slack** (`chiton slack fetch`, `chiton slack serve-events`)
 
@@ -345,8 +391,8 @@ different store than the one `chiton build` wrote.
   the resolved store is independent of the server's working directory.
 - Verify with `chiton serve --graph /abs/path/to/store` and watch the startup
   log line for the embedding count.
-- With the **plugin**, there is no recorded `--graph` — the entry is a bare
-  `chiton serve --stdio`. What locates the store instead is
+- With the **plugin**, there is no recorded `--graph` — the entry is
+  `${CLAUDE_PLUGIN_ROOT}/bin/chiton serve --stdio`. What locates the store instead is
   `CHITON_PROJECT_DIR`, which the plugin sets to `${CLAUDE_PROJECT_DIR}`: the
   server reads `.chitonrc` from that directory and resolves a relative
   `graph_path` against it. If the tools come back empty under the plugin, check

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "chiton": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/chiton",
+      "args": ["serve", "--stdio"],
+      "env": {
+        "CHITON_PROJECT_DIR": "${CLAUDE_PROJECT_DIR}"
+      }
+    }
+  }
+}

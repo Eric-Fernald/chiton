@@ -9,6 +9,11 @@
   },
   "homepage": "https://github.com/Eric-Fernald/chiton",
   "repository": "https://github.com/Eric-Fernald/chiton",
+  "license": "MIT",
+  "icon": "./assets/icon.png",
+  "documentationUrl": "https://github.com/Eric-Fernald/chiton/blob/main/docs/INSTALL.md",
+  "supportUrl": "https://github.com/Eric-Fernald/chiton/issues",
+  "privacyPolicyUrl": "https://github.com/Eric-Fernald/chiton/blob/main/docs/PRIVACY.md",
   "keywords": [
     "knowledge-graph",
     "code-intelligence",

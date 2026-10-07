@@ -4,9 +4,10 @@ description: Set up chiton in this workspace — install the chiton binary if it
 
 # Setting chiton up in this workspace
 
-Chiton is a single Go binary. The plugin ships the skills and the MCP server
-registration; the binary itself is installed once per machine. Work through
-these steps in order and stop as soon as the graph answers.
+Chiton is a single Go binary. A plugin installed from the marketplace bundles
+it for linux and darwin (amd64, arm64) and windows/amd64, alongside the skills
+and the MCP server registration. Work through these steps in order and stop as
+soon as the graph answers.
 
 ## Step 1 — is the binary there?
 
@@ -14,15 +15,20 @@ these steps in order and stop as soon as the graph answers.
 chiton version
 ```
 
-If that prints a version, skip to Step 2.
+If that prints a version, skip to Step 2. With the plugin installed from the
+marketplace on a supported platform it should: the plugin's `bin/chiton`
+launcher is on the Bash tool's `PATH` and runs the bundled binary.
 
-If it is not found, resolve it in this order and use the first hit:
+If it is not found, the plugin is running from a source checkout
+(`claude --plugin-dir`) or on a platform with no bundled binary. The launcher
+resolves the binary in this order and uses the first hit:
 
 1. `$CHITON_BIN` — an explicit override, if the user has set one.
-2. `chiton` on `PATH`.
-3. `$CLAUDE_PLUGIN_DATA/bin/chiton` (`chiton.exe` on Windows) — where this
+2. The binary bundled with the plugin.
+3. `chiton` on `PATH`.
+4. `$CLAUDE_PLUGIN_DATA/bin/chiton` (`chiton.exe` on Windows) — where this
    plugin's installer puts it.
-4. `$HOME/.chiton/bin/chiton` (`%USERPROFILE%\.chiton\bin\chiton.exe`).
+5. `$HOME/.chiton/bin/chiton` (`%USERPROFILE%\.chiton\bin\chiton.exe`).
 
 If none exist, install it. Ask the user which route they want rather than
 picking for them — each has a different tradeoff:
@@ -45,25 +51,20 @@ SHA-256 against the published `checksums.txt`, and installs into
 `$CLAUDE_PLUGIN_DATA/bin` (or `~/.chiton/bin`). It never executes anything it
 downloads.
 
-**The repository is private**, so the script needs credentials: either
-`gh auth login` (simplest — it then downloads through the GitHub CLI) or
-`GITHUB_TOKEN` set to a token with `repo:read`. Release assets are fetched
-through the REST API, not the `releases/download/` browser URL, because that
-URL does not serve private repositories.
+It needs no credentials. The GitHub API allows 60 unauthenticated requests an
+hour; an authenticated `gh` or a `GITHUB_TOKEN` lifts that limit. It fails if no
+release has been published yet.
 
-**b. From a local clone** — no credentials beyond git access:
+**b. From a local clone** (needs a Go toolchain):
 
 ```sh
 make build
 ```
 
-**c. `go install`** — convenient, but it needs two extra things because the
-module is private: git credentials for github.com, and `GOPRIVATE` set so the
-Go module proxy is bypassed (without it you get a 404 from `proxy.golang.org`,
-which cannot see the repository).
+**c. `go install`** (needs a Go toolchain):
 
 ```sh
-GOPRIVATE=github.com/Eric-Fernald/* go install github.com/Eric-Fernald/chiton/cmd/chiton@latest
+go install github.com/Eric-Fernald/chiton/cmd/chiton@latest
 ```
 
 That lands in `$(go env GOPATH)/bin`, which is usually already on `PATH`. Any
@@ -72,8 +73,8 @@ Go new enough to honour the `toolchain` directive works — `go.mod` declares
 
 After installing, confirm `chiton` is on `PATH`. If it is not, tell the user
 the exact line to add to their shell profile — do not edit their profile for
-them. The plugin's MCP server launches `chiton` by name, so it must be
-resolvable from `PATH` for the graph tools to appear.
+them. A source checkout's `.mcp.json` launches `chiton` by name, so there it
+must be resolvable from `PATH` for the graph tools to appear.
 
 ## Step 2 — build the graph
 
@@ -156,7 +157,7 @@ chiton sync once .                   # manual one-shot reconcile
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| MCP tools missing entirely | `chiton` not on `PATH` when the server launched | install, then `/reload-plugins` |
+| MCP tools missing entirely | no bundled binary for this platform (or a source checkout) and `chiton` not on `PATH` when the server launched | install, then `/reload-plugins` |
 | `no passphrase available` | encrypted store, no terminal to prompt on | export `CHITON_PASSPHRASE` in the shell profile that starts the assistant, then restart it |
 | graph store is in use by another chiton process | a writer (sync watch, build, serve --writable) holds the store, or on Windows a running chiton serve blocks a writer | stop the other process (or the assistant's server) and retry |
 | needs a one-time read-write pass | a chiton writer crashed, or the store predates this chiton | close other chiton processes and retry; the next open repairs it |

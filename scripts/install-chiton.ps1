@@ -8,10 +8,10 @@
     host architecture, verifies its SHA-256 against the release's checksums.txt,
     and stops on any mismatch. The script never executes anything it downloads.
 
-    The repository is private, so release assets are NOT reachable through the
-    github.com/<owner>/<repo>/releases/download/ browser URL — that endpoint is
-    session-authenticated and returns 404 for a token. Assets come from the REST
-    API instead, either through the GitHub CLI or through the per-asset API URL.
+    Assets come from the GitHub REST API, either through an authenticated GitHub
+    CLI or through the per-asset API URL. The repository is public, so no
+    credentials are needed; the API allows 60 unauthenticated requests an hour,
+    and $env:GITHUB_TOKEN or an authenticated `gh` lifts that limit.
 
 .PARAMETER Version
     Release tag to install. Defaults to $env:CHITON_VERSION, then "latest".
@@ -21,8 +21,8 @@
     directory, then ~\.chiton\bin.
 
 .NOTES
-    Windows PowerShell 5.1 compatible. Authenticate with `gh auth login`, or set
-    $env:GITHUB_TOKEN to a token with repo:read.
+    Windows PowerShell 5.1 compatible. No credentials are needed; set
+    $env:GITHUB_TOKEN, or run `gh auth login`, only to lift the API rate limit.
 
     Run it with an explicit policy override, because Windows client SKUs default
     to Restricted:
@@ -64,9 +64,10 @@ function Show-NoAccess {
     Write-Host @"
 install-chiton: could not read releases for $Repo.
 
-The repository is private and may also have no published releases yet. Do one of:
-  * gh auth login                                 (then re-run — simplest route)
-  * `$env:GITHUB_TOKEN = '<repo:read PAT>'         (then re-run)
+There may be no published release yet, or the GitHub API's limit of 60
+unauthenticated requests an hour may be used up. Do one of:
+  * `$env:GITHUB_TOKEN = '<token>', or run gh auth login, then re-run
+  * go install github.com/Eric-Fernald/chiton/cmd/chiton@latest
   * build from source: git clone the repo and run 'make build'
 "@
     exit 1
@@ -201,8 +202,7 @@ $onPath = ($env:PATH -split ';') -contains $Dir
 if (-not $onPath) {
     Write-Host @"
 
-$Dir is not on your PATH. The chiton MCP server launches the binary by name, so
-add it for future sessions:
+$Dir is not on your PATH. To run chiton by name, add it for future sessions:
 
   [Environment]::SetEnvironmentVariable('PATH', "$Dir;" + [Environment]::GetEnvironmentVariable('PATH','User'), 'User')
 

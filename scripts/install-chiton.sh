@@ -6,15 +6,15 @@
 # OS/arch, verifies its SHA-256 against the release's checksums.txt, and stops
 # on any mismatch. The script never executes anything it downloads.
 #
-# The repository is private, so release assets are NOT reachable through the
-# github.com/<owner>/<repo>/releases/download/ browser URL — that endpoint is
-# session-authenticated and returns 404 for a token. Assets come from the REST
-# API instead, either through the GitHub CLI or through the per-asset API URL.
+# Assets come from the GitHub REST API, either through an authenticated GitHub
+# CLI or through the per-asset API URL. The repository is public, so no
+# credentials are needed; the API allows 60 unauthenticated requests an hour,
+# and GITHUB_TOKEN or an authenticated `gh` lifts that limit.
 #
 # Environment:
 #   CHITON_VERSION      release tag to install (default: latest)
 #   CHITON_INSTALL_DIR  override the install directory
-#   GITHUB_TOKEN        token with repo:read (or have `gh` authenticated)
+#   GITHUB_TOKEN        optional; lifts the API's unauthenticated rate limit
 #
 # Usage: sh scripts/install-chiton.sh [--version vX.Y.Z] [--dir /path/to/bin]
 
@@ -33,8 +33,8 @@ install-chiton.sh — fetch a prebuilt chiton binary and install it locally.
   --dir <path>       install directory (default: $CLAUDE_PLUGIN_DATA/bin,
                      else ~/.chiton/bin)
 
-The repository is private: authenticate with `gh auth login`, or export
-GITHUB_TOKEN with repo:read. Without either, build from source instead.
+No credentials are needed. GITHUB_TOKEN, or an authenticated `gh`, lifts the
+GitHub API's limit of 60 unauthenticated requests an hour.
 EOF
 }
 
@@ -106,8 +106,7 @@ trap cleanup EXIT INT TERM
 
 # ---- fetch the release ----------------------------------------------------
 #
-# Two routes, tried in order. Both work against a private repository; the
-# browser download URL deliberately is not used, because it cannot.
+# Two routes, tried in order. Both go through the REST API.
 #
 #   1. gh — resolves the tag, handles auth, and downloads assets by name.
 #   2. curl + jq — reads the release JSON, then GETs each asset's API URL with
@@ -131,9 +130,10 @@ no_access() {
 	cat >&2 <<EOF
 install-chiton: could not read releases for $REPO.
 
-The repository is private and may also have no published releases yet. Do one of:
-  * gh auth login                       (then re-run — this is the simplest route)
-  * export GITHUB_TOKEN=<repo:read PAT> (then re-run)
+There may be no published release yet, or the GitHub API's limit of 60
+unauthenticated requests an hour may be used up. Do one of:
+  * export GITHUB_TOKEN=<token>, or run gh auth login, then re-run
+  * go install github.com/Eric-Fernald/chiton/cmd/chiton@latest
   * build from source: git clone the repo and run 'make build'
 EOF
 	exit 1
@@ -168,10 +168,10 @@ if [ "$route" = gh ]; then
 		die "gh could not download $asset and checksums.txt from $tag"
 else
 	have jq || cat >&2 <<'EOF'
-install-chiton: jq is required for the curl route, because a private
-repository's assets can only be fetched by their API id, which lives in the
-release JSON. Install jq, or authenticate the GitHub CLI (gh auth login) and
-re-run — the gh route needs no JSON parsing.
+install-chiton: jq is required for the curl route, because it fetches each
+asset by its API id, which lives in the release JSON. Install jq, or
+authenticate the GitHub CLI (gh auth login) and re-run — the gh route needs no
+JSON parsing.
 EOF
 	have jq || exit 1
 
@@ -222,8 +222,8 @@ case ":${PATH}:" in
 *)
 	cat <<EOF
 
-$INSTALL_DIR is not on your PATH. The chiton MCP server launches the binary by
-name, so add it to your shell profile:
+$INSTALL_DIR is not on your PATH. To run chiton by name, add it to your shell
+profile:
 
   export PATH="$INSTALL_DIR:\$PATH"
 

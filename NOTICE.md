@@ -41,19 +41,16 @@ third-party code have been incorporated.
 
 ### License
 
-This software is proprietary and is distributed under the terms set
-forth in the LICENSE file at the root of this repository. All rights
-are reserved by the copyright holder.
+This software is distributed under the MIT License, as set forth in the
+LICENSE file at the root of this repository. The copyright holder
+retains copyright; the MIT License grants the permissions it states.
 
 ### Third-Party Dependencies
 
 This project makes use of open-source libraries and frameworks, each
 governed by its own license. The use of these dependencies does not
-affect the proprietary status of the original code authored within this
-repository. A full list of third-party dependencies and their
-respective licenses can be found in the project's dependency
-manifest(s) (e.g., `package.json`, `requirements.txt`,
-`pyproject.toml`).
+change the license of the original code authored within this
+repository. The full list of third-party dependencies is in `go.mod`.
 
 ---
 
@@ -61,4 +58,4 @@ manifest(s) (e.g., `package.json`, `requirements.txt`,
 provenance and may be updated as the project evolves. Material changes
 to ownership, contributor status, or licensing will be reflected here.*
 
-*Last updated: 05/21/2026*
+*Last updated: 10/06/2026*

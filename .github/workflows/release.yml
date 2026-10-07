@@ -138,3 +138,39 @@ jobs:
           files: |
             dist/chiton-*
             dist/checksums.txt
+
+      - name: Assemble the Claude Code plugin
+        # The published plugin bundles the binaries built above. See
+        # scripts/build-plugin-dist.sh for what goes in and why.
+        run: sh scripts/build-plugin-dist.sh "$TAG"
+
+      - name: Publish the plugin-dist branch
+        # .claude-plugin/marketplace.json on main installs the plugin from this
+        # branch. Each release adds one commit whose tree is exactly dist/plugin/,
+        # parented on the previous release's commit so an installed plugin always
+        # fast-forwards on update. Claude Code clones it shallow, so the binaries
+        # of earlier releases are never downloaded by users.
+        #
+        # The commit is built with plumbing against a scratch index, so the
+        # checked-out tag's index and .gitignore (which ignores *.exe) play no
+        # part, and the push reuses the credentials actions/checkout persisted.
+        env:
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          export GIT_DIR="$PWD/.git"
+          export GIT_INDEX_FILE="$RUNNER_TEMP/plugin-dist.index"
+          rm -f "$GIT_INDEX_FILE"
+          cd dist/plugin
+          git --work-tree=. add -A -- .
+          tree=$(git write-tree)
+          if parent=$(git rev-parse --verify -q refs/remotes/origin/plugin-dist); then
+            commit=$(git commit-tree "$tree" -p "$parent" -m "chiton plugin $TAG")
+          else
+            commit=$(git commit-tree "$tree" -m "chiton plugin $TAG")
+          fi
+          echo "--- plugin-dist tree for $TAG ---"
+          git ls-tree -r --long "$commit"
+          git push origin "$commit:refs/heads/plugin-dist"
