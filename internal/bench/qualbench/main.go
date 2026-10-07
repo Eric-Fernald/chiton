@@ -114,6 +114,7 @@ func cmdReport(args []string) error {
 	fs := flag.NewFlagSet("report", flag.ExitOnError)
 	questions := fs.String("questions", "questions.json", "question set from qualbench gen")
 	results := fs.String("results", "results.json", "runs from qualbench run")
+	regrade := fs.Bool("regrade", false, "re-score every stored reply with the current grader before reporting")
 	_ = fs.Parse(args)
 
 	var set QuestionSet
@@ -123,6 +124,20 @@ func cmdReport(args []string) error {
 	var runs []Run
 	if err := readJSON(*results, &runs); err != nil {
 		return err
+	}
+	if *regrade {
+		expected := map[string][]string{}
+		for _, q := range set.Questions {
+			expected[q.ID] = q.Expected
+		}
+		for i := range runs {
+			if runs[i].Error == "" {
+				runs[i].Score = Grade(runs[i].Reply, expected[runs[i].QuestionID], set.Module)
+			}
+		}
+		if err := writeJSON(*results, runs); err != nil {
+			return err
+		}
 	}
 	WriteReport(os.Stdout, set, runs)
 	return nil

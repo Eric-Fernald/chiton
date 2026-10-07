@@ -113,6 +113,7 @@ func TestGrade(t *testing.T) {
 		{"one missing", `["internal/mcp:New", "internal/graph"]`, 0.8, false},
 		{"one extra", `["internal/mcp:New", "cmd/chiton:Server.Run", "internal/graph", "internal/x:Y"]`, 2 * 0.75 / 1.75, false},
 		{"unparseable", "I could not find it.", 0, false},
+		{"graded on the final array", "[\"internal/x:Y\"]\n\nCorrection, final answer:\n[\"internal/mcp:New\", \"cmd/chiton:Server.Run\", \"internal/graph\"]", 1, true},
 	}
 	for _, c := range cases {
 		sc := Grade(c.reply, expected, "github.com/x/y")

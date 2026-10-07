@@ -16,18 +16,20 @@ type Score struct {
 	Extra      []string `json:"extra,omitempty"`
 }
 
-// ParseAnswer pulls the JSON array of strings out of a model reply, tolerating prose or a code fence around it.
+// ParseAnswer pulls the last JSON array of strings out of a model reply, tolerating prose or a code fence around
+// it. A reply that drafts an answer, corrects itself and gives a final array is graded on the final array.
 func ParseAnswer(reply string) ([]string, bool) {
-	start := strings.Index(reply, "[")
 	end := strings.LastIndex(reply, "]")
-	if start < 0 || end < start {
+	if end < 0 {
 		return nil, false
 	}
-	var out []string
-	if err := json.Unmarshal([]byte(reply[start:end+1]), &out); err != nil {
-		return nil, false
+	for start := strings.LastIndex(reply[:end], "["); start >= 0; start = strings.LastIndex(reply[:start], "[") {
+		var out []string
+		if json.Unmarshal([]byte(reply[start:end+1]), &out) == nil {
+			return out, true
+		}
 	}
-	return out, true
+	return nil, false
 }
 
 // normalize forgives formatting that does not change the meaning of an answer: surrounding space and
