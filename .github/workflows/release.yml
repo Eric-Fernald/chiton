@@ -140,20 +140,21 @@ jobs:
             dist/checksums.txt
 
       - name: Assemble the Claude Code plugin
-        # The published plugin bundles the binaries built above. See
-        # scripts/build-plugin-dist.sh for what goes in and why.
+        # The published plugin pins this release: it carries the tag and
+        # checksums.txt, and its launcher downloads the one binary a machine
+        # needs from the release just published. That is why this runs after
+        # the release exists. See scripts/build-plugin-dist.sh.
         run: sh scripts/build-plugin-dist.sh "$TAG"
 
       - name: Publish the plugin-dist branch
         # .claude-plugin/marketplace.json on main installs the plugin from this
         # branch. Each release adds one commit whose tree is exactly dist/plugin/,
         # parented on the previous release's commit so an installed plugin always
-        # fast-forwards on update. Claude Code clones it shallow, so the binaries
-        # of earlier releases are never downloaded by users.
+        # fast-forwards on update.
         #
         # The commit is built with plumbing against a scratch index, so the
-        # checked-out tag's index and .gitignore (which ignores *.exe) play no
-        # part, and the push reuses the credentials actions/checkout persisted.
+        # checked-out tag's index and .gitignore play no part, and the push
+        # reuses the credentials actions/checkout persisted.
         env:
           GIT_AUTHOR_NAME: github-actions[bot]
           GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com

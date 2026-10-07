@@ -124,7 +124,7 @@ func TestMarketplaceManifest(t *testing.T) {
 	}
 
 	entry := m.Plugins[0]
-	// Users install the release-built tree with its bundled binaries, never main itself.
+	// Users install the release-built tree, pinned to its release, never main itself.
 	// The release workflow pushes that tree to this branch.
 	src := entry.Source
 	if src.Source != "github" || src.Repo != "Eric-Fernald/chiton" || src.Ref != "plugin-dist" {
@@ -139,12 +139,12 @@ func TestMarketplaceManifest(t *testing.T) {
 
 func TestPluginMCPConfig(t *testing.T) {
 	// The repo-root .mcp.json serves a source checkout (developing chiton, or `claude --plugin-dir .`),
-	// where no binary is bundled, so it launches chiton from PATH.
+	// which pins no release, so it launches chiton from PATH.
 	checkMCPConfig(t, ".mcp.json", "chiton")
 
-	// The published plugin launches its bundled launcher. On Windows this
-	// extensionless path resolves to bin/chiton.exe; elsewhere it runs the
-	// bin/chiton sh launcher, which execs libexec/<os>-<arch>/chiton.
+	// The published plugin starts its launcher, which downloads the binary
+	// for this machine on first use. On Windows Claude Code resolves this
+	// extensionless path to bin/chiton.cmd; elsewhere it runs the bin/chiton sh launcher.
 	checkMCPConfig(t, filepath.Join("packaging", "plugin", ".mcp.json"), "${CLAUDE_PLUGIN_ROOT}/bin/chiton")
 }
 

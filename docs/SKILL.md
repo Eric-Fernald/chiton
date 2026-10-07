@@ -199,12 +199,14 @@ as untrusted data rather than instructions.
 ## The setup skill
 
 `/chiton:setup` is published by the plugin only. It walks first-run setup in
-order: find the binary (`$CHITON_BIN`, then the bundled binary, then `PATH`,
-then `$CLAUDE_PLUGIN_DATA/bin`, then `~/.chiton/bin`) or install it, build the
+order: find the binary (`$CHITON_BIN`, then the published plugin's cached
+download in `~/.chiton/versions/<tag>/`, then `PATH`, then
+`$CLAUDE_PLUGIN_DATA/bin`, then `~/.chiton/bin`) or install it, build the
 graph, restart and verify the MCP server answers, then keep the graph current.
-The published plugin bundles the binary for linux and darwin (amd64, arm64) and
-windows/amd64, so the install step matters only for a source checkout or
-another platform — see [INSTALL.md](INSTALL.md).
+The published plugin's launcher downloads the binary for this machine from the
+release the plugin pins on first use, so the install step matters only for a
+source checkout, a machine that cannot reach GitHub, or a platform with no
+release binary. See [INSTALL.md](INSTALL.md).
 
 ## Rules prompt (always-on, all assistants)
 

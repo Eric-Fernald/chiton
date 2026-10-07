@@ -7,7 +7,8 @@ There are two ways to wire chiton into an assistant:
   files. Covers all nine supported assistants.
 - **The Claude Code plugin** — this repository doubles as a Claude Code plugin,
   so one `claude plugin install` registers the MCP server and three skills, and
-  brings a prebuilt binary with it. Claude Code only.
+  its launcher downloads the prebuilt binary for the machine on first use.
+  Claude Code only.
 
 This document covers both, plus getting the binary, the per-assistant config
 matrix, the three serve transports, the environment variables the ingest
@@ -17,10 +18,12 @@ commands read, and troubleshooting.
 
 ## Prerequisites: the `chiton` binary
 
-The Claude Code plugin bundles the binary on linux and darwin (amd64, arm64)
-and windows/amd64, so a plugin install needs nothing from this section (see
+The Claude Code plugin downloads the binary for linux and darwin (amd64, arm64)
+and windows (amd64, and arm64 under emulation) on first use, so a plugin
+install needs nothing from this section (see
 [Claude Code plugin](#claude-code-plugin)). `chiton install`, and the plugin on
-any other platform, need a `chiton` binary installed by one of the routes below.
+any other platform or on a machine that cannot reach GitHub, need a `chiton`
+binary installed by one of the routes below.
 
 Git 2.30 or newer is needed at runtime for `chiton sync git`, the git hooks, and
 `analyze --diff` / `diff_findings` ref resolution (they pass `--end-of-options`).
@@ -49,14 +52,26 @@ make release            # dist/chiton-<version>-<os>-<arch>[.exe] + dist/checksu
 ```
 
 `scripts/install-chiton.sh` (POSIX `sh`) and `scripts/install-chiton.ps1`
-(Windows PowerShell 5.1) download the release asset for the host OS/arch and
-verify its SHA-256 against that `checksums.txt`; a binary not listed there is
-refused, so `checksums.txt` has to ship with every release. They install into
-`$CLAUDE_PLUGIN_DATA/bin` when run as part of the plugin and `~/.chiton/bin`
-otherwise (`CHITON_INSTALL_DIR` / `--dir` overrides; `CHITON_VERSION` /
-`--version` picks the tag). They need no credentials. The GitHub API allows 60
-unauthenticated requests an hour; set `GITHUB_TOKEN`, or authenticate `gh`, to
-lift that limit. No release has been cut yet, so until one is, use `go install`
+(Windows PowerShell 5.1) download the release asset for the host OS/arch,
+`chiton-<tag>-<os>-<arch>[.exe]`, and verify its SHA-256 against that
+`checksums.txt`; a binary not listed there is refused, so `checksums.txt` has
+to ship with every release. Both files come straight from the release download
+URL, `https://github.com/Eric-Fernald/chiton/releases/download/<tag>/`. The
+scripts call no GitHub API and need no credentials. "latest" resolves by reading
+where `https://github.com/Eric-Fernald/chiton/releases/latest` redirects. The
+POSIX script needs `curl` or `wget`, plus `sha256sum` or `shasum`. Windows on
+arm64 gets the windows/amd64 binary, which runs under emulation.
+
+| Option | Environment | Meaning |
+|---|---|---|
+| `--version` / `-Version` | `CHITON_VERSION` | Release tag to install (default `latest`). |
+| `--dir` / `-Dir` | `CHITON_INSTALL_DIR` | Install directory: default `$CLAUDE_PLUGIN_DATA/bin` when run as part of the plugin, otherwise `~/.chiton/bin`. |
+| `--checksums` / `-Checksums` | | Verify against this local `checksums.txt` instead of downloading the release's own. The plugin launchers pass the copy shipped inside the plugin. |
+| `--quiet` / `-Quiet` | | Print errors only. |
+
+The scripts copy the binary beside its target and rename it into place, so a
+concurrent launcher never runs a half-written file. They never execute anything
+they download. No release has been cut yet, so until one is, use `go install`
 or build from source.
 
 **Teams and Outlook need a tagged build.** Microsoft Graph support is behind
@@ -77,7 +92,7 @@ tag, `whisper_cgo`, only affects in-process audio transcription; without it
 
 `chiton install` records the absolute path of the running `chiton` binary as the
 MCP server's launch command, so the assistant can spawn it directly. The plugin
-launches the binary it bundles instead — see
+launches the binary its launcher downloaded instead — see
 [Claude Code plugin](#claude-code-plugin) below.
 
 ## Quick start
@@ -164,32 +179,34 @@ claude plugin install chiton@chiton-marketplace
 `main` is the source tree. Its marketplace entry points Claude Code at the
 `plugin-dist` branch (`{"source": "github", "repo": "Eric-Fernald/chiton",
 "ref": "plugin-dist"}`). Each release (`.github/workflows/release.yml`,
-dispatched by hand with a tag) cross-compiles five binaries and pushes one
-commit to `plugin-dist`, parented on the previous release's so installed
-plugins fast-forward, holding the assembled plugin:
+dispatched by hand with a tag, e.g. `gh workflow run release.yml -f tag=v1.0.0`)
+cross-compiles five binaries, publishes them with `checksums.txt` as a GitHub
+release, then pushes one commit to `plugin-dist`, parented on the previous
+release's so installed plugins fast-forward, holding the assembled plugin:
 
 | Path | Contents |
 |---|---|
 | `.claude-plugin/plugin.json` | the manifest, with `version` set to the tag minus its leading `v` |
 | `.mcp.json` | launches `${CLAUDE_PLUGIN_ROOT}/bin/chiton serve --stdio` |
 | `skills/` | the three plugin skills |
-| `bin/chiton`, `bin/chiton.cmd` | the POSIX `sh` launcher and the Windows shim |
-| `bin/chiton.exe` | the native windows/amd64 binary |
-| `libexec/<os>-<arch>/chiton` | native binaries for linux and darwin, amd64 and arm64 |
-| `scripts/install-chiton.{sh,ps1}` | the release installers |
+| `bin/chiton`, `bin/chiton.cmd` | the POSIX `sh` launcher and the Windows launcher |
+| `release/tag` | the release this plugin pins, e.g. `v1.0.0` |
+| `release/checksums.txt` | that release's SHA-256 list |
+| `scripts/install-chiton.{sh,ps1}` | the release installers the launchers call |
 | `assets/icon.png`, `LICENSE`, `README.md` | the plugin icon, license, and readme |
 
-`scripts/build-plugin-dist.sh` (`make plugin-dist`) assembles it. Until the
-first release is cut, `plugin-dist` does not exist and `claude plugin install`
-fails.
+The branch holds no binaries. `scripts/build-plugin-dist.sh`
+(`make plugin-dist`) assembles it, and refuses a `checksums.txt` that lacks any
+of the five assets the launchers download. Until the first release is cut,
+`plugin-dist` does not exist and `claude plugin install` fails.
 
 Because the plugin directory contains `bin/`, claude.ai and Cowork will not
 install it. chiton needs a local filesystem, so Claude Code is the only target.
 
-### The plugin bundles the binary
+### The plugin downloads its binary on first use
 
 The published plugin's `.mcp.json` (template: `packaging/plugin/.mcp.json`)
-launches the bundled binary:
+starts the server through the plugin's launcher:
 
 ```jsonc
 // .mcp.json (published plugin root)
@@ -204,23 +221,56 @@ launches the bundled binary:
 }
 ```
 
-On Windows that command resolves to `bin/chiton.exe`, so no separate install is
-needed on windows/amd64; Windows on arm64 runs the same binary under emulation.
-On Linux and macOS it runs the `bin/chiton` launcher, which execs
-`libexec/<os>-<arch>/chiton`. The bundled binary comes from the same release as
-the plugin's skills, so the two always match.
+On Windows, Claude Code resolves that command to `bin/chiton.cmd`, which runs
+`scripts/install-chiton.ps1` through `powershell -ExecutionPolicy Bypass`. On
+Linux and macOS it runs the `bin/chiton` sh launcher, which runs
+`scripts/install-chiton.sh`. Either way, the first launch:
+
+1. reads the pinned tag from `release/tag`;
+2. downloads `chiton-<tag>-<os>-<arch>[.exe]` (about 25 MB) from
+   `https://github.com/Eric-Fernald/chiton/releases/download/<tag>/`;
+3. verifies its SHA-256 against `release/checksums.txt`, which arrived with the
+   plugin through git rather than from the same place as the binary, and
+   refuses the binary on a mismatch;
+4. caches it as `~/.chiton/versions/<tag>/chiton`
+   (`%USERPROFILE%\.chiton\versions\<tag>\chiton.exe` on Windows) and runs it.
+
+Later launches find the cached binary and start it directly. A plugin update
+that moves to a new tag downloads that tag's binary once. The binary therefore
+always comes from the same release as the plugin's skills. Windows on arm64
+gets the amd64 binary, which runs under emulation. Linux and macOS need `curl`
+or `wget`, plus `sha256sum` or `shasum`; Windows needs only the built-in
+PowerShell. Launcher and installer messages go to stderr, because stdout
+carries the MCP protocol.
+
+The first MCP start waits for the download before the server answers. On a
+slow link that can exceed Claude Code's MCP startup timeout. If it does, wait
+for the download to finish (the file appears under `~/.chiton/versions/<tag>/`),
+then reconnect with `/mcp` or `/reload-plugins`; the next launch uses the cache.
+
+chiton does not clean up `~/.chiton/versions/`. Directories for earlier tags
+stay after an update, and uninstalling the plugin leaves the whole directory
+behind. Delete it by hand to reclaim the space.
 
 `bin/` is also on the Bash tool's `PATH` while the plugin is enabled. Both
 launchers (`bin/chiton` and `bin/chiton.cmd`) resolve the real binary in order:
-`$CHITON_BIN`, the bundled binary, `chiton` on `PATH`,
-`$CLAUDE_PLUGIN_DATA/bin/chiton`, `$HOME/.chiton/bin/chiton`. On a platform
-with no bundled binary, install one by a route under
-[Prerequisites](#prerequisites-the-chiton-binary); the `/chiton:setup` skill
-walks a user through this.
+
+1. `$CHITON_BIN`;
+2. in a published plugin only, the cached pinned binary, downloading it first
+   if it is missing;
+3. `chiton` on `PATH`;
+4. `$CLAUDE_PLUGIN_DATA/bin/chiton`;
+5. `$HOME/.chiton/bin/chiton`.
+
+If the download fails, for example offline, the launcher moves on to step 3. On
+a machine that cannot reach GitHub, or on a platform with no release binary,
+install one by a route under [Prerequisites](#prerequisites-the-chiton-binary);
+the `/chiton:setup` skill walks a user through this.
 
 The repo-root `.mcp.json` on `main` still launches `chiton` by bare name. It
 serves development of chiton itself (`claude --plugin-dir .` from a working
-tree), where there is no bundled binary, so `chiton` has to resolve on `PATH`.
+tree). A working tree has no `release/tag`, so the launcher skips step 2 and
+`chiton` has to resolve on `PATH`.
 
 Unlike the installer's absolute-path entry, the plugin's command has no idea
 which workspace it belongs to — hence `CHITON_PROJECT_DIR`. With it set, chiton looks
@@ -321,8 +371,8 @@ back to the right workspace.
 | `CHITON_PASSPHRASE` | encrypted stores | Passphrase for an encrypted graph (`chiton init` encrypts by default; `--encrypt=false` opts out). Without it, commands prompt interactively — which an assistant-launched server cannot do. `chiton init` prints this reminder. |
 | `CHITON_PLAINTEXT_OK` | every command that opens a store | Set to `1` to hide the notice printed when a store has no keyfile. |
 | `CHITON_MCP_TOKEN` | `chiton serve --http` | Pins the bearer token (at least 16 characters) instead of a fresh one per start written to `<graph dir>/mcp-token`. |
-| `CHITON_BIN` | plugin `bin/chiton` shim | Explicit path to the real binary, checked before the bundled binary and `PATH`. |
-| `CHITON_VERSION`, `CHITON_INSTALL_DIR`, `GITHUB_TOKEN` | `scripts/install-chiton.{sh,ps1}` | Release tag to fetch, install directory, and an optional token that lifts the GitHub API's unauthenticated rate limit. |
+| `CHITON_BIN` | plugin `bin/chiton` / `bin/chiton.cmd` launchers | Explicit path to the real binary, checked before the plugin's pinned download and `PATH`. Setting it also skips the first-run download. |
+| `CHITON_VERSION`, `CHITON_INSTALL_DIR` | `scripts/install-chiton.{sh,ps1}` | Release tag to fetch (default `latest`) and install directory. |
 
 **Slack** (`chiton slack fetch`, `chiton slack serve-events`)
 
@@ -367,6 +417,15 @@ ingest` read only local files and need no environment at all.
   the `chiton` binary captured at install time. If you moved or rebuilt the
   binary elsewhere, re-run `chiton install` so the path is refreshed, or pass the
   intended binary.
+- **Plugin, first start timed out.** The first launch of each plugin version
+  downloads about 25 MB before the server answers, which can outlast Claude
+  Code's MCP startup timeout. Once `~/.chiton/versions/<tag>/` holds the binary,
+  reconnect with `/mcp` or `/reload-plugins`. If the download itself fails
+  (offline, a proxy blocking `github.com`, a checksum mismatch, or no `curl` /
+  `wget` / `sha256sum` / `shasum` on Linux or macOS), the launcher falls back to
+  `chiton` on `PATH`; install one by a route under
+  [Prerequisites](#prerequisites-the-chiton-binary), or download the release
+  asset yourself and point `CHITON_BIN` at it.
 - **Run the server by hand** to see the error the assistant is swallowing:
   ```sh
   chiton serve --stdio

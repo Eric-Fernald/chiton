@@ -263,15 +263,15 @@ lands as `100644` fails silently for every POSIX user.
 The repository root doubles as a Claude Code plugin for development:
 `.claude-plugin/plugin.json` declares it, and `skills/` plus the root `.mcp.json`
 are its components. What users install is different: a release build of it,
-with the binaries bundled, that the release workflow commits to the
-`plugin-dist` branch. `.claude-plugin/marketplace.json` points at that branch.
+pinned to that release, that the release workflow commits to the `plugin-dist`
+branch. `.claude-plugin/marketplace.json` points at that branch.
 
 ```sh
 claude --plugin-dir .                   # load the plugin from this working tree
 make plugin-validate                    # strict-validate a clean clone of HEAD
 make plugin-dist VERSION=v1.2.3         # build dist/plugin/ as a release would
 claude plugin validate dist/plugin --strict
-claude --plugin-dir dist/plugin         # try the bundled build
+claude --plugin-dir dist/plugin         # try the release build
 ```
 
 `make plugin-validate` validates a fresh clone because a working tree can hold
@@ -283,9 +283,19 @@ strict validation today, and they should stay that way.
 
 `scripts/build-plugin-dist.sh` decides what the published plugin contains. Its
 `.mcp.json` comes from `packaging/plugin/.mcp.json` and launches
-`${CLAUDE_PLUGIN_ROOT}/bin/chiton`: Windows resolves that extensionless path to
-the bundled `bin/chiton.exe`, and Linux and macOS run the `bin/chiton` sh
-launcher, which execs `libexec/<os>-<arch>/chiton`.
+`${CLAUDE_PLUGIN_ROOT}/bin/chiton`: Claude Code on Windows resolves that
+extensionless path to `bin/chiton.cmd`, and Linux and macOS run the `bin/chiton`
+sh launcher. The tree carries no binaries. It carries `release/tag` and
+`release/checksums.txt` instead, and on first use the launcher runs
+`scripts/install-chiton.{sh,ps1}` to download that tag's binary for the machine,
+verify it against the shipped checksums, and cache it in
+`~/.chiton/versions/<tag>/`. Every message on that path must go to stderr,
+because stdout is the MCP protocol stream.
+
+Trying `dist/plugin/` locally therefore needs the tag in
+`dist/plugin/release/tag` to be published on GitHub: the launcher downloads
+from the real release, not from `dist/`. To test unreleased binaries, point
+`CHITON_BIN` at one, or pre-seed `~/.chiton/versions/<tag>/` with it.
 
 ## Working on chiton itself
 

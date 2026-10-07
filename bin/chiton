@@ -3,19 +3,24 @@
 #
 # This directory is added to the Bash tool's PATH while the chiton plugin is
 # enabled, so `chiton ...` works from the assistant even when the binary lives
-# somewhere that is not on the user's own PATH.
+# somewhere that is not on the user's own PATH. The published plugin's
+# .mcp.json also launches the MCP server through this script on Linux and macOS
+# (on Windows the same command resolves to chiton.cmd beside it).
 #
-# The published plugin's .mcp.json also launches the MCP server through this
-# script on Linux and macOS (on Windows the same command resolves to the
-# chiton.exe beside it).
+# A published plugin ships no binaries. It carries release/tag, the release it
+# was built from, and release/checksums.txt, that release's hashes. On first use
+# this script downloads the one binary this machine needs into
+# ~/.chiton/versions/<tag>/ and verifies it against those hashes.
 #
 # Resolution order:
 #   1. $CHITON_BIN
-#   2. the binary bundled with the plugin: ../libexec/<os>-<arch>/chiton, or
-#      chiton.exe beside this script under Git Bash / MSYS on Windows
+#   2. published plugin: ~/.chiton/versions/<tag>/chiton, downloading it first
+#      if it is missing
 #   3. `chiton` / `chiton.exe` on PATH (this shim's own directory is skipped)
 #   4. $CLAUDE_PLUGIN_DATA/bin/chiton
 #   5. $HOME/.chiton/bin/chiton
+#
+# Every message goes to stderr: on the MCP path, stdout is the protocol stream.
 
 set -eu
 
@@ -60,28 +65,26 @@ if usable "${CHITON_BIN:-}"; then
 	exec "$CHITON_BIN" "$@"
 fi
 
-# 2. bundled binary. A source checkout has none; release builds of the plugin
-# carry one per supported platform.
-if [ -n "$self_dir" ]; then
+# 2. the release this plugin was built from. A source checkout has no
+# release/tag and skips straight to PATH.
+pinned=""
+if [ -n "$self_dir" ] && [ -f "$self_dir/../release/tag" ]; then
+	pinned=$(tr -d ' \r\n' <"$self_dir/../release/tag")
+fi
+if [ -n "$pinned" ] && [ -n "${HOME:-}" ]; then
+	ext=""
 	case "$(uname -s 2>/dev/null)" in
-	Linux) os=linux ;;
-	Darwin) os=darwin ;;
-	MINGW* | MSYS* | CYGWIN*) os=windows ;;
-	*) os="" ;;
+	MINGW* | MSYS* | CYGWIN*) ext=".exe" ;;
 	esac
-	case "$(uname -m 2>/dev/null)" in
-	x86_64 | amd64) arch=amd64 ;;
-	arm64 | aarch64) arch=arm64 ;;
-	*) arch="" ;;
-	esac
-	if [ "$os" = windows ]; then
-		if usable "$self_dir/chiton.exe"; then
-			exec "$self_dir/chiton.exe" "$@"
-		fi
-	elif [ -n "$os" ] && [ -n "$arch" ]; then
-		if usable "$self_dir/../libexec/$os-$arch/chiton"; then
-			exec "$self_dir/../libexec/$os-$arch/chiton" "$@"
-		fi
+	vdir="$HOME/.chiton/versions/$pinned"
+	if ! usable "$vdir/chiton$ext"; then
+		echo "chiton: fetching the $pinned binary for this machine (first run only)" >&2
+		sh "$self_dir/../scripts/install-chiton.sh" --version "$pinned" --dir "$vdir" \
+			--checksums "$self_dir/../release/checksums.txt" --quiet </dev/null >&2 ||
+			echo "chiton: download failed; looking for another chiton instead" >&2
+	fi
+	if usable "$vdir/chiton$ext"; then
+		exec "$vdir/chiton$ext" "$@"
 	fi
 fi
 
@@ -127,8 +130,7 @@ fi # end of the resolution block skipped on re-entry
 cat >&2 <<'EOF'
 chiton: binary not found.
 
-Plugin releases bundle a binary for linux and darwin (amd64, arm64) and
-windows/amd64. Without one, install it with any of:
+Install it with any of:
   sh "$CLAUDE_PLUGIN_ROOT/scripts/install-chiton.sh"           # prebuilt release
   go install github.com/Eric-Fernald/chiton/cmd/chiton@latest
   make build                                                    # from a local clone

@@ -985,6 +985,7 @@ records in the MCP config so the server uses the same store as 'chiton build'.`,
 
 			deps := buildSemanticDeps(cmd, cfg, gs, clusterResults)
 			deps.IncludePII = includePII
+			deps.Version = strings.TrimPrefix(resolveVersion(), "v")
 			s := mcpsrv.New(gs, clusterResults, deps)
 
 			// All three transports expose the same tool set.

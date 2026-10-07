@@ -1,16 +1,22 @@
 #!/bin/sh
-# build-plugin-dist.sh — assemble the published Claude Code plugin, with its
-# bundled binaries, into dist/plugin/.
+# build-plugin-dist.sh — assemble the published Claude Code plugin into
+# dist/plugin/.
 #
-# Run after `make release VERSION=<tag>`, which leaves the five cross-compiled
-# binaries in dist/. The release workflow commits the result as the single
-# commit of the plugin-dist branch, which .claude-plugin/marketplace.json on main
-# points at.
+# Run after `make release VERSION=<tag>`, which leaves the cross-compiled
+# binaries and dist/checksums.txt in dist/. The release workflow commits the
+# result to the plugin-dist branch, which .claude-plugin/marketplace.json on
+# main points at.
 #
-# The tree differs from main in three ways: it carries the binaries, its
-# .mcp.json launches the bundled launcher instead of `chiton` from PATH
-# (packaging/plugin/.mcp.json), and it leaves out everything that is not
-# plugin content.
+# The plugin ships no binaries. It pins the release instead: release/tag names
+# it and release/checksums.txt carries its hashes. On first use, bin/chiton (or
+# bin/chiton.cmd on Windows) downloads the single binary the machine needs from
+# that release and verifies it against those hashes, so an install never
+# downloads binaries for other platforms.
+#
+# The tree differs from main in three ways: it carries release/, its .mcp.json
+# launches the bin/ launcher instead of `chiton` from PATH
+# (packaging/plugin/.mcp.json), and it leaves out everything that is not plugin
+# content.
 #
 # Usage: sh scripts/build-plugin-dist.sh <tag>
 
@@ -29,19 +35,27 @@ version="${tag#v}"
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 dist="$root/dist"
 out="$dist/plugin"
+sums="$dist/checksums.txt"
 
-bin_for() {
-	# bin_for <os> <arch> <ext> — the release artifact `make release` wrote.
-	f="$dist/chiton-$tag-$1-$2$3"
-	[ -f "$f" ] || {
-		echo "build-plugin-dist: missing $f; run 'make release VERSION=$tag' first" >&2
+[ -f "$sums" ] || {
+	echo "build-plugin-dist: missing $sums; run 'make release VERSION=$tag' first" >&2
+	exit 1
+}
+# The launchers download these exact names; refuse to pin a release that lacks one.
+for asset in \
+	"chiton-$tag-linux-amd64" \
+	"chiton-$tag-linux-arm64" \
+	"chiton-$tag-darwin-amd64" \
+	"chiton-$tag-darwin-arm64" \
+	"chiton-$tag-windows-amd64.exe"; do
+	awk -v a="$asset" '$NF == a { found = 1 } END { exit !found }' "$sums" || {
+		echo "build-plugin-dist: $sums has no entry for $asset" >&2
 		exit 1
 	}
-	printf '%s\n' "$f"
-}
+done
 
 rm -rf "$out"
-mkdir -p "$out/.claude-plugin" "$out/bin" "$out/scripts" "$out/assets"
+mkdir -p "$out/.claude-plugin" "$out/bin" "$out/scripts" "$out/assets" "$out/release"
 
 # plugin.json with the version stamped from the tag. Claude Code only offers an
 # update when this changes.
@@ -59,16 +73,10 @@ cp "$root/scripts/install-chiton.sh" "$root/scripts/install-chiton.ps1" "$out/sc
 cp "$root/assets/icon.png" "$out/assets/"
 cp "$root/packaging/plugin/README.md" "$root/LICENSE" "$out/"
 
-# Windows resolves `${CLAUDE_PLUGIN_ROOT}/bin/chiton` to bin/chiton.exe, so the
-# native binary sits beside the POSIX launcher rather than under libexec/.
-cp "$(bin_for windows amd64 .exe)" "$out/bin/chiton.exe"
-for platform in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
-	os=${platform%/*}
-	arch=${platform#*/}
-	mkdir -p "$out/libexec/$os-$arch"
-	cp "$(bin_for "$os" "$arch" "")" "$out/libexec/$os-$arch/chiton"
-done
+# No trailing newline: chiton.cmd reads this with `set /p`, which would keep a CR.
+printf '%s' "$tag" >"$out/release/tag"
+cp "$sums" "$out/release/checksums.txt"
 
-chmod 0755 "$out/bin/chiton" "$out/scripts/install-chiton.sh" "$out"/libexec/*/chiton
+chmod 0755 "$out/bin/chiton" "$out/scripts/install-chiton.sh"
 
 echo "build-plugin-dist: assembled $out for $tag"

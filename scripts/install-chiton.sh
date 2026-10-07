@@ -1,52 +1,64 @@
 #!/bin/sh
-# install-chiton.sh — fetch a prebuilt chiton binary and install it locally.
+# install-chiton.sh — fetch the prebuilt chiton binary for this machine and
+# install it locally.
 #
-# Installs into $CLAUDE_PLUGIN_DATA/bin when running as part of the Claude Code
-# plugin, otherwise ~/.chiton/bin. Downloads the release asset for the host
-# OS/arch, verifies its SHA-256 against the release's checksums.txt, and stops
-# on any mismatch. The script never executes anything it downloads.
+# Downloads exactly one release asset, the one for the host OS/arch, verifies
+# its SHA-256 against a checksums.txt, and stops on any mismatch. The script
+# never executes anything it downloads.
 #
-# Assets come from the GitHub REST API, either through an authenticated GitHub
-# CLI or through the per-asset API URL. The repository is public, so no
-# credentials are needed; the API allows 60 unauthenticated requests an hour,
-# and GITHUB_TOKEN or an authenticated `gh` lifts that limit.
+# The plugin's bin/chiton launcher runs this on first use with --checksums
+# pointing at the checksums.txt shipped inside the plugin, so the binary is
+# checked against hashes that arrived with the plugin rather than from the same
+# place as the binary. Run by hand, it fetches the release's own checksums.txt.
+#
+# Assets come from the release download URLs on github.com; no API calls, no
+# credentials, no rate limit. Needs curl or wget, and sha256sum or shasum.
 #
 # Environment:
 #   CHITON_VERSION      release tag to install (default: latest)
 #   CHITON_INSTALL_DIR  override the install directory
-#   GITHUB_TOKEN        optional; lifts the API's unauthenticated rate limit
 #
 # Usage: sh scripts/install-chiton.sh [--version vX.Y.Z] [--dir /path/to/bin]
+#                                     [--checksums <file>] [--quiet]
 
 set -eu
 
 REPO="Eric-Fernald/chiton"
-API="https://api.github.com/repos/$REPO"
 VERSION="${CHITON_VERSION:-latest}"
 INSTALL_DIR="${CHITON_INSTALL_DIR:-}"
+CHECKSUMS=""
+QUIET=""
 
 usage() {
 	cat <<'EOF'
-install-chiton.sh — fetch a prebuilt chiton binary and install it locally.
+install-chiton.sh — fetch the prebuilt chiton binary for this machine.
 
-  --version vX.Y.Z   release tag to install (default: latest)
-  --dir <path>       install directory (default: $CLAUDE_PLUGIN_DATA/bin,
-                     else ~/.chiton/bin)
-
-No credentials are needed. GITHUB_TOKEN, or an authenticated `gh`, lifts the
-GitHub API's limit of 60 unauthenticated requests an hour.
+  --version vX.Y.Z    release tag to install (default: latest)
+  --dir <path>        install directory (default: $CLAUDE_PLUGIN_DATA/bin,
+                      else ~/.chiton/bin)
+  --checksums <file>  verify against this checksums.txt instead of the
+                      release's own
+  --quiet             print errors only
 EOF
 }
 
 while [ $# -gt 0 ]; do
 	case "$1" in
-	--version)
-		VERSION="$2"
+	--version | --dir | --checksums)
+		[ $# -ge 2 ] || {
+			echo "install-chiton: $1 needs a value" >&2
+			exit 2
+		}
+		case "$1" in
+		--version) VERSION="$2" ;;
+		--dir) INSTALL_DIR="$2" ;;
+		--checksums) CHECKSUMS="$2" ;;
+		esac
 		shift 2
 		;;
-	--dir)
-		INSTALL_DIR="$2"
-		shift 2
+	--quiet)
+		QUIET=1
+		shift
 		;;
 	-h | --help)
 		usage
@@ -72,9 +84,22 @@ die() {
 	exit 1
 }
 
+say() {
+	[ -n "$QUIET" ] || echo "install-chiton: $*"
+}
+
 have() {
 	command -v "$1" >/dev/null 2>&1
 }
+
+# fetch <url> <output-path>
+if have curl; then
+	fetch() { curl -fsSL --retry 2 -o "$2" "$1"; }
+elif have wget; then
+	fetch() { wget -q -O "$2" "$1"; }
+else
+	die "need curl or wget to download a release"
+fi
 
 # ---- host detection -------------------------------------------------------
 
@@ -96,103 +121,60 @@ esac
 EXT=""
 [ "$OS" = windows ] && EXT=".exe"
 
-if [ "$OS" = windows ] && [ "$ARCH" = arm64 ]; then
-	die "no prebuilt windows/arm64 release; build from source (see CONTRIBUTING.md)"
+# There is no windows/arm64 build; Windows on Arm runs the amd64 one under
+# emulation.
+[ "$OS" = windows ] && ARCH=amd64
+
+if [ -n "$CHECKSUMS" ] && [ ! -f "$CHECKSUMS" ]; then
+	die "checksums file not found: $CHECKSUMS"
 fi
 
 tmpdir="$(mktemp -d)"
 cleanup() { rm -rf "$tmpdir"; }
 trap cleanup EXIT INT TERM
 
-# ---- fetch the release ----------------------------------------------------
-#
-# Two routes, tried in order. Both go through the REST API.
-#
-#   1. gh — resolves the tag, handles auth, and downloads assets by name.
-#   2. curl + jq — reads the release JSON, then GETs each asset's API URL with
-#      Accept: application/octet-stream. curl drops the Authorization header on
-#      the cross-host redirect to storage, so the token never leaves GitHub.
+# ---- resolve the tag ------------------------------------------------------
 
-auth_header=""
-[ -n "${GITHUB_TOKEN:-}" ] && auth_header="Authorization: Bearer $GITHUB_TOKEN"
-
-api_get() {
-	# api_get <url> <output-path> [accept]
-	accept="${3:-application/vnd.github+json}"
-	if [ -n "$auth_header" ]; then
-		curl -fsSL -H "$auth_header" -H "Accept: $accept" -o "$2" "$1"
+if [ "$VERSION" = latest ]; then
+	# github.com/<repo>/releases/latest redirects to .../releases/tag/<tag>.
+	# Reading the redirect avoids the rate-limited REST API.
+	if have curl; then
+		effective="$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" 2>/dev/null)" || effective=""
 	else
-		curl -fsSL -H "Accept: $accept" -o "$2" "$1"
+		effective="$(wget -q -S --max-redirect=0 -O /dev/null "https://github.com/$REPO/releases/latest" 2>&1 | sed -n 's/^ *[Ll]ocation: *//p' | tr -d '\r' | tail -1)" || effective=""
 	fi
-}
-
-no_access() {
-	cat >&2 <<EOF
-install-chiton: could not read releases for $REPO.
-
-There may be no published release yet, or the GitHub API's limit of 60
-unauthenticated requests an hour may be used up. Do one of:
-  * export GITHUB_TOKEN=<token>, or run gh auth login, then re-run
-  * go install github.com/Eric-Fernald/chiton/cmd/chiton@latest
-  * build from source: git clone the repo and run 'make build'
-EOF
-	exit 1
-}
-
-if have gh && gh auth status >/dev/null 2>&1; then
-	route=gh
-	if [ "$VERSION" = latest ]; then
-		tag="$(gh release view --repo "$REPO" --json tagName --jq .tagName 2>/dev/null)" || no_access
-	else
-		tag="$VERSION"
-	fi
-	[ -n "$tag" ] || no_access
+	case "$effective" in
+	*/releases/tag/*) tag="${effective##*/releases/tag/}" ;;
+	*)
+		die "could not find a published release of $REPO. Install with
+  go install github.com/Eric-Fernald/chiton/cmd/chiton@latest
+or build from source ('make build')."
+		;;
+	esac
 else
-	have curl || die "need either the GitHub CLI (gh) or curl to download a release"
-	route=api
-	url="$API/releases/latest"
-	[ "$VERSION" != latest ] && url="$API/releases/tags/$VERSION"
-	api_get "$url" "$tmpdir/release.json" 2>/dev/null || no_access
-	tag="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$tmpdir/release.json" | head -1)"
-	[ -n "$tag" ] || die "could not read a release tag from the GitHub API response"
+	tag="$VERSION"
 fi
 
 asset="chiton-$tag-$OS-$ARCH$EXT"
-echo "install-chiton: installing $asset from $tag"
+base="https://github.com/$REPO/releases/download/$tag"
+say "downloading $asset"
 
 # ---- download -------------------------------------------------------------
 
-if [ "$route" = gh ]; then
-	gh release download "$tag" --repo "$REPO" --dir "$tmpdir" \
-		--pattern "$asset" --pattern checksums.txt --clobber ||
-		die "gh could not download $asset and checksums.txt from $tag"
-else
-	have jq || cat >&2 <<'EOF'
-install-chiton: jq is required for the curl route, because it fetches each
-asset by its API id, which lives in the release JSON. Install jq, or
-authenticate the GitHub CLI (gh auth login) and re-run — the gh route needs no
-JSON parsing.
-EOF
-	have jq || exit 1
+fetch "$base/$asset" "$tmpdir/$asset" || die "download failed: $base/$asset"
 
-	asset_url="$(jq -r --arg n "$asset" '.assets[] | select(.name == $n) | .url' "$tmpdir/release.json")"
-	sums_url="$(jq -r '.assets[] | select(.name == "checksums.txt") | .url' "$tmpdir/release.json")"
-	[ -n "$asset_url" ] && [ "$asset_url" != null ] || die "release $tag has no asset named $asset"
-	[ -n "$sums_url" ] && [ "$sums_url" != null ] || die "release $tag publishes no checksums.txt — refusing to install an unverified binary"
-
-	api_get "$asset_url" "$tmpdir/$asset" application/octet-stream || die "download failed: $asset"
-	api_get "$sums_url" "$tmpdir/checksums.txt" application/octet-stream || die "download failed: checksums.txt"
+if [ -z "$CHECKSUMS" ]; then
+	fetch "$base/checksums.txt" "$tmpdir/checksums.txt" ||
+		die "release $tag publishes no checksums.txt — refusing to install an unverified binary"
+	CHECKSUMS="$tmpdir/checksums.txt"
 fi
-
-[ -f "$tmpdir/$asset" ] || die "download did not produce $asset"
-[ -f "$tmpdir/checksums.txt" ] || die "no checksums.txt for $tag — refusing to install an unverified binary"
 
 # ---- verify ---------------------------------------------------------------
 #
 # checksums.txt is `sha256sum` output: "<hash>  <name>", or "<hash> *<name>" in
-# binary mode. Match either, anchored so linux-amd64 cannot match linux-arm64.
+# binary mode. Match the name exactly so linux-amd64 cannot match linux-arm64.
 
-expected="$(grep " \{1,2\}\*\{0,1\}$asset\$" "$tmpdir/checksums.txt" | awk '{print $1}' | head -1)"
+expected="$(awk -v a="$asset" '{ n = $NF; sub(/^\*/, "", n) } n == a { print $1; exit }' "$CHECKSUMS")"
 [ -n "$expected" ] || die "checksums.txt has no entry for $asset — refusing to install"
 
 if have sha256sum; then
@@ -204,19 +186,24 @@ else
 fi
 
 [ "$actual" = "$expected" ] || die "checksum mismatch for $asset (expected $expected, got $actual) — refusing to install"
-echo "install-chiton: sha256 verified"
+say "sha256 verified"
 
 # ---- install --------------------------------------------------------------
+#
+# Copy beside the target and rename over it, so a concurrent launcher never
+# sees a half-written binary.
 
 mkdir -p "$INSTALL_DIR"
 target="$INSTALL_DIR/chiton$EXT"
-cp "$tmpdir/$asset" "$target"
-chmod +x "$target"
+cp "$tmpdir/$asset" "$target.tmp.$$"
+chmod +x "$target.tmp.$$"
+mv -f "$target.tmp.$$" "$target"
 
 # Deliberately not running the binary to report its version: this script must
 # not execute what it downloaded.
-echo "install-chiton: installed $tag -> $target"
+say "installed $tag -> $target"
 
+[ -z "$QUIET" ] || exit 0
 case ":${PATH}:" in
 *":$INSTALL_DIR:"*) ;;
 *)
@@ -226,8 +213,6 @@ $INSTALL_DIR is not on your PATH. To run chiton by name, add it to your shell
 profile:
 
   export PATH="$INSTALL_DIR:\$PATH"
-
-Then restart Claude Code (or run /reload-plugins) so the MCP server picks it up.
 EOF
 	;;
 esac

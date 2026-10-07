@@ -14,7 +14,8 @@ parameters, and a small realistic request/response example per tool.
 ## Starting the server
 
 The MCP server is started with `chiton serve`. The server name advertised to
-clients is `chiton`, version `0.1.0`. All three transports expose the **identical
+clients is `chiton`, versioned like the binary (`chiton version --short`, without
+a leading `v`). All three transports expose the **identical
 tool surface**.
 
 ```sh

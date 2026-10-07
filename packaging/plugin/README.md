@@ -6,8 +6,16 @@ hand.
 
 chiton is an on-device knowledge graph for your codebase. The plugin registers
 its MCP server and the `/chiton:graph`, `/chiton:subagent-tasks` and
-`/chiton:setup` skills, and bundles the chiton binary for Linux and macOS
-(amd64, arm64) and Windows (amd64), so nothing else needs installing.
+`/chiton:setup` skills. It carries no binary. On first use its launcher
+downloads the chiton binary for this machine (Linux and macOS on amd64 or
+arm64, Windows on amd64 or arm64, about 25 MB) from the release named in
+`release/tag`, verifies it against `release/checksums.txt`, and caches it in
+`~/.chiton/versions/<tag>/`. Nothing else needs installing.
+
+The first start waits for that download. If it outlasts Claude Code's MCP
+startup timeout, reconnect with `/mcp` or `/reload-plugins` once it finishes.
+Uninstalling the plugin leaves `~/.chiton/versions/` behind; delete it to
+reclaim the space.
 
 ```sh
 claude plugin marketplace add Eric-Fernald/chiton

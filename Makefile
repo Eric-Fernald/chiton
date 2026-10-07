@@ -110,10 +110,11 @@ checksums: ## Write dist/checksums.txt over the built artifacts
 	fi && \
 	echo "wrote $(DIST)/checksums.txt"
 
-# The published plugin bundles the release binaries; the release workflow
-# commits dist/plugin/ as the plugin-dist branch. VERSION must be a v-tag.
+# The published plugin pins a release (its tag and checksums.txt) and downloads
+# the one binary a machine needs on first use; the release workflow commits
+# dist/plugin/ to the plugin-dist branch. VERSION must be a v-tag.
 .PHONY: plugin-dist
-plugin-dist: release ## Assemble the published plugin, binaries included, into dist/plugin/
+plugin-dist: release ## Assemble the published plugin, pinned to $(VERSION), into dist/plugin/
 	sh scripts/build-plugin-dist.sh $(VERSION)
 
 # Validates a fresh clone rather than the working tree, which may hold

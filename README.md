@@ -78,16 +78,18 @@ When sources conflict, prefer `EXTRACTED` facts over `INFERRED` ones.
 
 ## Install
 
-The Claude Code plugin bundles the binary (see
+The Claude Code plugin fetches the binary for your machine on first use (see
 [Use it as a Claude Code plugin](#use-it-as-a-claude-code-plugin)), so plugin
 users can skip this section. For a standalone binary, use any of these:
 
 - **Prebuilt release.** `scripts/install-chiton.sh` (`scripts/install-chiton.ps1`
-  on Windows) downloads the release asset for the host OS/arch, verifies its
-  SHA-256 against the release's `checksums.txt`, and installs into
-  `~/.chiton/bin`. Releases cover linux and darwin (amd64, arm64) and
-  windows/amd64. No release has been cut yet, so until then use one of the
-  routes below.
+  on Windows) downloads the release asset for the host OS/arch from the
+  release's download URL, verifies its SHA-256 against the release's
+  `checksums.txt`, and installs into `~/.chiton/bin`. It uses no GitHub API and
+  no credentials. Releases cover linux and darwin (amd64, arm64) and
+  windows/amd64; Windows on arm64 gets the amd64 binary, which runs under
+  emulation. No release has been cut yet, so until then use one of the routes
+  below.
 - **`go install`:**
 
   ```sh
@@ -135,19 +137,28 @@ claude plugin install chiton@chiton-marketplace
 ```
 
 The marketplace entry points at the `plugin-dist` branch, not at `main`. Each
-release adds one commit to that branch holding the assembled
-plugin: the manifest, the skills, and prebuilt binaries for linux and darwin
-(amd64, arm64) and windows/amd64. Windows on arm64 runs the amd64 binary under
-emulation. On those platforms the plugin works with no separate binary install.
-The branch does not exist until the first release is cut, so until then
-`plugin install` fails.
+release adds one commit to that branch holding the assembled plugin: the
+manifest, the skills, the launchers, and the release it pins (`release/tag` and
+that release's `release/checksums.txt`). It carries no binaries. The branch
+does not exist until the first release is cut, so until then `plugin install`
+fails.
 
-**The plugin bundles the binary.** Its MCP server runs
+**The plugin downloads one binary on first use.** Its MCP server runs
 `${CLAUDE_PLUGIN_ROOT}/bin/chiton serve --stdio`. On Windows that command
-resolves to the bundled `bin/chiton.exe`. On Linux and macOS it runs the
-`bin/chiton` launcher, which execs `libexec/<os>-<arch>/chiton`. The bundled
-binary comes from the same release as the plugin's skills, so the two always
-match. On a platform with no bundled binary, the launcher falls back to
+resolves to `bin/chiton.cmd`; on Linux and macOS it runs the `bin/chiton` sh
+launcher. The first time it runs, the launcher downloads the pinned release's
+binary for this OS and architecture (about 25 MB) from the GitHub release,
+checks its SHA-256 against the `checksums.txt` that came with the plugin, and
+caches it in `~/.chiton/versions/<tag>/`. Later launches use the cache, and a
+plugin update to a new release downloads that release's binary once. Linux and
+macOS need `curl` or `wget` plus `sha256sum` or `shasum`; Windows uses the
+built-in PowerShell. Windows on arm64 gets the amd64 binary, which runs under
+emulation.
+
+The first start waits for that download before the server answers. On a slow
+link it can outlast Claude Code's MCP startup timeout; once the download
+finishes, reconnect with `/mcp` or `/reload-plugins` and the next launch uses
+the cache. If the download fails (offline, say), the launcher falls back to
 `chiton` on `PATH`, then `$CLAUDE_PLUGIN_DATA/bin`, then `~/.chiton/bin`;
 `/chiton:setup` walks through installing one. The plugin needs a local
 filesystem, so it installs in Claude Code only, not in claude.ai or Cowork.
