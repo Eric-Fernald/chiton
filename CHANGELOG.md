@@ -7,6 +7,15 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Added
+
+- **`chiton bench` reports cheaper retrieval settings.** Each question now shows the depth-1 neighborhood and the `query_graph` lookup next to the depth-2 neighborhood.
+- **Answer-quality benchmark.** `internal/bench/qualbench` asks Claude Code structural questions about a Go repository with grep only, with chiton added, and with chiton alone, and grades the answers against ground truth computed with `go/ast`. Results and method are in `docs/BENCHMARK.md`.
+
+### Changed
+
+- **`chiton bench` no longer picks test symbols as query targets.** Busy test helpers dominated the old sample; `--include-tests` restores it. Test files still count toward the corpus.
+
 ## [1.0.0] - 2026-10-06
 
 The first public release.

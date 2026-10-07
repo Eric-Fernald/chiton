@@ -1,0 +1,2794 @@
+[
+  {
+    "condition": "chiton-only",
+    "question_id": "callers-1",
+    "repeat": 1,
+    "reply": "[\"cmd/chiton:buildSemanticDeps\", \"cmd/chiton:runDiff\", \"internal/mcp:New\"]",
+    "tool_calls": {
+      "mcp__chiton__get_node_neighborhood": 1
+    },
+    "blocked": {
+      "Bash": 1,
+      "Grep": 1
+    },
+    "num_turns": 4,
+    "duration_ms": 6324,
+    "cost_usd": 0.027776800000000004,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 4225,
+    "cache_read_input_tokens": 33574,
+    "output_tokens": 415,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "callers-1",
+    "repeat": 1,
+    "reply": "[\"cmd/chiton:runDiff\", \"cmd/chiton:buildSemanticDeps\", \"internal/mcp:New\"]",
+    "tool_calls": {
+      "Grep": 4
+    },
+    "num_turns": 5,
+    "duration_ms": 6757,
+    "cost_usd": 0.035060999999999995,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 5609,
+    "cache_read_input_tokens": 37015,
+    "output_tokens": 521,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "callers-1",
+    "repeat": 1,
+    "reply": "Line 115 is in runDiff (114–172), line 1027 in buildSemanticDeps, and line 74 in New.\n\n[\"cmd/chiton:runDiff\", \"cmd/chiton:buildSemanticDeps\", \"internal/mcp:New\"]",
+    "tool_calls": {
+      "Grep": 4
+    },
+    "num_turns": 5,
+    "duration_ms": 7203,
+    "cost_usd": 0.0312916,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 5072,
+    "cache_read_input_tokens": 17458,
+    "output_tokens": 750,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "callers-2",
+    "repeat": 1,
+    "reply": "[\"cmd/chiton:openSyncEngine\", \"cmd/chiton:buildCmd\", \"cmd/chiton:recordHookScan\", \"cmd/chiton:analyzeCmd\", \"internal/hooks:Run\"]",
+    "tool_calls": {
+      "Grep": 7
+    },
+    "num_turns": 8,
+    "duration_ms": 8828,
+    "cost_usd": 0.0654638,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 11762,
+    "cache_read_input_tokens": 43169,
+    "output_tokens": 977,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "callers-2",
+    "repeat": 1,
+    "reply": "[\"cmd/chiton:analyzeCmd\", \"cmd/chiton:openSyncEngine\", \"cmd/chiton:buildCmd\", \"cmd/chiton:recordHookScan\", \"internal/hooks:Run\"]",
+    "tool_calls": {
+      "Grep": 8
+    },
+    "num_turns": 9,
+    "duration_ms": 11370,
+    "cost_usd": 0.078785,
+    "input_tokens": 8,
+    "cache_creation_input_tokens": 14709,
+    "cache_read_input_tokens": 42665,
+    "output_tokens": 1140,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "callers-3",
+    "repeat": 1,
+    "reply": "[\"cmd/chiton:resolveStoreKey\", \"cmd/chiton:buildSemanticDeps\", \"cmd/chiton:analyzeCmd\", \"cmd/chiton:reportPendingLLM\", \"cmd/chiton:analyzePendingCmd\", \"cmd/chiton:analyzeSubmitCmd\", \"internal/mcp:New\", \"internal/analyze:NewLLMService\"]",
+    "tool_calls": {
+      "Grep": 5
+    },
+    "num_turns": 6,
+    "duration_ms": 10127,
+    "cost_usd": 0.039970000000000006,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 6292,
+    "cache_read_input_tokens": 18050,
+    "output_tokens": 1118,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 0.875,
+      "recall": 0.875,
+      "f1": 0.875,
+      "exact": false,
+      "parse_error": false,
+      "missing": [
+        "cmd/chiton:runDiff"
+      ],
+      "extra": [
+        "cmd/chiton:analyzeCmd"
+      ]
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "callers-3",
+    "repeat": 1,
+    "reply": "[\"cmd/chiton:runDiff\",\"cmd/chiton:reportPendingLLM\",\"cmd/chiton:analyzePendingCmd\",\"cmd/chiton:analyzeSubmitCmd\",\"cmd/chiton:resolveStoreKey\",\"cmd/chiton:buildSemanticDeps\",\"internal/mcp:New\",\"internal/analyze:NewLLMService\"]",
+    "tool_calls": {
+      "Grep": 5
+    },
+    "num_turns": 6,
+    "duration_ms": 9673,
+    "cost_usd": 0.05392979999999999,
+    "input_tokens": 8,
+    "cache_creation_input_tokens": 7979,
+    "cache_read_input_tokens": 53939,
+    "output_tokens": 1121,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "callers-2",
+    "repeat": 1,
+    "reply": "[\"cmd/chiton:analyzeCmd\"]",
+    "tool_calls": {
+      "Read": 1,
+      "mcp__chiton__get_node": 1,
+      "mcp__chiton__get_node_neighborhood": 4,
+      "mcp__chiton__query_graph": 3,
+      "mcp__chiton__semantic_search": 1,
+      "mcp__chiton__shortest_path": 1
+    },
+    "blocked": {
+      "Bash": 1,
+      "Grep": 1
+    },
+    "num_turns": 14,
+    "duration_ms": 24749,
+    "cost_usd": 0.1219442,
+    "input_tokens": 22,
+    "cache_creation_input_tokens": 15604,
+    "cache_read_input_tokens": 177121,
+    "output_tokens": 2406,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 0.2,
+      "f1": 0.33333333333333337,
+      "exact": false,
+      "parse_error": false,
+      "missing": [
+        "cmd/chiton:buildCmd",
+        "cmd/chiton:openSyncEngine",
+        "cmd/chiton:recordHookScan",
+        "internal/hooks:Run"
+      ]
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "callers-3",
+    "repeat": 1,
+    "reply": "[\"cmd/chiton:reportPendingLLM\",\"cmd/chiton:analyzeSubmitCmd\",\"cmd/chiton:resolveStoreKey\",\"internal/analyze:NewLLMService\",\"cmd/chiton:analyzePendingCmd\",\"cmd/chiton:buildSemanticDeps\",\"cmd/chiton:runDiff\",\"internal/mcp:New\"]",
+    "tool_calls": {
+      "mcp__chiton__get_node_neighborhood": 3,
+      "mcp__chiton__query_graph": 1
+    },
+    "blocked": {
+      "Bash": 1
+    },
+    "num_turns": 6,
+    "duration_ms": 8860,
+    "cost_usd": 0.0511078,
+    "input_tokens": 10,
+    "cache_creation_input_tokens": 7994,
+    "cache_read_input_tokens": 58359,
+    "output_tokens": 744,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "callers-4",
+    "repeat": 1,
+    "reply": "[\"internal/analyze:SaveBaseline\", \"cmd/chiton:serveToken\", \"internal/cache:Cache.Save\", \"internal/analyze:LLMService.saveState\", \"internal/crypto:KeyFile.Save\", \"internal/install:writeKeepingMode\", \"internal/vector:SaveHNSW\", \"internal/graph/cluster:WriteSidecar\"]",
+    "tool_calls": {
+      "Grep": 9
+    },
+    "num_turns": 10,
+    "duration_ms": 8641,
+    "cost_usd": 0.0372704,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 5734,
+    "cache_read_input_tokens": 18012,
+    "output_tokens": 1072,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "callers-4",
+    "repeat": 1,
+    "reply": "[\"internal/analyze:SaveBaseline\", \"internal/analyze:LLMService.saveState\", \"cmd/chiton:serveToken\", \"internal/crypto:KeyFile.Save\", \"internal/cache:Cache.Save\", \"internal/vector:SaveHNSW\", \"internal/graph/cluster:WriteSidecar\", \"internal/install:writeKeepingMode\"]",
+    "tool_calls": {
+      "Grep": 9
+    },
+    "num_turns": 10,
+    "duration_ms": 9364,
+    "cost_usd": 0.044562199999999996,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 6507,
+    "cache_read_input_tokens": 37561,
+    "output_tokens": 1101,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "callers-5",
+    "repeat": 1,
+    "reply": "Line 337 is in verifyTaskBinding; 512 in prune; 556 in rescan; 53 in fetch.\n\n[\"internal/ingest/url:httpFetcher.fetch\", \"internal/analyze:LLMService.verifyTaskBinding\", \"internal/ingest:Engine.prune\", \"internal/ingest:Engine.rescan\"]",
+    "tool_calls": {
+      "Grep": 4
+    },
+    "num_turns": 5,
+    "duration_ms": 6882,
+    "cost_usd": 0.026348999999999997,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 4375,
+    "cache_read_input_tokens": 17435,
+    "output_tokens": 535,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "callers-4",
+    "repeat": 1,
+    "reply": "[\"internal/crypto:KeyFile.Save\",\"internal/vector:SaveHNSW\",\"internal/install:writeKeepingMode\",\"internal/cache:Cache.Save\",\"internal/analyze:LLMService.saveState\",\"internal/graph/cluster:WriteSidecar\",\"cmd/chiton:serveToken\",\"internal/analyze:SaveBaseline\"]",
+    "tool_calls": {
+      "mcp__chiton__get_node_neighborhood": 3,
+      "mcp__chiton__query_graph": 1
+    },
+    "blocked": {
+      "Bash": 1,
+      "Grep": 1
+    },
+    "num_turns": 7,
+    "duration_ms": 9489,
+    "cost_usd": 0.08925359999999999,
+    "input_tokens": 10,
+    "cache_creation_input_tokens": 16564,
+    "cache_read_input_tokens": 69538,
+    "output_tokens": 907,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "callers-5",
+    "repeat": 1,
+    "reply": "Lines: llm.go 337 → verifyTaskBinding; fetch.go 53 → httpFetcher.fetch; engine 512 → prune; 556 → rescan.\n\n[\"internal/analyze:LLMService.verifyTaskBinding\", \"internal/ingest/url:httpFetcher.fetch\", \"internal/ingest:Engine.prune\", \"internal/ingest:Engine.rescan\"]",
+    "tool_calls": {
+      "Grep": 4
+    },
+    "num_turns": 5,
+    "duration_ms": 6910,
+    "cost_usd": 0.0335452,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 5149,
+    "cache_read_input_tokens": 36986,
+    "output_tokens": 554,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "callers-6",
+    "repeat": 1,
+    "reply": "[\"internal/ingest/git:RangeChanges\", \"internal/ingest/git:ChangedSince\", \"internal/analyze:GitCommit\"]",
+    "tool_calls": {
+      "Grep": 2,
+      "Read": 2
+    },
+    "num_turns": 5,
+    "duration_ms": 6719,
+    "cost_usd": 0.022559799999999998,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 3246,
+    "cache_read_input_tokens": 17119,
+    "output_tokens": 614,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "callers-6",
+    "repeat": 1,
+    "reply": "[\"internal/analyze:GitCommit\", \"internal/ingest/git:RangeChanges\", \"internal/ingest/git:ChangedSince\"]",
+    "tool_calls": {
+      "Grep": 3
+    },
+    "num_turns": 4,
+    "duration_ms": 7239,
+    "cost_usd": 0.024853599999999997,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 3454,
+    "cache_read_input_tokens": 36678,
+    "output_tokens": 369,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "callers-5",
+    "repeat": 1,
+    "reply": "[\"internal/ingest/url:httpFetcher.fetch\", \"internal/analyze:LLMService.verifyTaskBinding\", \"internal/ingest:Engine.prune\", \"internal/ingest:Engine.rescan\"]",
+    "tool_calls": {
+      "mcp__chiton__get_node_neighborhood": 2,
+      "mcp__chiton__query_graph": 1
+    },
+    "blocked": {
+      "Bash": 1
+    },
+    "num_turns": 5,
+    "duration_ms": 14972,
+    "cost_usd": 0.0387274,
+    "input_tokens": 10,
+    "cache_creation_input_tokens": 5387,
+    "cache_read_input_tokens": 59697,
+    "output_tokens": 522,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "callees-1",
+    "repeat": 1,
+    "reply": "[\"cmd/chiton:loadStore\", \"internal/analyze:New\", \"internal/analyze:SeverityRank\", \"cmd/chiton:runDiff\", \"cmd/chiton:reportPendingLLM\", \"cmd/chiton:analyzePendingCmd\", \"cmd/chiton:analyzeSubmitCmd\"]",
+    "tool_calls": {
+      "Grep": 1,
+      "Read": 1
+    },
+    "num_turns": 3,
+    "duration_ms": 6246,
+    "cost_usd": 0.036785799999999994,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 7060,
+    "cache_read_input_tokens": 17219,
+    "output_tokens": 509,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "callers-6",
+    "repeat": 1,
+    "reply": "I'm checking the graph for callers of `ValidateRef`. The graph shows three, and I'm answering from that.\n\n[\"internal/ingest/git:ChangedSince\", \"internal/ingest/git:RangeChanges\", \"internal/analyze:GitCommit\"]",
+    "tool_calls": {
+      "mcp__chiton__get_node_neighborhood": 2,
+      "mcp__chiton__query_graph": 1
+    },
+    "blocked": {
+      "Bash": 1,
+      "Grep": 1,
+      "PowerShell": 1
+    },
+    "num_turns": 7,
+    "duration_ms": 11462,
+    "cost_usd": 0.045659599999999995,
+    "input_tokens": 12,
+    "cache_creation_input_tokens": 5631,
+    "cache_read_input_tokens": 70558,
+    "output_tokens": 900,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "callees-1",
+    "repeat": 1,
+    "reply": "[\"cmd/chiton:loadStore\",\"internal/analyze:New\",\"internal/analyze:SeverityRank\",\"cmd/chiton:runDiff\",\"cmd/chiton:reportPendingLLM\",\"cmd/chiton:analyzePendingCmd\",\"cmd/chiton:analyzeSubmitCmd\"]",
+    "tool_calls": {
+      "Grep": 2,
+      "Read": 1
+    },
+    "num_turns": 4,
+    "duration_ms": 7410,
+    "cost_usd": 0.052466000000000006,
+    "input_tokens": 8,
+    "cache_creation_input_tokens": 8763,
+    "cache_read_input_tokens": 55340,
+    "output_tokens": 633,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "callees-1",
+    "repeat": 1,
+    "reply": "[\"cmd/chiton:loadStore\",\"cmd/chiton:runDiff\",\"cmd/chiton:reportPendingLLM\",\"cmd/chiton:analyzePendingCmd\",\"cmd/chiton:analyzeSubmitCmd\",\"internal/analyze:New\",\"internal/analyze:SeverityRank\"]",
+    "tool_calls": {
+      "Read": 1,
+      "mcp__chiton__get_node_neighborhood": 1,
+      "mcp__chiton__query_graph": 1
+    },
+    "num_turns": 4,
+    "duration_ms": 8480,
+    "cost_usd": 0.0419436,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 7335,
+    "cache_read_input_tokens": 34308,
+    "output_tokens": 573,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "callees-2",
+    "repeat": 1,
+    "reply": "[\"internal/install:ResolveExe\",\"cmd/chiton:resolveGitHooksDir\",\"cmd/chiton:parseStages\",\"internal/hooks:Install\",\"cmd/chiton:printHooksReport\"]",
+    "tool_calls": {
+      "Grep": 2,
+      "Read": 1
+    },
+    "num_turns": 4,
+    "duration_ms": 6757,
+    "cost_usd": 0.022511200000000002,
+    "input_tokens": 8,
+    "cache_creation_input_tokens": 3173,
+    "cache_read_input_tokens": 24466,
+    "output_tokens": 491,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "callees-2",
+    "repeat": 1,
+    "reply": "[\"internal/install:ResolveExe\",\"cmd/chiton:resolveGitHooksDir\",\"cmd/chiton:parseStages\",\"internal/hooks:Install\",\"cmd/chiton:printHooksReport\"]",
+    "tool_calls": {
+      "Grep": 2,
+      "Read": 1
+    },
+    "num_turns": 4,
+    "duration_ms": 8607,
+    "cost_usd": 0.031003400000000004,
+    "input_tokens": 8,
+    "cache_creation_input_tokens": 3852,
+    "cache_read_input_tokens": 50697,
+    "output_tokens": 544,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "callees-2",
+    "repeat": 1,
+    "reply": "[\"internal/install:ResolveExe\", \"cmd/chiton:resolveGitHooksDir\", \"cmd/chiton:parseStages\", \"internal/hooks:Install\", \"cmd/chiton:printHooksReport\"]",
+    "tool_calls": {
+      "Read": 1,
+      "mcp__chiton__get_node_neighborhood": 1
+    },
+    "num_turns": 3,
+    "duration_ms": 6826,
+    "cost_usd": 0.0294986,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 4592,
+    "cache_read_input_tokens": 33393,
+    "output_tokens": 444,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "callees-3",
+    "repeat": 1,
+    "reply": "[\"cmd/chiton:resolveGitChanges\",\"cmd/chiton:openSyncEngine\",\"cmd/chiton:reclusterNote\",\"internal/ingest/git:Available\",\"internal/ingest:GitChanges\"]",
+    "tool_calls": {
+      "Grep": 2,
+      "Read": 1
+    },
+    "num_turns": 4,
+    "duration_ms": 8066,
+    "cost_usd": 0.029198599999999998,
+    "input_tokens": 8,
+    "cache_creation_input_tokens": 4494,
+    "cache_read_input_tokens": 25333,
+    "output_tokens": 614,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "callees-3",
+    "repeat": 1,
+    "reply": "[\"internal/ingest/git:Available\",\"cmd/chiton:resolveGitChanges\",\"cmd/chiton:openSyncEngine\",\"internal/ingest:GitChanges\",\"cmd/chiton:reclusterNote\"]",
+    "tool_calls": {
+      "Grep": 3,
+      "Read": 1
+    },
+    "num_turns": 5,
+    "duration_ms": 9117,
+    "cost_usd": 0.0385908,
+    "input_tokens": 8,
+    "cache_creation_input_tokens": 5262,
+    "cache_read_input_tokens": 51684,
+    "output_tokens": 719,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "callees-3",
+    "repeat": 1,
+    "reply": "[\"internal/ingest/git:Available\",\"cmd/chiton:resolveGitChanges\",\"cmd/chiton:openSyncEngine\",\"internal/ingest:GitChanges\",\"cmd/chiton:reclusterNote\"]",
+    "tool_calls": {
+      "Read": 1,
+      "mcp__chiton__get_node_neighborhood": 1
+    },
+    "num_turns": 3,
+    "duration_ms": 6184,
+    "cost_usd": 0.0322736,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 5175,
+    "cache_read_input_tokens": 33858,
+    "output_tokens": 479,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "callees-4",
+    "repeat": 1,
+    "reply": "[\"internal/graph/model:AttrString\",\"internal/extract/subagent:docTask\",\"internal/extract/subagent:imageTask\"]",
+    "tool_calls": {
+      "Grep": 2
+    },
+    "num_turns": 3,
+    "duration_ms": 7389,
+    "cost_usd": 0.0217012,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 3764,
+    "cache_read_input_tokens": 18966,
+    "output_tokens": 284,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "callees-4",
+    "repeat": 1,
+    "reply": "[\"internal/graph/model:AttrString\", \"internal/extract/subagent:docTask\", \"internal/extract/subagent:imageTask\"]",
+    "tool_calls": {
+      "Grep": 2
+    },
+    "num_turns": 3,
+    "duration_ms": 5083,
+    "cost_usd": 0.0293786,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 4721,
+    "cache_read_input_tokens": 38713,
+    "output_tokens": 274,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "callees-4",
+    "repeat": 1,
+    "reply": "[\"internal/graph/model:AttrString\", \"internal/extract/subagent:imageTask\", \"internal/extract/subagent:docTask\"]",
+    "tool_calls": {
+      "mcp__chiton__get_node_neighborhood": 1
+    },
+    "num_turns": 2,
+    "duration_ms": 4142,
+    "cost_usd": 0.020140199999999997,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 3488,
+    "cache_read_input_tokens": 20401,
+    "output_tokens": 210,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "imports-1",
+    "repeat": 1,
+    "reply": "[\"internal/extract/ast\",\"internal/graph/model\",\"internal/graph/store\",\"internal/fsutil\",\"internal/ingest/git\",\"internal/walk\",\"internal/config\"]",
+    "tool_calls": {
+      "Grep": 4
+    },
+    "num_turns": 5,
+    "duration_ms": 12195,
+    "cost_usd": 0.03774279999999999,
+    "input_tokens": 8,
+    "cache_creation_input_tokens": 6024,
+    "cache_read_input_tokens": 27154,
+    "output_tokens": 820,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "imports-2",
+    "repeat": 1,
+    "reply": "Other non-test files might exist; the grep covered all .go files, and only tasks.go and service.go are non-test.\n\n[\"internal/graph/model\",\"internal/embed\",\"internal/graph/store\"]",
+    "tool_calls": {
+      "Grep": 2
+    },
+    "num_turns": 3,
+    "duration_ms": 4492,
+    "cost_usd": 0.0158194,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 2663,
+    "cache_read_input_tokens": 10697,
+    "output_tokens": 302,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "imports-1",
+    "repeat": 1,
+    "reply": "[\"internal/extract/ast\", \"internal/walk\", \"internal/graph/model\", \"internal/graph/store\", \"internal/config\", \"internal/fsutil\", \"internal/ingest/git\"]",
+    "tool_calls": {
+      "Glob": 1,
+      "Grep": 4
+    },
+    "num_turns": 6,
+    "duration_ms": 19748,
+    "cost_usd": 0.0571932,
+    "input_tokens": 8,
+    "cache_creation_input_tokens": 9566,
+    "cache_read_input_tokens": 56966,
+    "output_tokens": 752,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "imports-2",
+    "repeat": 1,
+    "reply": "[\"internal/embed\", \"internal/graph/model\", \"internal/graph/store\"]",
+    "tool_calls": {
+      "Glob": 1,
+      "Grep": 1
+    },
+    "num_turns": 3,
+    "duration_ms": 5356,
+    "cost_usd": 0.02086,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 2780,
+    "cache_read_input_tokens": 36790,
+    "output_tokens": 237,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "imports-3",
+    "repeat": 1,
+    "reply": "Other files (detect.go, history.go) may import via different patterns, but the grep covered all of the `chiton` imports.\n\n[\"internal/graph/model\",\"internal/graph/store\",\"internal/ingest/fswatch\",\"internal/jobs\"]",
+    "tool_calls": {
+      "Glob": 1,
+      "Grep": 1
+    },
+    "num_turns": 3,
+    "duration_ms": 5117,
+    "cost_usd": 0.013384,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 2139,
+    "cache_read_input_tokens": 10700,
+    "output_tokens": 268,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "imports-1",
+    "repeat": 1,
+    "reply": "[\"internal/extract/ast\",\"internal/graph/model\",\"internal/graph/store\",\"internal/config\",\"internal/fsutil\",\"internal/ingest/git\"]",
+    "tool_calls": {
+      "Read": 10,
+      "mcp__chiton__get_node": 2,
+      "mcp__chiton__get_node_neighborhood": 3,
+      "mcp__chiton__query_graph": 9
+    },
+    "blocked": {
+      "Bash": 1
+    },
+    "num_turns": 26,
+    "duration_ms": 33886,
+    "cost_usd": 0.2802834,
+    "input_tokens": 28,
+    "cache_creation_input_tokens": 41534,
+    "cache_read_input_tokens": 374557,
+    "output_tokens": 3918,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 0.8571428571428571,
+      "f1": 0.923076923076923,
+      "exact": false,
+      "parse_error": false,
+      "missing": [
+        "internal/walk"
+      ]
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "imports-3",
+    "repeat": 1,
+    "reply": "The grep covered all files (detect.go and history.go had no matches).\n\n[\"internal/graph/model\", \"internal/graph/store\", \"internal/ingest/fswatch\", \"internal/jobs\"]",
+    "tool_calls": {
+      "Glob": 1,
+      "Grep": 1
+    },
+    "num_turns": 3,
+    "duration_ms": 4825,
+    "cost_usd": 0.021522,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 2809,
+    "cache_read_input_tokens": 36770,
+    "output_tokens": 292,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "imports-4",
+    "repeat": 1,
+    "reply": "[\"internal/graph/model\",\"internal/graph/store\",\"internal/ingest/chunk\",\"internal/extract/meeting\"]",
+    "tool_calls": {
+      "Grep": 1
+    },
+    "num_turns": 2,
+    "duration_ms": 5230,
+    "cost_usd": 0.023072000000000002,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 4546,
+    "cache_read_input_tokens": 10700,
+    "output_tokens": 274,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "imports-2",
+    "repeat": 1,
+    "reply": "[\"internal/graph/store\", \"internal/embed\", \"internal/graph/model\"]",
+    "tool_calls": {
+      "Read": 2,
+      "mcp__chiton__get_node_neighborhood": 3,
+      "mcp__chiton__query_graph": 5
+    },
+    "blocked": {
+      "Bash": 1
+    },
+    "num_turns": 12,
+    "duration_ms": 22484,
+    "cost_usd": 0.1222888,
+    "input_tokens": 20,
+    "cache_creation_input_tokens": 19292,
+    "cache_read_input_tokens": 148504,
+    "output_tokens": 1538,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "imports-3",
+    "repeat": 1,
+    "reply": "[\"internal/graph/store\", \"internal/graph/model\"]",
+    "tool_calls": {
+      "Read": 1,
+      "mcp__chiton__get_node_neighborhood": 2,
+      "mcp__chiton__query_graph": 2
+    },
+    "blocked": {
+      "Bash": 1
+    },
+    "num_turns": 7,
+    "duration_ms": 10612,
+    "cost_usd": 0.045357999999999996,
+    "input_tokens": 10,
+    "cache_creation_input_tokens": 6408,
+    "cache_read_input_tokens": 59830,
+    "output_tokens": 774,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 0.5,
+      "f1": 0.6666666666666666,
+      "exact": false,
+      "parse_error": false,
+      "missing": [
+        "internal/ingest/fswatch",
+        "internal/jobs"
+      ]
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "imports-4",
+    "repeat": 1,
+    "reply": "Other non-test files may exist in the directory, but the grep covered every `*.go` file there.\n\n[\"internal/graph/model\",\"internal/graph/store\",\"internal/ingest/chunk\",\"internal/extract/meeting\"]",
+    "tool_calls": {
+      "Grep": 1
+    },
+    "num_turns": 2,
+    "duration_ms": 4141,
+    "cost_usd": 0.022616400000000002,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 3726,
+    "cache_read_input_tokens": 23472,
+    "output_tokens": 301,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "importers-1",
+    "repeat": 1,
+    "reply": "[\"cmd/chiton\", \"internal/analyze\", \"internal/mcp\"]",
+    "tool_calls": {
+      "Grep": 1
+    },
+    "num_turns": 2,
+    "duration_ms": 3186,
+    "cost_usd": 0.016563,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 2626,
+    "cache_read_input_tokens": 23455,
+    "output_tokens": 136,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "importers-1",
+    "repeat": 1,
+    "reply": "[\"cmd/chiton\", \"internal/analyze\", \"internal/mcp\"]",
+    "tool_calls": {
+      "Grep": 1
+    },
+    "num_turns": 2,
+    "duration_ms": 8075,
+    "cost_usd": 0.0108768,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 1846,
+    "cache_read_input_tokens": 10674,
+    "output_tokens": 135,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "importers-1",
+    "repeat": 1,
+    "reply": "[\"cmd/chiton\", \"internal/mcp\", \"internal/analyze\"]",
+    "tool_calls": {
+      "mcp__chiton__get_node_neighborhood": 1,
+      "mcp__chiton__query_graph": 1
+    },
+    "blocked": {
+      "Bash": 1
+    },
+    "num_turns": 4,
+    "duration_ms": 6882,
+    "cost_usd": 0.033174800000000004,
+    "input_tokens": 8,
+    "cache_creation_input_tokens": 5039,
+    "cache_read_input_tokens": 43514,
+    "output_tokens": 430,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "importers-2",
+    "repeat": 1,
+    "reply": "[\"cmd/chiton\",\"internal/extract/subagent\",\"internal/ingest\",\"internal/graph/retrieve\"]",
+    "tool_calls": {
+      "Grep": 1
+    },
+    "num_turns": 2,
+    "duration_ms": 3444,
+    "cost_usd": 0.0114642,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 1960,
+    "cache_read_input_tokens": 10681,
+    "output_tokens": 148,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "importers-2",
+    "repeat": 1,
+    "reply": "[\"internal/extract/subagent\", \"cmd/chiton\", \"internal/graph/retrieve\", \"internal/ingest\"]",
+    "tool_calls": {
+      "Grep": 1
+    },
+    "num_turns": 2,
+    "duration_ms": 4952,
+    "cost_usd": 0.017158,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 2737,
+    "cache_read_input_tokens": 23460,
+    "output_tokens": 151,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "importers-2",
+    "repeat": 1,
+    "reply": "[\"cmd/chiton\", \"internal/ingest\", \"internal/extract/subagent\", \"internal/graph/retrieve\"]",
+    "tool_calls": {
+      "mcp__chiton__get_node_neighborhood": 1
+    },
+    "num_turns": 2,
+    "duration_ms": 4755,
+    "cost_usd": 0.029147,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 5207,
+    "cache_read_input_tokens": 20355,
+    "output_tokens": 424,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "importers-3",
+    "repeat": 1,
+    "reply": "[\"internal/cache\",\"internal/crypto\",\"cmd/chiton\",\"internal/analyze\",\"internal/graph/cluster\",\"internal/vector\",\"internal/install\",\"internal/mcp\"]",
+    "tool_calls": {
+      "Grep": 1
+    },
+    "num_turns": 2,
+    "duration_ms": 3679,
+    "cost_usd": 0.0110878,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 1826,
+    "cache_read_input_tokens": 10679,
+    "output_tokens": 164,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "importers-3",
+    "repeat": 1,
+    "reply": "[\"internal/analyze\",\"internal/cache\",\"internal/crypto\",\"internal/graph/cluster\",\"internal/install\",\"cmd/chiton\",\"internal/vector\",\"internal/mcp\"]",
+    "tool_calls": {
+      "Grep": 1
+    },
+    "num_turns": 2,
+    "duration_ms": 3501,
+    "cost_usd": 0.0167642,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 2606,
+    "cache_read_input_tokens": 23461,
+    "output_tokens": 164,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "imports-4",
+    "repeat": 1,
+    "reply": "[\"internal/graph/model\", \"internal/graph/store\", \"internal/ingest/chunk\", \"internal/extract/meeting\"]",
+    "tool_calls": {
+      "Read": 3,
+      "mcp__chiton__get_node_neighborhood": 5,
+      "mcp__chiton__query_graph": 6
+    },
+    "blocked": {
+      "Bash": 1
+    },
+    "num_turns": 16,
+    "duration_ms": 30745,
+    "cost_usd": 0.1262228,
+    "input_tokens": 26,
+    "cache_creation_input_tokens": 15328,
+    "cache_read_input_tokens": 215494,
+    "output_tokens": 2176,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "importers-4",
+    "repeat": 1,
+    "reply": "[\"internal/ingest/teams\",\"internal/ingest\",\"internal/ingest/browser\",\"internal/ingest/slack\"]",
+    "tool_calls": {
+      "Grep": 1
+    },
+    "num_turns": 2,
+    "duration_ms": 4874,
+    "cost_usd": 0.0108628,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 1622,
+    "cache_read_input_tokens": 10684,
+    "output_tokens": 223,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "importers-3",
+    "repeat": 1,
+    "reply": "[\"internal/vector\",\"internal/cache\",\"internal/analyze\",\"internal/install\",\"internal/mcp\",\"cmd/chiton\",\"internal/graph/cluster\",\"internal/crypto\"]",
+    "tool_calls": {
+      "mcp__chiton__get_node_neighborhood": 1,
+      "mcp__chiton__query_graph": 1
+    },
+    "blocked": {
+      "Bash": 1,
+      "Grep": 1
+    },
+    "num_turns": 5,
+    "duration_ms": 7308,
+    "cost_usd": 0.039593,
+    "input_tokens": 10,
+    "cache_creation_input_tokens": 5817,
+    "cache_read_input_tokens": 55975,
+    "output_tokens": 511,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "importers-4",
+    "repeat": 1,
+    "reply": "[\"internal/ingest\", \"internal/ingest/browser\", \"internal/ingest/teams\", \"internal/ingest/slack\"]",
+    "tool_calls": {
+      "Grep": 1
+    },
+    "num_turns": 2,
+    "duration_ms": 4114,
+    "cost_usd": 0.0167982,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 2397,
+    "cache_read_input_tokens": 23461,
+    "output_tokens": 251,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "importers-4",
+    "repeat": 1,
+    "reply": "[\"internal/ingest\", \"internal/ingest/browser\", \"internal/ingest/slack\", \"internal/ingest/teams\"]",
+    "tool_calls": {
+      "mcp__chiton__get_node_neighborhood": 1,
+      "mcp__chiton__query_graph": 1
+    },
+    "blocked": {
+      "Bash": 1,
+      "Grep": 1
+    },
+    "num_turns": 5,
+    "duration_ms": 5767,
+    "cost_usd": 0.026171200000000002,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 3925,
+    "cache_read_input_tokens": 31996,
+    "output_tokens": 406,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "callers-1",
+    "repeat": 2,
+    "reply": "Line 115 is in analyzeCmd (20–113). Line 1027 is in buildSemanticDeps. Line 74 is in New.\n\n[\"cmd/chiton:analyzeCmd\", \"cmd/chiton:buildSemanticDeps\", \"internal/mcp:New\"]",
+    "tool_calls": {
+      "Grep": 4
+    },
+    "num_turns": 5,
+    "duration_ms": 8399,
+    "cost_usd": 0.031386,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 5073,
+    "cache_read_input_tokens": 17460,
+    "output_tokens": 759,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 0.6666666666666666,
+      "recall": 0.6666666666666666,
+      "f1": 0.6666666666666666,
+      "exact": false,
+      "parse_error": false,
+      "missing": [
+        "cmd/chiton:runDiff"
+      ],
+      "extra": [
+        "cmd/chiton:analyzeCmd"
+      ]
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "callers-1",
+    "repeat": 2,
+    "reply": "Line 115 is in analyzeCmd (20–113), line 1027 is in buildSemanticDeps, and line 74 is in New.\n\n[\"cmd/chiton:analyzeCmd\", \"cmd/chiton:buildSemanticDeps\", \"internal/mcp:New\"]",
+    "tool_calls": {
+      "Grep": 4
+    },
+    "num_turns": 5,
+    "duration_ms": 7968,
+    "cost_usd": 0.038419800000000004,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 5849,
+    "cache_read_input_tokens": 37009,
+    "output_tokens": 761,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 0.6666666666666666,
+      "recall": 0.6666666666666666,
+      "f1": 0.6666666666666666,
+      "exact": false,
+      "parse_error": false,
+      "missing": [
+        "cmd/chiton:runDiff"
+      ],
+      "extra": [
+        "cmd/chiton:analyzeCmd"
+      ]
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "callers-1",
+    "repeat": 2,
+    "reply": "[\"cmd/chiton:buildSemanticDeps\",\"cmd/chiton:runDiff\",\"internal/mcp:New\"]",
+    "tool_calls": {
+      "mcp__chiton__get_node_neighborhood": 1
+    },
+    "blocked": {
+      "Bash": 1
+    },
+    "num_turns": 3,
+    "duration_ms": 5954,
+    "cost_usd": 0.0234666,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 4040,
+    "cache_read_input_tokens": 20393,
+    "output_tokens": 322,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "callers-2",
+    "repeat": 2,
+    "reply": "[\"cmd/chiton:analyzeCmd\", \"cmd/chiton:buildCmd\", \"cmd/chiton:recordHookScan\", \"cmd/chiton:openSyncEngine\", \"internal/hooks:Run\"]",
+    "tool_calls": {
+      "Grep": 5
+    },
+    "num_turns": 6,
+    "duration_ms": 7692,
+    "cost_usd": 0.0760362,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 15517,
+    "cache_read_input_tokens": 27781,
+    "output_tokens": 840,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "callers-2",
+    "repeat": 2,
+    "reply": "[\"cmd/chiton:analyzeCmd\", \"cmd/chiton:buildCmd\", \"cmd/chiton:recordHookScan\", \"cmd/chiton:openSyncEngine\", \"internal/hooks:Run\"]",
+    "tool_calls": {
+      "Grep": 7
+    },
+    "num_turns": 8,
+    "duration_ms": 9172,
+    "cost_usd": 0.0646308,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 11569,
+    "cache_read_input_tokens": 43164,
+    "output_tokens": 971,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "callers-3",
+    "repeat": 2,
+    "reply": "[\"cmd/chiton:runDiff\",\"cmd/chiton:reportPendingLLM\",\"cmd/chiton:analyzePendingCmd\",\"cmd/chiton:analyzeSubmitCmd\",\"cmd/chiton:resolveStoreKey\",\"cmd/chiton:buildSemanticDeps\",\"internal/mcp:New\",\"internal/analyze:NewLLMService\"]",
+    "tool_calls": {
+      "Grep": 5
+    },
+    "num_turns": 6,
+    "duration_ms": 8027,
+    "cost_usd": 0.0367564,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 6409,
+    "cache_read_input_tokens": 18042,
+    "output_tokens": 750,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "callers-3",
+    "repeat": 2,
+    "reply": "[\"cmd/chiton:runDiff\",\"cmd/chiton:reportPendingLLM\",\"cmd/chiton:analyzePendingCmd\",\"cmd/chiton:analyzeSubmitCmd\",\"cmd/chiton:resolveStoreKey\",\"cmd/chiton:buildSemanticDeps\",\"internal/mcp:New\",\"internal/analyze:NewLLMService\"]",
+    "tool_calls": {
+      "Grep": 4
+    },
+    "num_turns": 5,
+    "duration_ms": 8149,
+    "cost_usd": 0.0425324,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 6988,
+    "cache_read_input_tokens": 37342,
+    "output_tokens": 710,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "callers-3",
+    "repeat": 2,
+    "reply": "[\"cmd/chiton:reportPendingLLM\",\"cmd/chiton:analyzeSubmitCmd\",\"cmd/chiton:resolveStoreKey\",\"internal/analyze:NewLLMService\",\"cmd/chiton:analyzePendingCmd\",\"cmd/chiton:buildSemanticDeps\",\"cmd/chiton:runDiff\",\"internal/mcp:New\"]",
+    "tool_calls": {
+      "mcp__chiton__get_node_neighborhood": 3,
+      "mcp__chiton__query_graph": 1
+    },
+    "blocked": {
+      "Bash": 1
+    },
+    "num_turns": 6,
+    "duration_ms": 10254,
+    "cost_usd": 0.05128780000000001,
+    "input_tokens": 10,
+    "cache_creation_input_tokens": 7987,
+    "cache_read_input_tokens": 58349,
+    "output_tokens": 765,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "callers-4",
+    "repeat": 2,
+    "reply": "[\"internal/crypto:KeyFile.Save\",\"internal/cache:Cache.Save\",\"internal/analyze:SaveBaseline\",\"cmd/chiton:serveToken\",\"internal/install:writeKeepingMode\",\"internal/analyze:LLMService.saveState\",\"internal/vector:SaveHNSW\",\"internal/graph/cluster:WriteSidecar\"]",
+    "tool_calls": {
+      "Grep": 10
+    },
+    "num_turns": 11,
+    "duration_ms": 16212,
+    "cost_usd": 0.0418472,
+    "input_tokens": 8,
+    "cache_creation_input_tokens": 5994,
+    "cache_read_input_tokens": 25926,
+    "output_tokens": 1267,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "callers-4",
+    "repeat": 2,
+    "reply": "[\"internal/cache:Cache.Save\", \"internal/crypto:KeyFile.Save\", \"cmd/chiton:serveToken\", \"internal/analyze:SaveBaseline\", \"internal/analyze:LLMService.saveState\", \"internal/vector:SaveHNSW\", \"internal/install:writeKeepingMode\", \"internal/graph/cluster:WriteSidecar\"]",
+    "tool_calls": {
+      "Grep": 9
+    },
+    "num_turns": 10,
+    "duration_ms": 9171,
+    "cost_usd": 0.044295,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 6510,
+    "cache_read_input_tokens": 37565,
+    "output_tokens": 1073,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "callers-5",
+    "repeat": 2,
+    "reply": "Line 337 → verifyTaskBinding; 512 → prune; 556 → rescan (540–567); 53 → fetch.\n\n[\"internal/analyze:LLMService.verifyTaskBinding\", \"internal/ingest:Engine.prune\", \"internal/ingest:Engine.rescan\", \"internal/ingest/url:httpFetcher.fetch\"]",
+    "tool_calls": {
+      "Grep": 4
+    },
+    "num_turns": 5,
+    "duration_ms": 5712,
+    "cost_usd": 0.026365800000000002,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 4372,
+    "cache_read_input_tokens": 17429,
+    "output_tokens": 538,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "callers-4",
+    "repeat": 2,
+    "reply": "[\"internal/crypto:KeyFile.Save\",\"internal/vector:SaveHNSW\",\"internal/install:writeKeepingMode\",\"internal/cache:Cache.Save\",\"internal/analyze:LLMService.saveState\",\"internal/graph/cluster:WriteSidecar\",\"cmd/chiton:serveToken\",\"internal/analyze:SaveBaseline\"]",
+    "tool_calls": {
+      "mcp__chiton__get_node_neighborhood": 2,
+      "mcp__chiton__query_graph": 1,
+      "mcp__chiton__semantic_search": 1
+    },
+    "blocked": {
+      "Bash": 1,
+      "Grep": 1
+    },
+    "num_turns": 7,
+    "duration_ms": 9394,
+    "cost_usd": 0.051289799999999997,
+    "input_tokens": 10,
+    "cache_creation_input_tokens": 7308,
+    "cache_read_input_tokens": 60539,
+    "output_tokens": 993,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "callers-5",
+    "repeat": 2,
+    "reply": "[\"internal/analyze:LLMService.verifyTaskBinding\", \"internal/ingest:Engine.prune\", \"internal/ingest:Engine.rescan\", \"internal/ingest/url:httpFetcher.fetch\"]",
+    "tool_calls": {
+      "Grep": 4
+    },
+    "num_turns": 5,
+    "duration_ms": 7161,
+    "cost_usd": 0.033836000000000005,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 5157,
+    "cache_read_input_tokens": 36980,
+    "output_tokens": 580,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "callers-5",
+    "repeat": 2,
+    "reply": "[\"internal/ingest/url:httpFetcher.fetch\", \"internal/analyze:LLMService.verifyTaskBinding\", \"internal/ingest:Engine.prune\", \"internal/ingest:Engine.rescan\"]",
+    "tool_calls": {
+      "mcp__chiton__get_node_neighborhood": 1
+    },
+    "blocked": {
+      "Bash": 1
+    },
+    "num_turns": 3,
+    "duration_ms": 4936,
+    "cost_usd": 0.024942600000000002,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 3791,
+    "cache_read_input_tokens": 31833,
+    "output_tokens": 340,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "callers-6",
+    "repeat": 2,
+    "reply": "[\"internal/ingest/git:RangeChanges\", \"internal/ingest/git:ChangedSince\", \"internal/analyze:GitCommit\"]",
+    "tool_calls": {
+      "Grep": 2,
+      "Read": 2
+    },
+    "num_turns": 5,
+    "duration_ms": 8146,
+    "cost_usd": 0.0249622,
+    "input_tokens": 8,
+    "cache_creation_input_tokens": 3174,
+    "cache_read_input_tokens": 24701,
+    "output_tokens": 731,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "callers-6",
+    "repeat": 2,
+    "reply": "[\"internal/ingest/git:RangeChanges\", \"internal/ingest/git:ChangedSince\", \"internal/analyze:GitCommit\"]",
+    "tool_calls": {
+      "Grep": 2,
+      "Read": 2
+    },
+    "num_turns": 5,
+    "duration_ms": 8998,
+    "cost_usd": 0.0298456,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 3872,
+    "cache_read_input_tokens": 36678,
+    "output_tokens": 701,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "callers-6",
+    "repeat": 2,
+    "reply": "[\"internal/ingest/git:ChangedSince\", \"internal/ingest/git:RangeChanges\", \"internal/analyze:GitCommit\"]",
+    "tool_calls": {
+      "mcp__chiton__get_node_neighborhood": 2,
+      "mcp__chiton__query_graph": 1
+    },
+    "blocked": {
+      "Bash": 1
+    },
+    "num_turns": 5,
+    "duration_ms": 8482,
+    "cost_usd": 0.036885600000000004,
+    "input_tokens": 10,
+    "cache_creation_input_tokens": 5098,
+    "cache_read_input_tokens": 57068,
+    "output_tokens": 506,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "callees-1",
+    "repeat": 2,
+    "reply": "[\"cmd/chiton:loadStore\",\"internal/analyze:New\",\"internal/analyze:SeverityRank\",\"cmd/chiton:runDiff\",\"cmd/chiton:reportPendingLLM\",\"cmd/chiton:analyzePendingCmd\",\"cmd/chiton:analyzeSubmitCmd\"]",
+    "tool_calls": {
+      "Grep": 2,
+      "Read": 1
+    },
+    "num_turns": 4,
+    "duration_ms": 7975,
+    "cost_usd": 0.0439868,
+    "input_tokens": 8,
+    "cache_creation_input_tokens": 7980,
+    "cache_read_input_tokens": 29004,
+    "output_tokens": 625,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "callers-2",
+    "repeat": 2,
+    "reply": "[\"cmd/chiton:analyzeCmd\",\"cmd/chiton:buildCmd\",\"cmd/chiton:openSyncEngine\",\"cmd/chiton:recordHookScan\",\"internal/hooks:Run\"]",
+    "tool_calls": {
+      "Read": 4,
+      "mcp__chiton__get_node_neighborhood": 20,
+      "mcp__chiton__query_graph": 12,
+      "mcp__chiton__semantic_search": 1,
+      "mcp__chiton__shortest_path": 1
+    },
+    "blocked": {
+      "Bash": 1,
+      "Grep": 1
+    },
+    "num_turns": 41,
+    "duration_ms": 74910,
+    "cost_usd": 0.7328238000000001,
+    "input_tokens": 56,
+    "cache_creation_input_tokens": 91623,
+    "cache_read_input_tokens": 1465649,
+    "output_tokens": 7309,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "callees-1",
+    "repeat": 2,
+    "reply": "[\"cmd/chiton:loadStore\", \"internal/analyze:New\", \"internal/analyze:SeverityRank\", \"cmd/chiton:runDiff\", \"cmd/chiton:reportPendingLLM\", \"cmd/chiton:analyzePendingCmd\", \"cmd/chiton:analyzeSubmitCmd\"]",
+    "tool_calls": {
+      "Grep": 1,
+      "Read": 1
+    },
+    "num_turns": 3,
+    "duration_ms": 7182,
+    "cost_usd": 0.043845999999999996,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 7866,
+    "cache_read_input_tokens": 36800,
+    "output_tokens": 501,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "callees-1",
+    "repeat": 2,
+    "reply": "[\"cmd/chiton:loadStore\",\"cmd/chiton:runDiff\",\"cmd/chiton:reportPendingLLM\",\"cmd/chiton:analyzePendingCmd\",\"cmd/chiton:analyzeSubmitCmd\",\"internal/analyze:New\",\"internal/analyze:SeverityRank\"]",
+    "tool_calls": {
+      "Read": 1,
+      "mcp__chiton__get_node_neighborhood": 1,
+      "mcp__chiton__query_graph": 1
+    },
+    "num_turns": 4,
+    "duration_ms": 10766,
+    "cost_usd": 0.042151999999999995,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 7352,
+    "cache_read_input_tokens": 34310,
+    "output_tokens": 587,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "callees-2",
+    "repeat": 2,
+    "reply": "[\"internal/install:ResolveExe\",\"cmd/chiton:resolveGitHooksDir\",\"cmd/chiton:parseStages\",\"internal/hooks:Install\",\"cmd/chiton:printHooksReport\"]",
+    "tool_calls": {
+      "Grep": 2,
+      "Read": 1
+    },
+    "num_turns": 4,
+    "duration_ms": 7262,
+    "cost_usd": 0.02295,
+    "input_tokens": 8,
+    "cache_creation_input_tokens": 3205,
+    "cache_read_input_tokens": 24520,
+    "output_tokens": 521,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "callees-2",
+    "repeat": 2,
+    "reply": "[\"internal/install:ResolveExe\",\"cmd/chiton:resolveGitHooksDir\",\"cmd/chiton:parseStages\",\"internal/hooks:Install\",\"cmd/chiton:printHooksReport\"]",
+    "tool_calls": {
+      "Grep": 2,
+      "Read": 1
+    },
+    "num_turns": 4,
+    "duration_ms": 7004,
+    "cost_usd": 0.030080800000000005,
+    "input_tokens": 8,
+    "cache_creation_input_tokens": 3686,
+    "cache_read_input_tokens": 50554,
+    "output_tokens": 521,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "callees-2",
+    "repeat": 2,
+    "reply": "[\"cmd/chiton:resolveGitHooksDir\",\"cmd/chiton:parseStages\",\"cmd/chiton:printHooksReport\",\"internal/install:ResolveExe\",\"internal/hooks:Install\"]",
+    "tool_calls": {
+      "Read": 1,
+      "mcp__chiton__get_node_neighborhood": 1
+    },
+    "num_turns": 3,
+    "duration_ms": 7774,
+    "cost_usd": 0.029421799999999998,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 4588,
+    "cache_read_input_tokens": 33389,
+    "output_tokens": 438,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "callees-3",
+    "repeat": 2,
+    "reply": "[\"internal/ingest/git:Available\",\"cmd/chiton:resolveGitChanges\",\"cmd/chiton:openSyncEngine\",\"internal/ingest:GitChanges\",\"cmd/chiton:reclusterNote\"]",
+    "tool_calls": {
+      "Grep": 2,
+      "Read": 1
+    },
+    "num_turns": 4,
+    "duration_ms": 8500,
+    "cost_usd": 0.0285862,
+    "input_tokens": 8,
+    "cache_creation_input_tokens": 4453,
+    "cache_read_input_tokens": 25341,
+    "output_tokens": 569,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "callees-3",
+    "repeat": 2,
+    "reply": "[\"internal/ingest/git:Available\",\"cmd/chiton:resolveGitChanges\",\"cmd/chiton:openSyncEngine\",\"internal/ingest:GitChanges\",\"cmd/chiton:reclusterNote\"]",
+    "tool_calls": {
+      "Grep": 2,
+      "Read": 1
+    },
+    "num_turns": 4,
+    "duration_ms": 8281,
+    "cost_usd": 0.0362588,
+    "input_tokens": 8,
+    "cache_creation_input_tokens": 5007,
+    "cache_read_input_tokens": 51674,
+    "output_tokens": 588,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "callees-4",
+    "repeat": 2,
+    "reply": "[\"internal/graph/model:AttrString\", \"internal/extract/subagent:docTask\", \"internal/extract/subagent:imageTask\"]",
+    "tool_calls": {
+      "Grep": 2
+    },
+    "num_turns": 3,
+    "duration_ms": 5881,
+    "cost_usd": 0.0223996,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 3919,
+    "cache_read_input_tokens": 19158,
+    "output_tokens": 288,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "callees-3",
+    "repeat": 2,
+    "reply": "[\"internal/ingest/git:Available\", \"cmd/chiton:resolveGitChanges\", \"cmd/chiton:openSyncEngine\", \"internal/ingest:GitChanges\", \"cmd/chiton:reclusterNote\"]",
+    "tool_calls": {
+      "Read": 2,
+      "mcp__chiton__get_node_neighborhood": 1
+    },
+    "num_turns": 4,
+    "duration_ms": 7688,
+    "cost_usd": 0.0351554,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 5488,
+    "cache_read_input_tokens": 34157,
+    "output_tokens": 636,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "callees-4",
+    "repeat": 2,
+    "reply": "[\"internal/graph/model:AttrString\", \"internal/extract/subagent:docTask\", \"internal/extract/subagent:imageTask\"]",
+    "tool_calls": {
+      "Grep": 2
+    },
+    "num_turns": 3,
+    "duration_ms": 6734,
+    "cost_usd": 0.029503800000000004,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 4732,
+    "cache_read_input_tokens": 38719,
+    "output_tokens": 282,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "callees-4",
+    "repeat": 2,
+    "reply": "[\"internal/extract/subagent:imageTask\",\"internal/extract/subagent:docTask\",\"internal/graph/model:AttrString\"]",
+    "tool_calls": {
+      "mcp__chiton__get_node_neighborhood": 1
+    },
+    "num_turns": 2,
+    "duration_ms": 3711,
+    "cost_usd": 0.0208884,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 3675,
+    "cache_read_input_tokens": 20402,
+    "output_tokens": 210,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "imports-1",
+    "repeat": 2,
+    "reply": "[\"internal/extract/ast\", \"internal/walk\", \"internal/graph/model\", \"internal/graph/store\", \"internal/config\", \"internal/fsutil\", \"internal/ingest/git\"]",
+    "tool_calls": {
+      "Glob": 1,
+      "Grep": 3
+    },
+    "num_turns": 5,
+    "duration_ms": 11609,
+    "cost_usd": 0.06698420000000001,
+    "input_tokens": 8,
+    "cache_creation_input_tokens": 12276,
+    "cache_read_input_tokens": 41721,
+    "output_tokens": 952,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "imports-1",
+    "repeat": 2,
+    "reply": "[\"internal/extract/ast\", \"internal/graph/model\", \"internal/graph/store\", \"internal/fsutil\", \"internal/ingest/git\", \"internal/config\", \"internal/walk\"]",
+    "tool_calls": {
+      "Glob": 2,
+      "Grep": 4
+    },
+    "num_turns": 7,
+    "duration_ms": 13014,
+    "cost_usd": 0.0941428,
+    "input_tokens": 12,
+    "cache_creation_input_tokens": 14385,
+    "cache_read_input_tokens": 109494,
+    "output_tokens": 1468,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "imports-2",
+    "repeat": 2,
+    "reply": "[\"internal/embed\",\"internal/graph/model\",\"internal/graph/store\"]",
+    "tool_calls": {
+      "Grep": 1
+    },
+    "num_turns": 2,
+    "duration_ms": 4067,
+    "cost_usd": 0.0124986,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 2175,
+    "cache_read_input_tokens": 10703,
+    "output_tokens": 165,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "imports-2",
+    "repeat": 2,
+    "reply": "[\"internal/embed\", \"internal/graph/model\", \"internal/graph/store\"]",
+    "tool_calls": {
+      "Glob": 1,
+      "Grep": 2
+    },
+    "num_turns": 4,
+    "duration_ms": 4850,
+    "cost_usd": 0.0227044,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 3011,
+    "cache_read_input_tokens": 37042,
+    "output_tokens": 324,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "imports-3",
+    "repeat": 2,
+    "reply": "[\"internal/graph/model\",\"internal/graph/store\",\"internal/ingest/fswatch\",\"internal/jobs\"]",
+    "tool_calls": {
+      "Grep": 2
+    },
+    "num_turns": 3,
+    "duration_ms": 5132,
+    "cost_usd": 0.0137172,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 2110,
+    "cache_read_input_tokens": 10696,
+    "output_tokens": 313,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "imports-3",
+    "repeat": 2,
+    "reply": "[\"internal/graph/model\",\"internal/graph/store\",\"internal/ingest/fswatch\",\"internal/jobs\"]",
+    "tool_calls": {
+      "Grep": 2
+    },
+    "num_turns": 3,
+    "duration_ms": 4113,
+    "cost_usd": 0.019393,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 2890,
+    "cache_read_input_tokens": 23475,
+    "output_tokens": 313,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "imports-1",
+    "repeat": 2,
+    "reply": "[\"internal/config\",\"internal/fsutil\",\"internal/extract/ast\",\"internal/graph/model\",\"internal/graph/store\",\"internal/ingest/git\",\"internal/walk\"]",
+    "tool_calls": {
+      "Read": 12,
+      "mcp__chiton__get_node_neighborhood": 6,
+      "mcp__chiton__graph_summary": 1,
+      "mcp__chiton__query_graph": 6,
+      "mcp__chiton__semantic_search": 1
+    },
+    "blocked": {
+      "Bash": 1
+    },
+    "num_turns": 28,
+    "duration_ms": 40168,
+    "cost_usd": 0.2820836,
+    "input_tokens": 34,
+    "cache_creation_input_tokens": 37525,
+    "cache_read_input_tokens": 437378,
+    "output_tokens": 4444,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "imports-3",
+    "repeat": 2,
+    "reply": "[\"internal/graph/store\",\"internal/graph/model\"]",
+    "tool_calls": {
+      "Read": 1,
+      "get_node_neighborhood": 1,
+      "mcp__chiton__get_node_neighborhood": 2,
+      "mcp__chiton__query_graph": 3
+    },
+    "blocked": {
+      "Bash": 1,
+      "get_node_neighborhood\u003c/tool_use_error\u003e\"": 1
+    },
+    "num_turns": 9,
+    "duration_ms": 11379,
+    "cost_usd": 0.052336600000000004,
+    "input_tokens": 14,
+    "cache_creation_input_tokens": 6249,
+    "cache_read_input_tokens": 85763,
+    "output_tokens": 1016,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 0.5,
+      "f1": 0.6666666666666666,
+      "exact": false,
+      "parse_error": false,
+      "missing": [
+        "internal/ingest/fswatch",
+        "internal/jobs"
+      ]
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "imports-2",
+    "repeat": 2,
+    "reply": "The `internal/extract/subagent` package imports three packages from this repository. `service.go` is the only non-test file I found in it, and I read its import block directly. I couldn't list the directory, so I can't rule out other non-test files there.\n\n[\"internal/embed\", \"internal/graph/model\", \"internal/graph/store\"]",
+    "tool_calls": {
+      "Read": 3,
+      "mcp__chiton__get_node": 1,
+      "mcp__chiton__get_node_neighborhood": 3,
+      "mcp__chiton__query_graph": 8,
+      "mcp__chiton__semantic_search": 1
+    },
+    "blocked": {
+      "Bash": 1
+    },
+    "num_turns": 18,
+    "duration_ms": 30911,
+    "cost_usd": 0.1302134,
+    "input_tokens": 28,
+    "cache_creation_input_tokens": 15628,
+    "cache_read_input_tokens": 215277,
+    "output_tokens": 2459,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "imports-4",
+    "repeat": 2,
+    "reply": "[\"internal/extract/meeting\",\"internal/graph/model\",\"internal/graph/store\",\"internal/ingest/chunk\"]",
+    "tool_calls": {
+      "Grep": 3
+    },
+    "num_turns": 4,
+    "duration_ms": 6455,
+    "cost_usd": 0.017577,
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 2493,
+    "cache_read_input_tokens": 17665,
+    "output_tokens": 406,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "imports-4",
+    "repeat": 2,
+    "reply": "[\"internal/graph/model\", \"internal/graph/store\", \"internal/ingest/chunk\", \"internal/extract/meeting\"]",
+    "tool_calls": {
+      "Grep": 2
+    },
+    "num_turns": 3,
+    "duration_ms": 5757,
+    "cost_usd": 0.018977,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 2851,
+    "cache_read_input_tokens": 23475,
+    "output_tokens": 287,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "importers-1",
+    "repeat": 2,
+    "reply": "[\"cmd/chiton\", \"internal/analyze\", \"internal/mcp\"]",
+    "tool_calls": {
+      "Grep": 1
+    },
+    "num_turns": 2,
+    "duration_ms": 3588,
+    "cost_usd": 0.010906200000000001,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 1853,
+    "cache_read_input_tokens": 10681,
+    "output_tokens": 135,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "importers-1",
+    "repeat": 2,
+    "reply": "[\"cmd/chiton\", \"internal/analyze\", \"internal/mcp\"]",
+    "tool_calls": {
+      "Grep": 1
+    },
+    "num_turns": 2,
+    "duration_ms": 3928,
+    "cost_usd": 0.0165504,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 2623,
+    "cache_read_input_tokens": 23452,
+    "output_tokens": 136,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "importers-1",
+    "repeat": 2,
+    "reply": "[\"cmd/chiton\", \"internal/mcp\", \"internal/analyze\"]",
+    "tool_calls": {
+      "get_node_neighborhood": 1,
+      "mcp__chiton__get_node_neighborhood": 1,
+      "mcp__chiton__query_graph": 1
+    },
+    "blocked": {
+      "Bash": 1,
+      "get_node_neighborhood\u003c/tool_use_error\u003e\"": 1
+    },
+    "num_turns": 5,
+    "duration_ms": 6313,
+    "cost_usd": 0.0357316,
+    "input_tokens": 10,
+    "cache_creation_input_tokens": 5104,
+    "cache_read_input_tokens": 55128,
+    "output_tokens": 427,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "importers-2",
+    "repeat": 2,
+    "reply": "[\"internal/extract/subagent\", \"internal/graph/retrieve\", \"cmd/chiton\", \"internal/ingest\"]",
+    "tool_calls": {
+      "Grep": 1
+    },
+    "num_turns": 2,
+    "duration_ms": 3911,
+    "cost_usd": 0.011406,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 1953,
+    "cache_read_input_tokens": 10680,
+    "output_tokens": 145,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "importers-2",
+    "repeat": 2,
+    "reply": "[\"cmd/chiton\", \"internal/graph/retrieve\", \"internal/extract/subagent\", \"internal/ingest\"]",
+    "tool_calls": {
+      "Grep": 1
+    },
+    "num_turns": 2,
+    "duration_ms": 3721,
+    "cost_usd": 0.017074,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 2731,
+    "cache_read_input_tokens": 23460,
+    "output_tokens": 145,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "importers-2",
+    "repeat": 2,
+    "reply": "Non-test importers: cmd/chiton (semantic.go, vector_index.go, sync.go, main.go), internal/ingest, internal/extract/subagent, internal/graph/retrieve.\n\n[\"cmd/chiton\", \"internal/ingest\", \"internal/extract/subagent\", \"internal/graph/retrieve\"]",
+    "tool_calls": {
+      "mcp__chiton__get_node_neighborhood": 1,
+      "mcp__chiton__query_graph": 1
+    },
+    "blocked": {
+      "Bash": 1
+    },
+    "num_turns": 4,
+    "duration_ms": 6512,
+    "cost_usd": 0.0351032,
+    "input_tokens": 8,
+    "cache_creation_input_tokens": 5458,
+    "cache_read_input_tokens": 43426,
+    "output_tokens": 457,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "imports-4",
+    "repeat": 2,
+    "reply": "[\"internal/graph/model\", \"internal/graph/store\", \"internal/ingest/chunk\", \"internal/extract/meeting\"]",
+    "tool_calls": {
+      "Read": 2,
+      "mcp__chiton__get_node_neighborhood": 4,
+      "mcp__chiton__query_graph": 7
+    },
+    "blocked": {
+      "Bash": 1
+    },
+    "num_turns": 15,
+    "duration_ms": 22312,
+    "cost_usd": 0.10126919999999999,
+    "input_tokens": 20,
+    "cache_creation_input_tokens": 13610,
+    "cache_read_input_tokens": 143246,
+    "output_tokens": 1814,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "importers-3",
+    "repeat": 2,
+    "reply": "[\"internal/cache\",\"internal/analyze\",\"cmd/chiton\",\"internal/crypto\",\"internal/vector\",\"internal/graph/cluster\",\"internal/install\",\"internal/mcp\"]",
+    "tool_calls": {
+      "Grep": 1
+    },
+    "num_turns": 2,
+    "duration_ms": 3955,
+    "cost_usd": 0.011282,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 1827,
+    "cache_read_input_tokens": 10680,
+    "output_tokens": 183,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "importers-3",
+    "repeat": 2,
+    "reply": "[\"internal/analyze\",\"internal/cache\",\"internal/crypto\",\"internal/graph/cluster\",\"cmd/chiton\",\"internal/install\",\"internal/vector\",\"internal/mcp\"]",
+    "tool_calls": {
+      "Grep": 1
+    },
+    "num_turns": 2,
+    "duration_ms": 4070,
+    "cost_usd": 0.0167642,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 2606,
+    "cache_read_input_tokens": 23461,
+    "output_tokens": 164,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "grep",
+    "question_id": "importers-4",
+    "repeat": 2,
+    "reply": "[\"internal/ingest\",\"internal/ingest/teams\",\"internal/ingest/slack\",\"internal/ingest/browser\"]",
+    "tool_calls": {
+      "Grep": 1
+    },
+    "num_turns": 2,
+    "duration_ms": 3386,
+    "cost_usd": 0.010116,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 1618,
+    "cache_read_input_tokens": 10680,
+    "output_tokens": 150,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "importers-3",
+    "repeat": 2,
+    "reply": "[\"internal/vector\",\"internal/cache\",\"internal/analyze\",\"internal/install\",\"internal/mcp\",\"cmd/chiton\",\"internal/graph/cluster\",\"internal/crypto\"]",
+    "tool_calls": {
+      "mcp__chiton__get_node_neighborhood": 1,
+      "mcp__chiton__query_graph": 1
+    },
+    "blocked": {
+      "Bash": 1
+    },
+    "num_turns": 4,
+    "duration_ms": 8736,
+    "cost_usd": 0.036025,
+    "input_tokens": 8,
+    "cache_creation_input_tokens": 5644,
+    "cache_read_input_tokens": 47615,
+    "output_tokens": 391,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton",
+    "question_id": "importers-4",
+    "repeat": 2,
+    "reply": "[\"internal/ingest\", \"internal/ingest/teams\", \"internal/ingest/browser\", \"internal/ingest/slack\"]",
+    "tool_calls": {
+      "Grep": 1
+    },
+    "num_turns": 2,
+    "duration_ms": 4043,
+    "cost_usd": 0.01573,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 2390,
+    "cache_read_input_tokens": 23460,
+    "output_tokens": 147,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  },
+  {
+    "condition": "chiton-only",
+    "question_id": "importers-4",
+    "repeat": 2,
+    "reply": "[\"internal/ingest\", \"internal/ingest/browser\", \"internal/ingest/slack\", \"internal/ingest/teams\"]",
+    "tool_calls": {
+      "mcp__chiton__get_node_neighborhood": 1
+    },
+    "num_turns": 2,
+    "duration_ms": 4444,
+    "cost_usd": 0.0203732,
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 3401,
+    "cache_read_input_tokens": 20356,
+    "output_tokens": 269,
+    "model": "claude-sonnet-5-5",
+    "score": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "exact": true,
+      "parse_error": false
+    }
+  }
+]

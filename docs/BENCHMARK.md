@@ -8,10 +8,17 @@ often.
 
 ## At a glance
 
-- **Tokens:** about **14–15× fewer** than dumping whole files into context, and
-  roughly on par with `grep+read` overall. Against `grep+read` the result is
-  mixed by corpus: 1.4× cheaper on a medium package, 1.9× costlier on a large
-  tree, and far costlier on a tiny one. See [Results](#results).
+- **Tokens:** a depth-2 neighborhood is **~5× cheaper** than dumping a medium
+  package into context and **~48× cheaper** on a large tree. Against
+  `grep+read` it is roughly on par overall but mixed by corpus: about even on a
+  medium package, 2.2× cheaper on a large tree, and far costlier on a tiny one.
+  The depth-1 setting is 10–16× cheaper than `grep+read` on real code. See
+  [Results](#results).
+- **Answer quality:** on 18 structural questions about this repository, Claude
+  Sonnet 5.5 scored F1 0.99 with grep alone. Adding chiton left accuracy the same
+  (the model kept using grep) and raised input tokens; graph-only answers were
+  never wrong but missed some items (F1 0.96). See
+  [Answer quality](#answer-quality).
 - **Semantic search at 1M vectors:** **0.50 ms** p50 per query with HNSW, about
   **1,200× faster** than the 600 ms exact scan, at a recall@8 of **0.984**
   (0.998 at 100k). See [Vector index](#vector-index-flat-vs-hnsw).
@@ -30,40 +37,50 @@ Generated with `chiton bench` (built into the binary).
 
 For a corpus, chiton builds an **in-memory** graph from its AST extractors (no
 store, no running server), then answers a deterministic set of dependency
-questions of the form *"what does X depend on / connect to?"* three ways, and
-reports the token cost of each:
+questions of the form *"what does X depend on / connect to?"* and reports the
+token cost of each retrieval strategy:
 
 | Strategy | Models | Cost = tokens of… |
 |---|---|---|
 | **naive** | a model with no tooling reading the whole scope | every file in the corpus |
 | **grep+read** | the grep_search + read_file default of Copilot / Claude Code | every file that mentions the symbol |
-| **chiton** | chiton's MCP `get_node_neighborhood` payload | the lean node/edge JSON returned (depth 2) |
+| **chiton d2** | chiton's MCP `get_node_neighborhood` at depth 2 | the lean node/edge JSON returned |
+| **chiton d1** | the same tool at depth 1 | the lean node/edge JSON returned |
+| **query_graph** | chiton's `query_graph` lookup for the symbol's name | up to 10 matching nodes, no edges |
+
+Depth 1 returns only the symbol's direct neighbors, and `query_graph` only
+finds the symbol, so they answer less than depth 2 does. They show what the
+cheaper settings cost when a question doesn't need the wider neighborhood.
 
 Methodology notes:
 
-- **Token estimate = characters ÷ 4**, applied identically to all three
-  strategies.
+- **Token estimate = characters ÷ 4**, applied identically to every strategy.
 - **The chiton payload is byte-faithful to the real MCP output.** The bench
   serialises the *exact* `leanNode`/`leanEdge` shape `internal/mcp/server.go`
-  returns, so the chiton column is not under-counted. That shape has `kind`,
+  returns, so the chiton columns are not under-counted. That shape has `kind`,
   `label`, `source_uri`, `span`, `attrs`, `provenance`, `confidence`, edge
   `attrs`, and the neighborhood `summary` line. (An earlier draft of this benchmark
   dropped `attrs`/`provenance`/`confidence` and thereby flattered chiton; that
   bias is fixed, which is why the numbers below are higher than a naive lean
   encoding would show.)
-- **Query targets** are the highest-degree **corpus-internal** symbols. External
-  package nodes (`fmt`, `http.Get`) are excluded: nobody asks "what does `fmt`
-  depend on," and their high degree would inflate every column.
+- **Query targets** are the highest-degree **corpus-internal** symbols outside
+  test files. External package nodes (`fmt`, `http.Get`) are excluded: nobody
+  asks "what does `fmt` depend on," and their high degree would inflate every
+  column. Test symbols are excluded too: a busy test helper is rarely what a
+  developer asks about, and its wide neighborhood dominated the old sample.
+  `--include-tests` restores them, and the results below show both. Test files
+  stay in the corpus either way, so naive and grep+read are unaffected.
 - **grep+read greps the base identifier** a developer would type. For the
-  method label `LinkService.Submit` it greps `Submit`, which matches many files
-  in a real search too. This captures grep's imprecision rather than hiding it.
+  method label `LinkService.Submit` it greps `Submit`. The match is a substring
+  match, so a very common name like `New` also matches `NewEngine`, `NewStore`
+  and so on, and grep+read reads every one of those files. A developer would
+  usually search more precisely, so treat grep+read's cost on such names as an
+  upper bound.
 
 ### What this does not measure
 
 - **Answer quality.** This counts retrieval tokens, not whether the model got
-  the right answer. chiton's typed edges (`CALLS`, `IMPORTS`, …) also reduce the
-  *reasoning* the model must do over raw file dumps. That is the real benefit,
-  and this table cannot show it.
+  the right answer. [Answer quality](#answer-quality) measures that separately.
 - **Prompt caching.** Naive/grep contexts are far more cacheable than chiton's
   per-query neighborhoods; with a warm cache the input-token gap narrows further.
 - **Output tokens.** At $25/M, output often dominates the bill regardless of
@@ -75,6 +92,7 @@ Methodology notes:
 chiton bench --synth 40                       # reproducible synthetic ring corpus
 chiton bench ./internal/graph                 # a real medium, densely-connected package
 chiton bench ./internal --queries 6           # the whole internal/ tree (large)
+chiton bench ./internal --include-tests       # let test symbols be query targets
 chiton bench <path> --json                    # machine-readable output
 ```
 
@@ -83,91 +101,214 @@ is identical on every machine.
 
 ## Results
 
-Measured on the chiton repo at the `hnsw` branch (Go, `windows/amd64`,
-2026-10-06). Corpus sizes drift as the repo grows; re-run `chiton bench` to
+Measured on the chiton repo at commit `b535d99` (Go, `windows/amd64`,
+2026-10-07). Corpus sizes drift as the repo grows; re-run `chiton bench` to
 refresh.
 
-### A. Synthetic ring (40 files), where chiton loses badly
+### A. Synthetic ring (40 files), where chiton loses
 
-40 files · 280 nodes · 240 edges · ~2 391 tokens in scope · depth 2
+40 files · 280 nodes · 240 edges · ~2 391 tokens in scope
 
-| Question | naive | grep+read | chiton | chiton vs grep+read |
-|---|---:|---:|---:|---|
-| What does Func10 depend on / connect to? | 2 391 | 120 | 4 609 | 38× costlier |
-| What does Func8 depend on / connect to? | 2 391 | 118 | 4 608 | 39× costlier |
-| What does Func33 depend on / connect to? | 2 391 | 120 | 4 609 | 38× costlier |
-| What does Func9 depend on / connect to? | 2 391 | 119 | 4 608 | 39× costlier |
-| What does Func15 depend on / connect to? | 2 391 | 120 | 4 609 | 38× costlier |
+| Question | naive | grep+read | chiton d2 | chiton d1 | query_graph | d2 vs grep+read | d1 vs grep+read |
+|---|---:|---:|---:|---:|---:|---|---|
+| What does Func14 depend on / connect to? | 2 391 | 120 | 4 609 | 265 | 80 | 38× costlier | 2.2× costlier |
+| What does Func39 depend on / connect to? | 2 391 | 120 | 4 609 | 265 | 80 | 38× costlier | 2.2× costlier |
+| What does Func25 depend on / connect to? | 2 391 | 120 | 4 609 | 265 | 80 | 38× costlier | 2.2× costlier |
+| What does Func19 depend on / connect to? | 2 391 | 120 | 4 609 | 265 | 80 | 38× costlier | 2.2× costlier |
+| What does Func16 depend on / connect to? | 2 391 | 120 | 4 609 | 265 | 80 | 38× costlier | 2.2× costlier |
 
-**Median:** chiton ~4 609 tokens vs grep+read ~120 (**38× costlier**); naive ~2 391.
+**Median:** grep+read ~120 tokens; chiton d2 ~4 609 (**38× costlier**), d1 ~265
+(2.2× costlier), query_graph ~80; naive ~2 391.
 
 On a tiny corpus where each symbol is defined once and grep lands precisely on a
-small file, **grep wins decisively**, and chiton's depth-2 neighborhood of a
-ring node costs more than reading the whole corpus would. Don't reach for graph
-memory on a hobby-sized repo.
+small file, **grep wins decisively**. Even depth 1 costs twice as much, and the
+depth-2 neighborhood of a ring node costs more than reading the whole corpus.
+Don't reach for graph memory on a hobby-sized repo.
 
 ### B. `internal/graph` (medium, densely connected)
 
-26 files · 595 nodes · 735 edges · ~29 750 tokens in scope · depth 2
+47 files · 930 nodes · 1 256 edges · ~53 930 tokens in scope
 
-| Question | naive | grep+read | chiton | chiton vs grep+read |
-|---|---:|---:|---:|---|
-| What does makeNode depend on / connect to? | 29 750 | 2 770 | 1 880 | 1.5× cheaper |
-| What does node depend on / connect to? | 29 750 | 26 570 | 1 403 | **19× cheaper** |
-| What does TestTwoCliques depend on / connect to? | 29 750 | 1 026 | 3 027 | 3.0× costlier |
-| What does sameComm depend on / connect to? | 29 750 | 1 744 | 2 013 | 1.2× costlier |
-| What does makeEdge depend on / connect to? | 29 750 | 2 770 | 2 149 | 1.3× cheaper |
+| Question | naive | grep+read | chiton d2 | chiton d1 | query_graph | d2 vs grep+read | d1 vs grep+read |
+|---|---:|---:|---:|---:|---:|---|---|
+| What does scan depend on / connect to? | 53 930 | 15 691 | 10 905 | 1 266 | 515 | 1.4× cheaper | 12× cheaper |
+| What does replaceSource depend on / connect to? | 53 930 | 9 750 | 10 266 | 1 044 | 904 | 1.1× costlier | 9.3× cheaper |
+| What does Engine.Query depend on / connect to? | 53 930 | 3 434 | 5 813 | 749 | 437 | 1.7× costlier | 4.6× cheaper |
+| What does deleteNode depend on / connect to? | 53 930 | 9 750 | 9 963 | 982 | 343 | 1.0× costlier | 9.9× cheaper |
+| What does RunIncremental depend on / connect to? | 53 930 | 3 693 | 4 933 | 870 | 141 | 1.3× costlier | 4.2× cheaper |
 
-**Median:** chiton ~2 013 tokens vs grep+read ~2 770 (**1.4× cheaper**); naive ~29 750 (**~15× cheaper**).
+**Median:** grep+read ~9 750 tokens; chiton d2 ~9 963 (**about even**), d1 ~982
+(**9.9× cheaper**), query_graph ~437; naive ~53 930 (d2 **~5× cheaper**).
 
-For a hub symbol like `node` (referenced everywhere), grep reads nearly the whole
-package (27k tokens) while chiton returns a bounded ~1.4k-token neighborhood,
-**19× cheaper**. But for uniquely-named or weakly-connected symbols, grep is more
-precise and chiton's depth-2 neighborhood can cost more. It nets out to
-**modestly cheaper** vs grep, and a large win vs naive.
+At depth 2 chiton costs about what grep+read does on a medium package: cheaper
+for a hub like `scan`, a little costlier for the rest. Depth 1 is roughly 10×
+cheaper than grep+read when the question only needs direct callers and callees.
 
-### C. `internal/` (large, 7.2k nodes)
+### C. `internal/` (large)
 
-285 files · 7 170 nodes · 7 953 edges · ~314 988 tokens in scope · depth 2
+332 files · 6 863 nodes · 9 003 edges · ~401 955 tokens in scope
 
-| Question | naive | grep+read | chiton | chiton vs grep+read |
-|---|---:|---:|---:|---|
-| What does LinkService.Submit depend on / connect to? | 314 988 | 40 340 | 34 178 | 1.2× cheaper |
-| What does semanticSearchTool depend on / connect to? | 314 988 | 7 221 | 6 421 | 1.1× cheaper |
-| What does Generate depend on / connect to? | 314 988 | 16 749 | 9 294 | 1.8× cheaper |
-| What does TestVectorBenchReport depend on / connect to? | 314 988 | 839 | 16 947 | 20× costlier |
-| What does countFindings depend on / connect to? | 314 988 | 7 861 | 30 772 | 3.9× costlier |
-| What does Service.Submit depend on / connect to? | 314 988 | 40 340 | 29 546 | 1.4× cheaper |
+| Question | naive | grep+read | chiton d2 | chiton d1 | query_graph | d2 vs grep+read | d1 vs grep+read |
+|---|---:|---:|---:|---:|---:|---|---|
+| What does New depend on / connect to? | 401 955 | 238 102 | 7 979 | 1 319 | 723 | 30× cheaper | 181× cheaper |
+| What does Analyze depend on / connect to? | 401 955 | 34 891 | 47 741 | 1 240 | 574 | 1.4× costlier | 28× cheaper |
+| What does neighborhoodTool depend on / connect to? | 401 955 | 6 485 | 8 509 | 981 | 63 | 1.3× costlier | 6.6× cheaper |
+| What does semanticSearchTool depend on / connect to? | 401 955 | 8 385 | 5 356 | 926 | 63 | 1.6× cheaper | 9.1× cheaper |
+| What does LocalSource.Messages depend on / connect to? | 401 955 | 19 138 | 24 960 | 1 120 | 507 | 1.3× costlier | 17× cheaper |
+| What does jsonResult depend on / connect to? | 401 955 | 17 455 | 8 378 | 1 126 | 183 | 2.1× cheaper | 16× cheaper |
 
-**Median:** chiton ~23 246 tokens vs grep+read ~12 305 (**1.9× costlier**); naive ~314 988 (**~14× cheaper**).
+**Median:** grep+read ~18 296 tokens; chiton d2 ~8 443 (**2.2× cheaper**), d1
+~1 123 (**16× cheaper**), query_graph ~345; naive ~401 955 (d2 **~48× cheaper**).
 
-At scale, naive context dumping is hopeless (300k+ tokens). Against grep+read
-the picture has shifted since the last run: `internal/` grew from 4.6k to 7.2k
-nodes, and two of the six highest-degree symbols are now test code:
-`TestVectorBenchReport`, and `countFindings`, a helper defined in three test
-files. grep lands on a file or three while chiton's depth-2 neighborhood of
-these busy test symbols is wide. The
-hub symbols still favour chiton. The reliable, large win is over **naive**
-(~14–15×).
+At scale, naive context dumping is hopeless (400k tokens). Against grep+read,
+depth 2 wins three of the six questions and loses the other three by at most
+1.4×. The `New` row overstates grep's cost (see the substring note above), but
+leaving it out barely moves the medians: depth 2 is still about 2× cheaper, and
+depth 1 still wins every question.
+
+### Test symbols as targets: the previous method
+
+Before this change, the benchmark let test symbols be query targets. Run on the
+same commit with `--include-tests`:
+
+| Corpus | grep+read | chiton d2 | chiton d1 | query_graph |
+|---|---:|---:|---:|---:|
+| `internal/graph` | 3 434 | 9 150 (2.7× costlier) | 932 (3.7× cheaper) | 437 |
+| `internal/` | 5 823 | 5 802 (about even) | 1 701 (3.4× cheaper) | 176 |
+
+Medians. The synthetic corpus has no tests and doesn't change. Test helpers such
+as `newHarness` and `TestVectorBenchReport` are among the most connected
+symbols, and grep lands on the one or two files that use them, which is why
+they pulled the old depth-2 medians toward grep. The last version of this page,
+measured on an older commit with test targets, reported depth-2 medians of
+1.4× cheaper on `internal/graph` and 1.9× costlier on `internal/`.
 
 ## Summary
 
-- **vs naive context dumping:** chiton is reliably **~14–15× cheaper** at
-  medium/large scale. This is the dependable token win.
-- **vs `grep+read`:** **mixed on raw token count**. chiton is markedly cheaper
-  for hub symbols (where grep drags in a whole package, up to ~19×) but
-  *costlier* for uniquely-named or highly-connected symbols whose depth-2
-  neighborhood is large. Medians: medium ~1.4× cheaper, large ~1.9× costlier.
-  Drop to depth 1, or use `query_graph` instead of `get_node_neighborhood`,
-  when token cost matters more than breadth.
-- **tiny corpora:** grep wins decisively (tens of tokens vs thousands).
-- **The token reduction vs grep is not the point.** On these corpora it barely
-  exists. The point is *better* context: a typed, bounded neighborhood
-  (`CALLS`/`IMPORTS`/`DECIDED_IN` edges with provenance) the model doesn't have
-  to reconstruct from raw file dumps, plus the large win over naive and the
-  capabilities (meeting→code links, findings) grep cannot provide.
+- **vs naive context dumping:** chiton's depth-2 neighborhood is **~5× cheaper**
+  on a medium package and **~48× cheaper** on a large tree.
+- **vs `grep+read`:** **mixed at depth 2.** About even on a medium package and
+  2.2× cheaper on a large tree, winning big for hub symbols (where grep drags in
+  much of a package) and losing narrowly for symbols with a wide neighborhood.
+- **Depth 1 is the cheap setting:** ~10× cheaper than grep+read on the medium
+  package and ~16× cheaper on the large tree, when direct callers and callees are
+  enough. `query_graph` costs a few hundred tokens to find a symbol.
+- **Tiny corpora:** grep wins decisively (tens of tokens vs hundreds or thousands).
+- **Token cost isn't the main argument.** The point is *better* context: a
+  typed, bounded neighborhood (`CALLS`/`IMPORTS`/`DECIDED_IN` edges with
+  provenance) the model doesn't have to reconstruct from raw file dumps, plus
+  capabilities grep cannot provide (meeting→code links, findings).
+  [Answer quality](#answer-quality) tests whether that context leads to better
+  answers.
 
 Re-run `chiton bench` on your own corpus.
+
+## Answer quality
+
+The token tables measure what each strategy costs, not whether the model ends up
+with the right answer. This benchmark asks Claude Code structural questions about
+a real repository and grades the answers.
+
+### Method
+
+- **Questions.** 18 questions about chiton's own Go code at commit `b535d99`:
+  6 *callers* ("which functions call `internal/config:StateDir`?"), 4 *callees*,
+  4 *imports* ("which repository packages does `internal/analyze` import?") and
+  4 *importers*. `qualbench gen` picks them deterministically: every expected
+  answer has 3 to 12 items, and caller and callee answers span at least two
+  packages, so no single file holds the answer.
+- **Ground truth** comes from the Go source with `go/ast`, independently of
+  chiton's extractor. It covers every non-test `.go` file regardless of build
+  tags. Spot checks against `git grep` matched.
+- **Model.** Claude Code 2.1.289 in headless mode (`claude -p`) with Claude
+  Sonnet 5.5 (`--model sonnet`). Each question was asked twice under each
+  condition: 108 runs. `--tools` limits the built-in tools, `--setting-sources
+  project` keeps user plugins and hooks out, and `--strict-mcp-config` loads only
+  the MCP servers a condition names.
+- **Conditions.**
+  - **grep:** the built-in Read, Grep and Glob tools only.
+  - **chiton:** the same tools plus chiton's MCP server, in a checkout where
+    `chiton install` wrote its rules block and skills. The model chooses which
+    tools to use, as it would in practice.
+  - **chiton-only:** chiton's MCP server plus Read, with Grep and Glob removed,
+    so the answer has to come from the graph.
+- **Graph.** `chiton build` and `chiton cluster` over the checkout (3 996 nodes,
+  10 548 edges). No embeddings, so `semantic_search` was unavailable.
+- **Scoring.** The model answers with a JSON list. Each answer gets precision,
+  recall and F1 against the ground truth; *exact* means the sets match.
+
+### Results
+
+| Condition | Mean F1 | Precision | Recall | Exact answers | Median input tokens | Median turns | Median time | Total cost |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| grep | 0.99 | 0.99 | 0.99 | 34 / 36 | 22 537 | 4 | 6 s | $0.99 |
+| chiton | 0.99 | 0.99 | 0.99 | 35 / 36 | 42 386 | 4 | 6 s | $1.21 |
+| chiton-only | 0.96 | 1.00 | 0.95 | 32 / 36 | 61 022 | 5 | 8 s | $2.94 |
+
+Input tokens count cached and uncached input together. Cost is the API price
+Claude Code reports for the runs.
+
+| Question kind | grep | chiton | chiton-only |
+|---|---:|---:|---:|
+| callers | 0.96 | 0.97 | 0.94 |
+| callees | 1.00 | 1.00 | 1.00 |
+| imports | 1.00 | 1.00 | 0.91 |
+| importers | 1.00 | 1.00 | 1.00 |
+
+Mean F1. Per-question scores, every answer and every tool call are in
+[`benchmark-data/answer-quality-results.json`](benchmark-data/answer-quality-results.json);
+the questions and their ground truth are in
+[`benchmark-data/answer-quality-questions.json`](benchmark-data/answer-quality-questions.json).
+
+### What the results show
+
+- **These questions don't separate the conditions on accuracy.** With grep
+  alone, Sonnet 5.5 answered 34 of 36 exactly on a 380-file repository. Its two
+  misses credited a call to the wrong enclosing function: the call sits on the
+  first line of `runDiff`, and the model attributed it to `analyzeCmd` above.
+  Showing a quality difference needs harder questions: transitive callers,
+  larger repositories, or questions about decisions that only meeting links
+  can answer.
+- **Given chiton alongside grep, the model didn't use it.** The chiton runs
+  made about 2.9 Grep calls each and no chiton calls, even with chiton's rules
+  block telling the assistant to prefer its tools. The rules, skills and tool
+  definitions still entered the context, so median input rose from about 22.5k
+  to 42.4k tokens and cost rose 22%, for the same answers.
+- **The graph alone was never wrong, but missed items.** Every item the
+  chiton-only runs returned was correct (precision 1.00), but they missed some
+  (recall 0.95), and they used about 2.7× the input tokens of grep. The misses
+  had two causes:
+  - *Imports are recorded per file.* For `internal/ingest/browser`, both runs
+    missed the two packages that only `watch.go` imports, although the graph
+    holds those edges. Answering a package question means checking every file's
+    imports; a package-level view would answer it in one call.
+  - *Common names are harder.* Asked for the callers of `internal/analyze:New`,
+    a name many packages use, one run found only 1 of the 5 callers.
+
+These are the next things to fix: tool descriptions and rules that lead the
+model to chiton when it helps, a package-level imports view, and better
+disambiguation for common names. Then re-run with harder questions.
+
+### Reproduce
+
+The harness is `internal/bench/qualbench`. It needs the `claude` CLI on `PATH`,
+signed in. Runs count against your Claude plan.
+
+```sh
+# two clean checkouts of the commit under test
+git clone <repo> grep-checkout
+git clone <repo> chiton-checkout
+cd chiton-checkout && chiton build . && chiton cluster && chiton install --assistant claude-code && cd ..
+
+go run ./internal/bench/qualbench gen -repo grep-checkout -out questions.json
+go run ./internal/bench/qualbench run -questions questions.json \
+  -grep-dir grep-checkout -chiton-dir chiton-checkout -chiton-bin "$(which chiton)" \
+  -repeat 2 -out results.json
+go run ./internal/bench/qualbench report -questions questions.json -results results.json
+```
+
+With `-parallel N`, give each worker its own copy of the graph through
+`-graph-dirs` (directories that each hold a copy of `chiton-out/`).
 
 ## Vector index: flat vs HNSW
 
