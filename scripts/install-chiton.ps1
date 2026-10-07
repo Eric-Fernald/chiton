@@ -1,17 +1,19 @@
 <#
 .SYNOPSIS
-    Fetch a prebuilt chiton binary and install it locally.
+    Fetch the prebuilt chiton binary for this machine and install it locally.
 
 .DESCRIPTION
-    Installs into $env:CLAUDE_PLUGIN_DATA\bin when running as part of the Claude
-    Code plugin, otherwise ~\.chiton\bin. Downloads the release asset for the
-    host architecture, verifies its SHA-256 against the release's checksums.txt,
-    and stops on any mismatch. The script never executes anything it downloads.
+    Downloads exactly one release asset, the Windows binary, verifies its
+    SHA-256 against a checksums.txt, and stops on any mismatch. The script never
+    executes anything it downloads.
 
-    The repository is private, so release assets are NOT reachable through the
-    github.com/<owner>/<repo>/releases/download/ browser URL — that endpoint is
-    session-authenticated and returns 404 for a token. Assets come from the REST
-    API instead, either through the GitHub CLI or through the per-asset API URL.
+    The plugin's bin\chiton.cmd launcher runs this on first use with -Checksums
+    pointing at the checksums.txt shipped inside the plugin, so the binary is
+    checked against hashes that arrived with the plugin rather than from the same
+    place as the binary. Run by hand, it fetches the release's own checksums.txt.
+
+    Assets come from the release download URLs on github.com; no API calls, no
+    credentials, no rate limit.
 
 .PARAMETER Version
     Release tag to install. Defaults to $env:CHITON_VERSION, then "latest".
@@ -20,24 +22,30 @@
     Install directory. Defaults to $env:CHITON_INSTALL_DIR, then the plugin data
     directory, then ~\.chiton\bin.
 
-.NOTES
-    Windows PowerShell 5.1 compatible. Authenticate with `gh auth login`, or set
-    $env:GITHUB_TOKEN to a token with repo:read.
+.PARAMETER Checksums
+    Verify against this checksums.txt instead of the release's own.
 
-    Run it with an explicit policy override, because Windows client SKUs default
-    to Restricted:
+.PARAMETER Quiet
+    Print errors only.
+
+.NOTES
+    Windows PowerShell 5.1 compatible. Run it with an explicit policy override,
+    because Windows client SKUs default to Restricted:
 
         powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-chiton.ps1
 #>
 [CmdletBinding()]
 param(
     [string]$Version,
-    [string]$Dir
+    [string]$Dir,
+    [string]$Checksums,
+    [switch]$Quiet
 )
 
 $ErrorActionPreference = 'Stop'
+# The progress bar slows Invoke-WebRequest down by an order of magnitude on 5.1.
+$ProgressPreference = 'SilentlyContinue'
 $Repo = 'Eric-Fernald/chiton'
-$Api = "https://api.github.com/repos/$Repo"
 
 if (-not $Version) { $Version = $env:CHITON_VERSION }
 if (-not $Version) { $Version = 'latest' }
@@ -52,160 +60,139 @@ if (-not $Dir) {
 }
 
 function Die([string]$Message) {
-    Write-Error "install-chiton: $Message"
+    [Console]::Error.WriteLine("install-chiton: $Message")
     exit 1
 }
 
-function Have([string]$Name) {
-    $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
-}
-
-function Show-NoAccess {
-    Write-Host @"
-install-chiton: could not read releases for $Repo.
-
-The repository is private and may also have no published releases yet. Do one of:
-  * gh auth login                                 (then re-run — simplest route)
-  * `$env:GITHUB_TOKEN = '<repo:read PAT>'         (then re-run)
-  * build from source: git clone the repo and run 'make build'
-"@
-    exit 1
+function Say([string]$Message) {
+    if (-not $Quiet) { Write-Host "install-chiton: $Message" }
 }
 
 # ---- host detection -------------------------------------------------------
 
-$arch = $env:PROCESSOR_ARCHITECTURE
-switch ($arch) {
+# There is no windows/arm64 build; Windows on Arm runs the amd64 one under
+# emulation.
+switch ($env:PROCESSOR_ARCHITECTURE) {
     'AMD64' { $goarch = 'amd64' }
-    'ARM64' { Die 'no prebuilt windows/arm64 release; build from source (see CONTRIBUTING.md)' }
-    default { Die "unsupported architecture: $arch" }
+    'ARM64' { $goarch = 'amd64' }
+    default { Die "unsupported architecture: $env:PROCESSOR_ARCHITECTURE" }
+}
+
+if ($Checksums -and -not (Test-Path -LiteralPath $Checksums -PathType Leaf)) {
+    Die "checksums file not found: $Checksums"
 }
 
 # TLS 1.2 is not the default on stock Windows PowerShell 5.1.
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$apiHeaders = @{ 'User-Agent' = 'install-chiton'; 'Accept' = 'application/vnd.github+json' }
-if ($env:GITHUB_TOKEN) { $apiHeaders['Authorization'] = "Bearer $env:GITHUB_TOKEN" }
+# ---- resolve the tag ------------------------------------------------------
 
-# Download one release asset by its API url.
-#
-# The API redirects to storage on another host. Windows PowerShell re-sends
-# custom headers across a redirect, which would hand the token to that host, so
-# the redirect is stopped and re-issued without any headers.
-function Get-Asset([string]$Url, [string]$OutFile) {
-    $headers = $apiHeaders.Clone()
-    $headers['Accept'] = 'application/octet-stream'
+if ($Version -eq 'latest') {
+    # github.com/<repo>/releases/latest redirects to .../releases/tag/<tag>.
+    # Reading the redirect avoids the rate-limited REST API.
+    $tag = $null
     try {
-        Invoke-WebRequest -Uri $Url -Headers $headers -OutFile $OutFile `
-            -UseBasicParsing -MaximumRedirection 0 -ErrorAction Stop
-        return
-    } catch {
-        $resp = $_.Exception.Response
-        if (-not $resp) { throw }
-
-        $code = 0
-        try { $code = [int]$resp.StatusCode } catch { }
-        if ($code -lt 300 -or $code -ge 400) { throw }
-
-        $location = $null
-        try { $location = $resp.Headers['Location'] } catch { }
-        if (-not $location -and $resp.Headers.Location) { $location = $resp.Headers.Location.AbsoluteUri }
-        if (-not $location) { throw }
-
-        # Signed storage URL: carries its own credentials, needs none of ours.
-        Invoke-WebRequest -Uri $location -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
+        $req = [Net.HttpWebRequest]::Create("https://github.com/$Repo/releases/latest")
+        $req.Method = 'HEAD'
+        $req.AllowAutoRedirect = $false
+        $req.UserAgent = 'install-chiton'
+        $resp = $req.GetResponse()
+        $location = $resp.Headers['Location']
+        $resp.Close()
+        if ($location -match '/releases/tag/([^/?#]+)$') { $tag = $Matches[1] }
+    } catch { }
+    if (-not $tag) {
+        Die @"
+could not find a published release of $Repo. Install with
+  go install github.com/Eric-Fernald/chiton/cmd/chiton@latest
+or build from source ('make build').
+"@
     }
+} else {
+    $tag = $Version
 }
+
+$asset = "chiton-$tag-windows-$goarch.exe"
+$base = "https://github.com/$Repo/releases/download/$tag"
 
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ("chiton-" + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $tmp -Force | Out-Null
 
 try {
-    # ---- resolve the release ----------------------------------------------
-
-    $useGh = $false
-    if (Have 'gh') {
-        & gh auth status *> $null
-        if ($LASTEXITCODE -eq 0) { $useGh = $true }
-    }
-
-    if ($useGh) {
-        if ($Version -eq 'latest') {
-            $tag = (& gh release view --repo $Repo --json tagName --jq .tagName 2>$null)
-            if ($LASTEXITCODE -ne 0 -or -not $tag) { Show-NoAccess }
-        } else {
-            $tag = $Version
-        }
-    } else {
-        $url = "$Api/releases/latest"
-        if ($Version -ne 'latest') { $url = "$Api/releases/tags/$Version" }
-        try {
-            $release = Invoke-RestMethod -Uri $url -Headers $apiHeaders -UseBasicParsing
-        } catch {
-            Show-NoAccess
-        }
-        $tag = $release.tag_name
-        if (-not $tag) { Die 'could not read a release tag from the GitHub API response' }
-    }
-
-    $asset = "chiton-$tag-windows-$goarch.exe"
-    $assetPath = Join-Path $tmp $asset
-    $sumsPath = Join-Path $tmp 'checksums.txt'
-
-    Write-Host "install-chiton: installing $asset from $tag"
-
     # ---- download ---------------------------------------------------------
 
-    if ($useGh) {
-        & gh release download $tag --repo $Repo --dir $tmp --pattern $asset --pattern 'checksums.txt' --clobber
-        if ($LASTEXITCODE -ne 0) { Die "gh could not download $asset and checksums.txt from $tag" }
-    } else {
-        $assetEntry = $release.assets | Where-Object { $_.name -eq $asset } | Select-Object -First 1
-        $sumsEntry = $release.assets | Where-Object { $_.name -eq 'checksums.txt' } | Select-Object -First 1
-        if (-not $assetEntry) { Die "release $tag has no asset named $asset" }
-        if (-not $sumsEntry) { Die "release $tag publishes no checksums.txt - refusing to install an unverified binary" }
-
-        try { Get-Asset $assetEntry.url $assetPath } catch { Die "download failed for ${asset}: $($_.Exception.Message)" }
-        try { Get-Asset $sumsEntry.url $sumsPath } catch { Die "download failed for checksums.txt: $($_.Exception.Message)" }
+    Say "downloading $asset"
+    $assetPath = Join-Path $tmp $asset
+    try {
+        Invoke-WebRequest -Uri "$base/$asset" -OutFile $assetPath -UseBasicParsing -UserAgent 'install-chiton'
+    } catch {
+        Die "download failed: $base/$asset ($($_.Exception.Message))"
     }
 
-    if (-not (Test-Path $assetPath)) { Die "download did not produce $asset" }
-    if (-not (Test-Path $sumsPath)) { Die "no checksums.txt for $tag - refusing to install an unverified binary" }
+    if (-not $Checksums) {
+        $Checksums = Join-Path $tmp 'checksums.txt'
+        try {
+            Invoke-WebRequest -Uri "$base/checksums.txt" -OutFile $Checksums -UseBasicParsing -UserAgent 'install-chiton'
+        } catch {
+            Die "release $tag publishes no checksums.txt - refusing to install an unverified binary"
+        }
+    }
 
     # ---- verify -----------------------------------------------------------
+    #
+    # checksums.txt is `sha256sum` output: "<hash>  <name>", or "<hash> *<name>"
+    # in binary mode. Match the name exactly.
 
-    $line = Select-String -Path $sumsPath -Pattern ([regex]::Escape($asset)) | Select-Object -First 1
-    if (-not $line) { Die "checksums.txt has no entry for $asset - refusing to install" }
-    $expected = ($line.Line -split '\s+')[0]
+    $expected = $null
+    foreach ($line in Get-Content -LiteralPath $Checksums) {
+        $fields = $line.Trim() -split '\s+'
+        if ($fields.Count -ge 2 -and $fields[-1].TrimStart('*') -eq $asset) {
+            $expected = $fields[0]
+            break
+        }
+    }
+    if (-not $expected) { Die "checksums.txt has no entry for $asset - refusing to install" }
 
-    $actual = (Get-FileHash -Path $assetPath -Algorithm SHA256).Hash
+    $actual = (Get-FileHash -LiteralPath $assetPath -Algorithm SHA256).Hash
     if ($actual -ne $expected.ToUpper()) {
         Die "checksum mismatch for $asset (expected $expected, got $actual) - refusing to install"
     }
-    Write-Host 'install-chiton: sha256 verified'
+    Say 'sha256 verified'
 
     # ---- install ----------------------------------------------------------
+    #
+    # Copy beside the target and rename over it, so a concurrent launcher never
+    # sees a half-written binary. If another launcher won the race and its copy
+    # is already running, the rename fails; that copy is fine to keep when it
+    # carries the same hash.
 
     New-Item -ItemType Directory -Path $Dir -Force | Out-Null
     $target = Join-Path $Dir 'chiton.exe'
-    Copy-Item -Path $assetPath -Destination $target -Force
+    $staged = "$target.tmp.$PID"
+    Copy-Item -LiteralPath $assetPath -Destination $staged -Force
+    try {
+        Move-Item -LiteralPath $staged -Destination $target -Force
+    } catch {
+        Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+        $have = $null
+        if (Test-Path -LiteralPath $target) { $have = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash }
+        if ($have -ne $actual) { Die "could not install to ${target}: $($_.Exception.Message)" }
+    }
 
     # Deliberately not running the binary to report its version: this script
     # must not execute what it downloaded.
-    Write-Host "install-chiton: installed $tag -> $target"
+    Say "installed $tag -> $target"
 } finally {
-    Remove-Item -Path $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+if ($Quiet) { exit 0 }
 $onPath = ($env:PATH -split ';') -contains $Dir
 if (-not $onPath) {
     Write-Host @"
 
-$Dir is not on your PATH. The chiton MCP server launches the binary by name, so
-add it for future sessions:
+$Dir is not on your PATH. To run chiton by name, add it for future sessions:
 
   [Environment]::SetEnvironmentVariable('PATH', "$Dir;" + [Environment]::GetEnvironmentVariable('PATH','User'), 'User')
-
-Then restart Claude Code (or run /reload-plugins) so the MCP server picks it up.
 "@
 }

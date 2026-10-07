@@ -45,12 +45,18 @@ type Deps struct {
 	ProjectRoot string
 	// IncludePII turns off redaction of people's names and addresses in the graph tools (serve --include-pii).
 	IncludePII bool
+	// Version is the server version advertised to clients; empty advertises "dev".
+	Version string
 }
 
 // New creates an MCPServer exposing chiton's tools over gs. overlay (nil before any cluster pass)
 // and each Deps service are optional. A tool missing its service replies that it is unavailable.
 func New(gs store.GraphStore, overlay *cluster.Results, deps Deps) *mcpsdk.MCPServer {
-	s := mcpsdk.NewMCPServer("chiton", "0.1.0")
+	version := deps.Version
+	if version == "" {
+		version = "dev"
+	}
+	s := mcpsdk.NewMCPServer("chiton", version)
 	r := redactor{includePII: deps.IncludePII}
 	s.AddTool(getNodeTool(), getNodeHandler(gs, r))
 	s.AddTool(neighborhoodTool(), neighborhoodHandler(gs, r))

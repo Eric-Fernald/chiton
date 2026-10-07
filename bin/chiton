@@ -3,13 +3,24 @@
 #
 # This directory is added to the Bash tool's PATH while the chiton plugin is
 # enabled, so `chiton ...` works from the assistant even when the binary lives
-# somewhere that is not on the user's own PATH.
+# somewhere that is not on the user's own PATH. The published plugin's
+# .mcp.json also launches the MCP server through this script on Linux and macOS
+# (on Windows the same command resolves to chiton.cmd beside it).
+#
+# A published plugin ships no binaries. It carries release/tag, the release it
+# was built from, and release/checksums.txt, that release's hashes. On first use
+# this script downloads the one binary this machine needs into
+# ~/.chiton/versions/<tag>/ and verifies it against those hashes.
 #
 # Resolution order:
 #   1. $CHITON_BIN
-#   2. `chiton` / `chiton.exe` on PATH (this shim's own directory is skipped)
-#   3. $CLAUDE_PLUGIN_DATA/bin/chiton
-#   4. $HOME/.chiton/bin/chiton
+#   2. published plugin: ~/.chiton/versions/<tag>/chiton, downloading it first
+#      if it is missing
+#   3. `chiton` / `chiton.exe` on PATH (this shim's own directory is skipped)
+#   4. $CLAUDE_PLUGIN_DATA/bin/chiton
+#   5. $HOME/.chiton/bin/chiton
+#
+# Every message goes to stderr: on the MCP path, stdout is the protocol stream.
 
 set -eu
 
@@ -54,7 +65,30 @@ if usable "${CHITON_BIN:-}"; then
 	exec "$CHITON_BIN" "$@"
 fi
 
-# 2. PATH, skipping this shim's own directory so we never re-enter ourselves
+# 2. the release this plugin was built from. A source checkout has no
+# release/tag and skips straight to PATH.
+pinned=""
+if [ -n "$self_dir" ] && [ -f "$self_dir/../release/tag" ]; then
+	pinned=$(tr -d ' \r\n' <"$self_dir/../release/tag")
+fi
+if [ -n "$pinned" ] && [ -n "${HOME:-}" ]; then
+	ext=""
+	case "$(uname -s 2>/dev/null)" in
+	MINGW* | MSYS* | CYGWIN*) ext=".exe" ;;
+	esac
+	vdir="$HOME/.chiton/versions/$pinned"
+	if ! usable "$vdir/chiton$ext"; then
+		echo "chiton: fetching the $pinned binary for this machine (first run only)" >&2
+		sh "$self_dir/../scripts/install-chiton.sh" --version "$pinned" --dir "$vdir" \
+			--checksums "$self_dir/../release/checksums.txt" --quiet </dev/null >&2 ||
+			echo "chiton: download failed; looking for another chiton instead" >&2
+	fi
+	if usable "$vdir/chiton$ext"; then
+		exec "$vdir/chiton$ext" "$@"
+	fi
+fi
+
+# 3. PATH, skipping this shim's own directory so we never re-enter ourselves
 old_ifs=$IFS
 IFS=:
 for dir in $PATH; do
@@ -71,7 +105,7 @@ for dir in $PATH; do
 done
 IFS=$old_ifs
 
-# 3. plugin data directory
+# 4. plugin data directory
 if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
 	if usable "$CLAUDE_PLUGIN_DATA/bin/chiton.exe"; then
 		exec "$CLAUDE_PLUGIN_DATA/bin/chiton.exe" "$@"
@@ -81,7 +115,7 @@ if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
 	fi
 fi
 
-# 4. per-user fallback
+# 5. per-user fallback
 if [ -n "${HOME:-}" ]; then
 	if usable "$HOME/.chiton/bin/chiton.exe"; then
 		exec "$HOME/.chiton/bin/chiton.exe" "$@"
@@ -96,14 +130,10 @@ fi # end of the resolution block skipped on re-entry
 cat >&2 <<'EOF'
 chiton: binary not found.
 
-Install it with one of:
-  sh "$CLAUDE_PLUGIN_ROOT/scripts/install-chiton.sh"   # prebuilt release
-  make build                                            # from a local clone
-
-`go install github.com/Eric-Fernald/chiton/cmd/chiton@latest` also works, but
-the repository is private, so it needs both git credentials for github.com and
-GOPRIVATE=github.com/Eric-Fernald/* — otherwise the module proxy cannot see the
-repo and the install fails with a 404.
+Install it with any of:
+  sh "$CLAUDE_PLUGIN_ROOT/scripts/install-chiton.sh"           # prebuilt release
+  go install github.com/Eric-Fernald/chiton/cmd/chiton@latest
+  make build                                                    # from a local clone
 
 Or point $CHITON_BIN at an existing binary.
 EOF

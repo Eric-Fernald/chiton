@@ -36,8 +36,65 @@ func TestPluginManifest(t *testing.T) {
 		Author      struct {
 			Name string `json:"name"`
 		} `json:"author"`
+		License          string `json:"license"`
+		Icon             string `json:"icon"`
+		Homepage         string `json:"homepage"`
+		Repository       string `json:"repository"`
+		DocumentationURL string `json:"documentationUrl"`
+		SupportURL       string `json:"supportUrl"`
+		PrivacyPolicyURL string `json:"privacyPolicyUrl"`
 	}
 	readJSON(t, filepath.Join(".claude-plugin", "plugin.json"), &m)
+
+	// The claude.ai directory listing reads these.
+	// There is no SPDX id for PolyForm Strict, let alone with the extra permission, hence a LicenseRef.
+	if m.License != "LicenseRef-PolyForm-Strict-1.0.0-Commercial-Use" {
+		t.Errorf("plugin.json license = %q, want LicenseRef-PolyForm-Strict-1.0.0-Commercial-Use (the LICENSE file)", m.License)
+	}
+	// PolyForm's terms require dropping its name from any edited copy of a PolyForm license, so the
+	// LICENSE file must carry the Strict text verbatim and grant the extra permissions in a separate
+	// section. Marketplace hosting and the documented install routes depend on those permissions.
+	lic, err := os.ReadFile("LICENSE")
+	if err != nil {
+		t.Fatalf("read LICENSE: %v", err)
+	}
+	for _, want := range []string{
+		"### 1. Commercial Use",
+		"### 2. Plugin Marketplaces and Mirrors",
+		"### 3. Installation and Building",
+		"# PolyForm Strict License 1.0.0",
+		"Any noncommercial purpose is a permitted purpose.",
+	} {
+		if !strings.Contains(string(lic), want) {
+			t.Errorf("LICENSE does not contain %q", want)
+		}
+	}
+	if !strings.HasPrefix(m.Icon, "./") {
+		t.Errorf("plugin.json icon = %q, want a ./-relative path inside the plugin", m.Icon)
+	} else if _, err := os.Stat(filepath.FromSlash(m.Icon)); err != nil {
+		t.Errorf("plugin.json icon: %v", err)
+	}
+	for field, u := range map[string]string{
+		"homepage":         m.Homepage,
+		"repository":       m.Repository,
+		"documentationUrl": m.DocumentationURL,
+		"supportUrl":       m.SupportURL,
+		"privacyPolicyUrl": m.PrivacyPolicyURL,
+	} {
+		if !strings.HasPrefix(u, "https://") {
+			t.Errorf("plugin.json %s = %q, want an https:// URL", field, u)
+		}
+	}
+	// documentationUrl and privacyPolicyUrl link to files on main; keep them pointing at real files.
+	for field, u := range map[string]string{"documentationUrl": m.DocumentationURL, "privacyPolicyUrl": m.PrivacyPolicyURL} {
+		rel, ok := strings.CutPrefix(u, "https://github.com/Eric-Fernald/chiton/blob/main/")
+		if !ok {
+			continue
+		}
+		if _, err := os.Stat(filepath.FromSlash(rel)); err != nil {
+			t.Errorf("plugin.json %s points at %s, which does not exist: %v", field, rel, err)
+		}
+	}
 
 	if !kebab.MatchString(m.Name) {
 		t.Errorf("plugin name %q is not kebab-case; the claude.ai marketplace sync rejects other forms", m.Name)
@@ -61,8 +118,12 @@ func TestMarketplaceManifest(t *testing.T) {
 			Name string `json:"name"`
 		} `json:"owner"`
 		Plugins []struct {
-			Name    string `json:"name"`
-			Source  string `json:"source"`
+			Name   string `json:"name"`
+			Source struct {
+				Source string `json:"source"`
+				Repo   string `json:"repo"`
+				Ref    string `json:"ref"`
+			} `json:"source"`
 			Version string `json:"version"`
 		} `json:"plugins"`
 	}
@@ -82,9 +143,11 @@ func TestMarketplaceManifest(t *testing.T) {
 	}
 
 	entry := m.Plugins[0]
-	// "./" and not "." — a bare "." only validates on Claude Code 2.1.221+.
-	if entry.Source != "./" {
-		t.Errorf("plugin entry source = %q, want \"./\" (the repo root is the plugin)", entry.Source)
+	// Users install the release-built tree, pinned to its release, never main itself.
+	// The release workflow pushes that tree to this branch.
+	src := entry.Source
+	if src.Source != "github" || src.Repo != "Eric-Fernald/chiton" || src.Ref != "plugin-dist" {
+		t.Errorf("plugin entry source = %+v, want github Eric-Fernald/chiton at ref plugin-dist", src)
 	}
 	// plugin.json wins at install time; declaring a version here too only
 	// creates a mismatch warning that --strict fails on.
@@ -94,6 +157,18 @@ func TestMarketplaceManifest(t *testing.T) {
 }
 
 func TestPluginMCPConfig(t *testing.T) {
+	// The repo-root .mcp.json serves a source checkout (developing chiton, or `claude --plugin-dir .`),
+	// which pins no release, so it launches chiton from PATH.
+	checkMCPConfig(t, ".mcp.json", "chiton")
+
+	// The published plugin starts its launcher, which downloads the binary
+	// for this machine on first use. On Windows Claude Code resolves this
+	// extensionless path to bin/chiton.cmd; elsewhere it runs the bin/chiton sh launcher.
+	checkMCPConfig(t, filepath.Join("packaging", "plugin", ".mcp.json"), "${CLAUDE_PLUGIN_ROOT}/bin/chiton")
+}
+
+func checkMCPConfig(t *testing.T, path, wantCommand string) {
+	t.Helper()
 	var m struct {
 		MCPServers map[string]struct {
 			Command string            `json:"command"`
@@ -101,30 +176,28 @@ func TestPluginMCPConfig(t *testing.T) {
 			Env     map[string]string `json:"env"`
 		} `json:"mcpServers"`
 	}
-	readJSON(t, ".mcp.json", &m)
+	readJSON(t, path, &m)
 
 	srv, ok := m.MCPServers["chiton"]
 	if !ok {
-		t.Fatal(".mcp.json has no \"chiton\" server entry")
+		t.Fatalf("%s has no \"chiton\" server entry", path)
 	}
-	// Launching by bare name is deliberate: an absolute or extensionless path
-	// is not portable across Windows and POSIX, so the binary must be on PATH.
-	if srv.Command != "chiton" {
-		t.Errorf("mcp command = %q, want \"chiton\" (resolved from PATH)", srv.Command)
+	if srv.Command != wantCommand {
+		t.Errorf("%s: mcp command = %q, want %q", path, srv.Command, wantCommand)
 	}
 	if strings.Join(srv.Args, " ") != "serve --stdio" {
-		t.Errorf("mcp args = %v, want [serve --stdio]", srv.Args)
+		t.Errorf("%s: mcp args = %v, want [serve --stdio]", path, srv.Args)
 	}
 	// Without this the server resolves the graph against its own working
 	// directory, which is not reliably the workspace root.
 	if got := srv.Env["CHITON_PROJECT_DIR"]; got != "${CLAUDE_PROJECT_DIR}" {
-		t.Errorf("env CHITON_PROJECT_DIR = %q, want ${CLAUDE_PROJECT_DIR}", got)
+		t.Errorf("%s: env CHITON_PROJECT_DIR = %q, want ${CLAUDE_PROJECT_DIR}", path, got)
 	}
 	// A stdio server that could write would make add_url reachable from the
 	// assistant without the user asking. Keep the default read-only.
 	for _, a := range srv.Args {
 		if a == "--writable" {
-			t.Error("the plugin must not start a writable server by default")
+			t.Errorf("%s: the plugin must not start a writable server by default", path)
 		}
 	}
 }
@@ -187,6 +260,11 @@ func TestPluginComponentsAtRoot(t *testing.T) {
 		filepath.Join("bin", "chiton.cmd"),
 		filepath.Join("scripts", "install-chiton.sh"),
 		filepath.Join("scripts", "install-chiton.ps1"),
+		// Inputs to scripts/build-plugin-dist.sh, which assembles the published plugin.
+		filepath.Join("scripts", "build-plugin-dist.sh"),
+		filepath.Join("packaging", "plugin", ".mcp.json"),
+		filepath.Join("packaging", "plugin", "README.md"),
+		filepath.Join("assets", "icon.png"),
 	} {
 		if _, err := os.Stat(p); err != nil {
 			t.Errorf("expected %s at the plugin root: %v", p, err)
@@ -210,7 +288,11 @@ func TestPluginComponentsAtRoot(t *testing.T) {
 func TestPOSIXShimsUseLFAndAShebang(t *testing.T) {
 	// Committed from Windows, these are the files most likely to arrive with
 	// CRLF, which makes the shebang line unusable on Linux and macOS.
-	for _, p := range []string{filepath.Join("bin", "chiton"), filepath.Join("scripts", "install-chiton.sh")} {
+	for _, p := range []string{
+		filepath.Join("bin", "chiton"),
+		filepath.Join("scripts", "install-chiton.sh"),
+		filepath.Join("scripts", "build-plugin-dist.sh"),
+	} {
 		body, err := os.ReadFile(p)
 		if err != nil {
 			t.Fatalf("read %s: %v", p, err)

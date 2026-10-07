@@ -110,6 +110,22 @@ checksums: ## Write dist/checksums.txt over the built artifacts
 	fi && \
 	echo "wrote $(DIST)/checksums.txt"
 
+# The published plugin pins a release (its tag and checksums.txt) and downloads
+# the one binary a machine needs on first use; the release workflow commits
+# dist/plugin/ to the plugin-dist branch. VERSION must be a v-tag.
+.PHONY: plugin-dist
+plugin-dist: release ## Assemble the published plugin, pinned to $(VERSION), into dist/plugin/
+	sh scripts/build-plugin-dist.sh $(VERSION)
+
+# Validates a fresh clone rather than the working tree, which may hold
+# untracked files (a local CLAUDE.md, built binaries) that the published
+# plugin never contains.
+.PHONY: plugin-validate
+plugin-validate: ## Run `claude plugin validate --strict` on a clean clone of HEAD
+	@tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
+	git clone -q --no-hardlinks . "$$tmp/chiton" && \
+	claude plugin validate "$$tmp/chiton" --strict
+
 .PHONY: clean
 clean: ## Remove build artifacts
 	rm -rf $(BINARY) $(BINARY).exe $(DIST) chiton-out

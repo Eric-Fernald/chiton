@@ -41,19 +41,20 @@ third-party code have been incorporated.
 
 ### License
 
-This software is proprietary and is distributed under the terms set
-forth in the LICENSE file at the root of this repository. All rights
-are reserved by the copyright holder.
+This software is licensed under the PolyForm Strict License 1.0.0 with
+additional permissions, as set forth in the LICENSE file at the root of
+this repository. Anyone may use the software for any purpose and install
+or build it by the documented routes, and plugin marketplaces and
+mirrors may host unmodified copies, but no one else may distribute it or
+make changes or new works based on it. All other rights are reserved by
+the copyright holder.
 
 ### Third-Party Dependencies
 
 This project makes use of open-source libraries and frameworks, each
 governed by its own license. The use of these dependencies does not
-affect the proprietary status of the original code authored within this
-repository. A full list of third-party dependencies and their
-respective licenses can be found in the project's dependency
-manifest(s) (e.g., `package.json`, `requirements.txt`,
-`pyproject.toml`).
+change the license of the original code authored within this
+repository. The full list of third-party dependencies is in `go.mod`.
 
 ---
 
@@ -61,4 +62,4 @@ manifest(s) (e.g., `package.json`, `requirements.txt`,
 provenance and may be updated as the project evolves. Material changes
 to ownership, contributor status, or licensing will be reflected here.*
 
-*Last updated: 05/21/2026*
+*Last updated: 10/06/2026*

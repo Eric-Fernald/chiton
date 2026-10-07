@@ -8,7 +8,11 @@
   "plugins": [
     {
       "name": "chiton",
-      "source": "./",
+      "source": {
+        "source": "github",
+        "repo": "Eric-Fernald/chiton",
+        "ref": "plugin-dist"
+      },
       "description": "On-device knowledge graph for your codebase: typed graph edges instead of grep, a deterministic rule engine, and meeting decisions linked to the code they shaped.",
       "author": {
         "name": "Eric Fernald"

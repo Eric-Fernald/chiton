@@ -12,9 +12,10 @@ codebase; **planned** means it is described in the design (`docs/PLAN.md`) but i
 not yet wired into the binary. We are explicit about the distinction so you can
 make an informed trust decision.
 
-> **License note:** chiton is proprietary software (see `LICENSE`: "All rights
-> reserved"; the repository is private). This document describes its security
-> posture; it is not a warranty.
+> **License note:** chiton is licensed under the PolyForm Strict License 1.0.0
+> with additional permissions, and comes as is (see
+> `LICENSE`). This document describes its security posture; it is not a
+> warranty.
 
 ---
 
@@ -24,10 +25,18 @@ Most of this document describes optional commands you have to run deliberately.
 This section describes the baseline — an assistant that has chiton installed and
 has not been asked to ingest anything.
 
-- The Claude Code plugin's `.mcp.json` launches **`chiton serve --stdio`**. It
-  invokes the binary by **bare name**, so `chiton` must be on `PATH`, and sets
+- The Claude Code plugin's `.mcp.json` launches **`chiton serve --stdio`**
+  through the plugin's launcher (`${CLAUDE_PLUGIN_ROOT}/bin/chiton`), and sets
   `CHITON_PROJECT_DIR=${CLAUDE_PROJECT_DIR}` so the server reads the same store
-  `chiton build` wrote regardless of its working directory.
+  `chiton build` wrote regardless of its working directory. Only the repo-root
+  `.mcp.json` used to develop chiton itself launches `chiton` by bare name from
+  `PATH`.
+- **The plugin ships no binary, so its first launch of each version downloads
+  one.** The launcher (a shell or batch script, not the chiton binary) fetches
+  the pinned release's binary for this OS and architecture from `github.com`
+  with a plain GET, verifies its SHA-256 against the `release/checksums.txt`
+  that arrived with the plugin, and caches it in `~/.chiton/versions/<tag>/`.
+  Later launches of that version make no request. See §1.1.
 - **stdio binds no port.** The process talks to the assistant over its own
   stdin/stdout. Nothing is listening.
 - The store is opened **read-only** unless you pass `--writable`.
@@ -44,8 +53,9 @@ has not been asked to ingest anything.
   not happen.
 - chiton **calls no LLM of its own**, in any mode.
 
-Everything else in this document — Slack, email, Teams, browser history, URL
-ingest — happens only when you run the corresponding command.
+Apart from that first-run download, everything else in this document — Slack,
+email, Teams, browser history, URL ingest — happens only when you run the
+corresponding command.
 
 ---
 
@@ -69,14 +79,16 @@ this work.
 | No built-in LLM calls (subagent mode) | Shipped |
 | No telemetry / phone-home / update check | Shipped — see §1.4 |
 | Embeddings can stay local | Shipped — `chiton embed` defaults to local Ollama (`http://localhost:11434`); `CHITON_EMBED_PROVIDER=hash` is fully offline |
-| All network egress is command-triggered except `semantic_search` | Shipped — see §1.1 |
+| All network egress is command-triggered except `semantic_search` and the plugin's first-run binary download | Shipped — see §1.1 |
 
 ### 1.1 Complete egress inventory
 
-chiton can reach seven destinations. Four are direct `net/http` call sites, two
-go through the Microsoft Graph SDK and its Azure identity library, and one is a
-subprocess. Nothing here fires on its own schedule — each is triggered by the
-command or tool named in the third column.
+chiton can reach eight destinations. Four are direct `net/http` call sites in
+the binary, two go through the Microsoft Graph SDK and its Azure identity
+library, one is a subprocess, and one is the Claude Code plugin's launcher
+script, which runs before the binary exists. Nothing here fires on its own
+schedule — each is triggered by the command, tool, or launch named in the third
+column.
 
 | Destination | Code | Triggered by | Data sent |
 |---|---|---|---|
@@ -87,8 +99,19 @@ command or tool named in the third column.
 | `https://login.microsoftonline.com` | `azidentity` (vendored) | The same three commands, to mint a token | **Your Teams/Outlook tenant id, client id, and client secret** |
 | **Any host you name** | `internal/ingest/url/fetch.go` | `chiton add-url`, and the **`add_url` MCP tool on a `--writable` server** | An HTTP GET with a chiton user-agent; receives the page/PDF |
 | `youtube.com` (via the `yt-dlp` subprocess) | `internal/ingest/url/fetch.go` | `chiton add-url` / `add_url` with a YouTube URL | Whatever `yt-dlp` sends; receives the transcript |
+| `https://github.com/Eric-Fernald/chiton/releases/download/<tag>/…`, redirected to GitHub's release-asset CDN (`objects.githubusercontent.com` / `release-assets.githubusercontent.com`) | `bin/chiton`, `bin/chiton.cmd` → `scripts/install-chiton.{sh,ps1}` | **Automatically, the first time the published Claude Code plugin's launcher runs for a given release tag** (MCP server start, or `chiton` from the Bash tool), and whenever you run an install script by hand | A plain unauthenticated GET for one binary, `chiton-<tag>-<os>-<arch>[.exe]`; nothing about you or the workspace. Run by hand, the scripts also fetch the release's `checksums.txt` and, for `latest`, read the redirect of `https://github.com/Eric-Fernald/chiton/releases/latest` |
 
 Notes that materially change the picture:
+
+- **The plugin's binary download is the one egress that happens without a
+  chiton command.** It runs once per release tag, when the cached
+  `~/.chiton/versions/<tag>/` binary is missing, and never again for that tag.
+  The launcher verifies the download against `release/checksums.txt`, which
+  arrived with the plugin through git rather than from the release, and refuses
+  a mismatch. GitHub sees the request's IP address and user agent. Setting
+  `CHITON_BIN` to a binary you installed yourself skips it, as does a working
+  tree loaded with `claude --plugin-dir`, which has no `release/tag`. The
+  binary itself still makes no version or update check (§1.4).
 
 - **`semantic_search` is the only egress reachable from the default MCP surface
   without an explicit user command.** It is loopback by default, and
@@ -139,7 +162,9 @@ in-process whisper.cpp backend exists but requires a `-tags whisper_cgo` build.
 | `.chiton/hooks.yaml`, `sources.yaml`, `schema_version`, `.gitignore` | Policy files | **No — plaintext**, and `hooks.yaml`/`sources.yaml` are meant to be committed |
 | `.chiton/baselines/<commit>.json`, `.chiton/llm-analyzed.json` | Finding baselines and LLM-rule state | **No — plaintext**. Plaintext on purpose: rule IDs and messages about repository files. |
 | `chiton export --out <file>` | Full graph snapshot, embeddings inlined | **No — plaintext JSON** |
-| OS temp dir | A copy of the browser History DB (`chiton-hist-*`), yt-dlp scratch (`chiton-yt-*`) | **No** — removed after use |
+| OS temp dir | A copy of the browser History DB (`chiton-hist-*`), yt-dlp scratch (`chiton-yt-*`), the install scripts' download scratch (`chiton-*` on Windows, a `mktemp -d` directory elsewhere) | **No** — removed after use |
+| `~/.chiton/versions/<tag>/chiton` (`%USERPROFILE%\.chiton\versions\<tag>\chiton.exe`) | The binary the Claude Code plugin's launcher downloaded for each release tag | n/a: a public release binary, no user data. Never cleaned up automatically; earlier tags and the directory itself survive plugin updates and uninstall |
+| `~/.chiton/bin/`, `$CLAUDE_PLUGIN_DATA/bin/` | The binary an install script run by hand put there | n/a: no user data |
 
 **`.chiton/` is not the graph.** Earlier revisions of this document told you to
 protect `.chiton/`; that was wrong. The encrypted data lives under
@@ -169,13 +194,18 @@ There is none, and this is checkable rather than merely asserted:
 - No analytics, crash-reporting, or metrics SDK is imported anywhere
   (`go.mod` has no such dependency).
 - There is no version or update check. `chiton version` reads only ldflags and
-  the Go build info embedded in the binary — it is entirely offline.
+  the Go build info embedded in the binary — it is entirely offline. The Claude
+  Code plugin's launcher downloads a binary only for the release tag pinned in
+  the installed plugin, and only when that tag's cached copy is missing; it
+  never asks whether a newer release exists. Plugin updates come through
+  Claude Code's own plugin update mechanism.
 - OpenTelemetry appears in `go.mod` **only** as an indirect dependency of the
   Microsoft Graph SDK, and no exporter is ever configured — so nothing is
   emitted even in an `msgraph` build.
-- The seven destinations in §1.1 are the complete set: grepping `internal/` and
+- The eight destinations in §1.1 are the complete set: grepping `internal/` and
   `cmd/` for `http.Client`, `http.Get`, `http.Post`, `http.NewRequest`, and
-  `net.Dial` finds no others.
+  `net.Dial` finds no others, and the only network calls in `bin/` and
+  `scripts/` are the release downloads in `scripts/install-chiton.{sh,ps1}`.
 
 ### 1.5 Generated HTML reports
 
@@ -581,7 +611,12 @@ status is labelled **shipped** or **planned**.
 - **EDR bypass, kernel escalation, supply-chain attacks** against the Go
   toolchain or dependencies. Standard hygiene only (pinned `go.mod`, checksum
   verification). `make release` writes a `dist/checksums.txt`, and the install
-  scripts refuse to install a binary that is not listed in it.
+  scripts refuse to install a binary that is not listed in it. The published
+  plugin carries that release's `checksums.txt` in `release/`, so its launcher
+  checks the downloaded binary against hashes delivered through the plugin's git
+  branch rather than from the release that served the binary. Someone who can
+  push to both the release and the `plugin-dist` branch can still substitute
+  both; there are no signatures.
 - **Side-channel attacks** on the AES-NI implementation. chiton relies on the Go
   standard library's constant-time crypto.
 

@@ -1,26 +1,25 @@
 # Contributing to chiton
 
 This guide is how the project is built, tested, and extended. Read
-[Contribution status](#contribution-status) first — chiton is proprietary and
-this document grants no license.
+[Contribution status](#contribution-status) first — this document grants no
+license.
 
 ## Contribution status
 
-chiton is **private and proprietary**. [LICENSE](LICENSE) reserves all rights
-and states that no part of the software may be copied, modified, distributed, or
-used in any form without express written permission from the copyright holder.
-[NOTICE.md](NOTICE.md) records that, as of its last update, Eric Fernald is the
-sole author and copyright holder, and that no external contributions, pull
-requests, or third-party code have been incorporated.
+chiton is licensed under the PolyForm Strict License 1.0.0 with additional
+permissions (see [LICENSE](LICENSE)). Anyone may use it for any purpose and
+install or build it by the documented routes, but the license does not permit
+making changes or new works based on it, or distributing it beyond the plugin
+marketplaces and mirrors it names.
 
-There is therefore no open contribution process here, and nothing in this file
-changes that. There is no CLA, because there is nothing to sign against. If you
-have been given access to this repository and want to change something, talk to
-the maintainer before you start; if contributor status ever changes, NOTICE.md
-is where it will be recorded.
+Bug reports and feature requests are welcome as
+[issues](https://github.com/Eric-Fernald/chiton/issues). Pull requests are not
+accepted: a change to chiton is a new work the license does not permit, and
+there is no contributor agreement through which outside code could be taken in.
+[NOTICE.md](NOTICE.md) records project provenance, and is where any change to
+contributor status will be recorded.
 
-What follows is the working guide for the maintainer and for anyone explicitly
-invited to work on the code.
+What follows is the working guide for the maintainer.
 
 ## Prerequisites
 
@@ -269,37 +268,58 @@ lands as `100644` fails silently for every POSIX user.
 
 ## Plugin development
 
-The repository root doubles as a Claude Code plugin. `.claude-plugin/plugin.json`
-declares the plugin, `.claude-plugin/marketplace.json` declares a single-plugin
-marketplace whose source is `./`, and `skills/` plus the root `.mcp.json` are
-what it ships.
+The repository root doubles as a Claude Code plugin for development:
+`.claude-plugin/plugin.json` declares it, and `skills/` plus the root `.mcp.json`
+are its components. What users install is different: a release build of it,
+pinned to that release, that the release workflow commits to the `plugin-dist`
+branch. `.claude-plugin/marketplace.json` points at that branch.
 
 ```sh
-claude --plugin-dir .        # load the plugin from this working tree
-claude plugin validate .     # validate the manifests
+claude --plugin-dir .                   # load the plugin from this working tree
+make plugin-validate                    # strict-validate a clean clone of HEAD
+make plugin-dist VERSION=v1.2.3         # build dist/plugin/ as a release would
+claude plugin validate dist/plugin --strict
+claude --plugin-dir dist/plugin         # try the release build
 ```
 
+`make plugin-validate` validates a fresh clone because a working tree can hold
+untracked files the published plugin never contains; a local `CLAUDE.md` at the
+root, for one, raises a warning that `--strict` turns into a failure.
 `claude plugin validate` on a directory containing **both** manifests resolves to
-the marketplace manifest — run here, it prints
-`Validating marketplace manifest: .../.claude-plugin/marketplace.json`. Point it
-at a directory holding only a `plugin.json` to validate a plugin manifest
-instead. Add `--strict` to fail on warnings as well as errors; both manifests
-pass strict validation today, and they should stay that way.
+the marketplace manifest. Both manifests and the assembled `dist/plugin/` pass
+strict validation today, and they should stay that way.
+
+`scripts/build-plugin-dist.sh` decides what the published plugin contains. Its
+`.mcp.json` comes from `packaging/plugin/.mcp.json` and launches
+`${CLAUDE_PLUGIN_ROOT}/bin/chiton`: Claude Code on Windows resolves that
+extensionless path to `bin/chiton.cmd`, and Linux and macOS run the `bin/chiton`
+sh launcher. The tree carries no binaries. It carries `release/tag` and
+`release/checksums.txt` instead, and on first use the launcher runs
+`scripts/install-chiton.{sh,ps1}` to download that tag's binary for the machine,
+verify it against the shipped checksums, and cache it in
+`~/.chiton/versions/<tag>/`. Every message on that path must go to stderr,
+because stdout is the MCP protocol stream.
+
+Trying `dist/plugin/` locally therefore needs the tag in
+`dist/plugin/release/tag` to be published on GitHub: the launcher downloads
+from the real release, not from `dist/`. To test unreleased binaries, point
+`CHITON_BIN` at one, or pre-seed `~/.chiton/versions/<tag>/` with it.
 
 ## Working on chiton itself
 
-**The root `.mcp.json` is the plugin's MCP config, not a dev config.** It
-launches the server by bare name:
+**The root `.mcp.json` is shared, not a personal dev config.** It launches the
+server by bare name:
 
 ```json
 { "command": "chiton", "args": ["serve", "--stdio"],
   "env": { "CHITON_PROJECT_DIR": "${CLAUDE_PROJECT_DIR}" } }
 ```
 
-That is right for a plugin — it requires `chiton` on `PATH`, and lets
-`${CLAUDE_PROJECT_DIR}` anchor the server to the workspace — but it is wrong for
-development, where you want *your* freshly built binary rather than whichever one
-is on `PATH`. Do not edit it to point at a local path; that change would ship.
+That suits a source checkout loaded with `--plugin-dir .`: it requires `chiton`
+on `PATH`, and lets `${CLAUDE_PROJECT_DIR}` anchor the server to the workspace.
+It is wrong for development, where you want *your* freshly built binary rather
+than whichever one is on `PATH`. Do not edit it to point at a local path; that
+change would be committed for everyone.
 
 Register a dev server at local scope instead. It writes to your own settings and
 never to the repository:
