@@ -240,25 +240,27 @@ func (s *LinkService) Submit(ctx context.Context, r LinkResult) (LinkReport, err
 			rep.EdgesAdded++
 		}
 
-		// References → code symbols the decision governs.
+		// References → code symbols the decision governs. Every named reference is recorded, linked or not,
+		// so Relink can retry it.
+		var governs []governRef
+		named := map[string]bool{}
 		for _, ref := range d.References {
+			ref = strings.TrimSpace(ref)
+			if ref == "" || named[ref] {
+				continue
+			}
+			named[ref] = true
 			symID := s.resolveSymbol(ctx, ref)
+			governs = append(governs, governRef{Label: ref, NodeID: symID})
 			if symID == "" {
-				if r := strings.TrimSpace(ref); r != "" {
-					unresolved[r] = true
-				}
+				unresolved[ref] = true
 				continue
 			}
 			linkedSymbols[symID] = true
-			// decision --DECIDED_IN--> symbol (the code the decision governs).
-			edges = append(edges, typedEdge(decID, symID, model.EdgeDecidedIn, prov, conf, now, nil))
-			// symbol --DISCUSSED_IN--> meeting (code discussed in the meeting).
-			edges = append(edges, typedEdge(symID, r.TaskID, model.EdgeDiscussedIn, prov, conf, now, nil))
-			// A MENTIONED edge from meeting to symbol lets "what did this meeting mention?" also cover
-			// decision-governed symbols, matching the discussed-only path below.
-			edges = append(edges, typedEdge(r.TaskID, symID, model.EdgeMentioned, prov, conf, now, nil))
+			edges = append(edges, governEdges(decID, symID, r.TaskID, prov, conf, now)...)
 			rep.EdgesAdded += 3
 		}
+		decAttrs[attrGoverns] = governsAttr(governs)
 
 		// Action items → ACTION_FOR a person (created if new).
 		for _, ai := range d.ActionItems {
@@ -336,37 +338,9 @@ func (s *LinkService) Submit(ctx context.Context, r LinkResult) (LinkReport, err
 // resolveSymbol resolves a label to a node ID by exact case-insensitive symbol match, then exact match on
 // another node kind, then substring match. It returns "" rather than invent a link to an unknown symbol.
 func (s *LinkService) resolveSymbol(ctx context.Context, label string) string {
-	label = strings.TrimSpace(label)
-	if label == "" {
-		return ""
-	}
-	nodes, err := s.store.SearchNodes(ctx, label, 25)
-	if err != nil || len(nodes) == 0 {
-		return ""
-	}
-	lower := strings.ToLower(label)
-	var exactOther, contains string
-	for _, n := range nodes {
-		if n.Kind == model.KindMeeting || n.Kind == model.KindMeetingTurn ||
-			n.Kind == model.KindPerson || n.Kind == model.KindDecision ||
-			n.Kind == model.KindRationale {
-			continue // never link a decision to another meeting-domain node
-		}
-		if strings.EqualFold(n.Label, label) {
-			if n.Kind == model.KindSymbol {
-				return n.ID // best: exact symbol match
-			}
-			if exactOther == "" {
-				exactOther = n.ID
-			}
-			continue
-		}
-		if contains == "" && strings.Contains(strings.ToLower(n.Label), lower) {
-			contains = n.ID
-		}
-	}
-	if exactOther != "" {
-		return exactOther
+	exact, contains := s.matchSymbol(ctx, label)
+	if exact != "" {
+		return exact
 	}
 	return contains
 }

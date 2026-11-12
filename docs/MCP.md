@@ -962,8 +962,17 @@ path). None carry the read-only hint.
 
 Ingest the results of one extraction task (from `pending_extractions`). Creates
 concept nodes and semantic edges tagged `INFERRED` (or `AMBIGUOUS` below the
-confidence threshold). **Idempotent:** re-submitting the same task is a no-op.
-A concept that already exists (concept IDs are global by label) is linked to this source but not rewritten; `concepts_added` counts only new concepts.
+confidence threshold).
+
+**A result is the task's full current set.** Edges an earlier submit for the
+same task wrote and this one omits are deleted (`edges_removed`), so send every
+concept the source still supports, not a delta. Re-submitting an identical
+result changes nothing.
+
+Concept IDs are global by label. A task may rewrite a concept it created, or one
+that `chiton verify sweep` marked orphaned (`concepts_updated`). Any other
+existing concept is linked to this source but not rewritten. `concepts_added`
+counts only new concepts.
 
 | Parameter | Type | Required / default | Description |
 |---|---|---|---|
@@ -988,7 +997,7 @@ A concept that already exists (concept IDs are global by label) is linked to thi
 **Response.** A submit report:
 
 ```json
-{ "task_id": "7c5e9b1f0a2d3e44", "concepts_added": 1, "edges_added": 1, "ambiguous": 0 }
+{ "task_id": "7c5e9b1f0a2d3e44", "concepts_added": 1, "concepts_updated": 0, "edges_added": 1, "edges_removed": 0, "ambiguous": 0 }
 ```
 
 ## submit_analysis
@@ -1036,7 +1045,9 @@ Ingest the result of one meeting-linkage task (from `pending_meeting_links`).
 Creates decision/rationale nodes and `DECIDED_IN` / `DISCUSSED_IN` /
 `ACTION_FOR` / `RATIONALE_FOR` / `MENTIONED` edges tagged `INFERRED` (or
 `AMBIGUOUS` below the confidence threshold). Re-submitting supersedes the
-meeting's prior decisions. Decision and rationale nodes are stored under
+meeting's prior decisions. Each decision keeps the references it named in
+`attrs.governs`, so `chiton verify sweep` can restore a link after the symbol
+moves to another file. Decision and rationale nodes are stored under
 `decision://<meeting source_uri>`, so re-ingesting the transcript or Slack
 conversation keeps them and their edges. **Requires a writable store.**
 

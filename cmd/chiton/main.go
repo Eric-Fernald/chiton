@@ -68,7 +68,7 @@ so they spend fewer tokens navigating architecture, docs, and prior tool calls.`
 		Version: resolveVersion(),
 	}
 
-	root.AddCommand(initCmd(), buildCmd(), queryCmd(), serveCmd(), installCmd(), uninstallCmd(), doctorCmd(), clusterCmd(), reportCmd(), visualizeCmd(), dashboardCmd(), analyzeCmd(), findingsCmd(), hooksCmd(), embedCmd(), searchCmd(), extractCmd(), syncCmd(), meetingCmd(), addURLCmd(), teamsCmd(), slackCmd(), browserCmd(), emailCmd(), exportCmd(), mergeCmd(), benchCmd(), versionCmd())
+	root.AddCommand(initCmd(), buildCmd(), queryCmd(), serveCmd(), installCmd(), uninstallCmd(), doctorCmd(), clusterCmd(), reportCmd(), visualizeCmd(), dashboardCmd(), analyzeCmd(), findingsCmd(), hooksCmd(), embedCmd(), searchCmd(), extractCmd(), verifyCmd(), syncCmd(), meetingCmd(), addURLCmd(), teamsCmd(), slackCmd(), browserCmd(), emailCmd(), exportCmd(), mergeCmd(), benchCmd(), versionCmd())
 	return root
 }
 

@@ -948,6 +948,35 @@ func (s *Store) DeleteByIDs(_ context.Context, ids []string) (int, error) {
 	return deleted, err
 }
 
+// DeleteEdges deletes edges by ID with their adjacency keys, leaving both endpoints. Missing IDs are skipped.
+func (s *Store) DeleteEdges(_ context.Context, ids []string) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	deleted := 0
+	err := s.batch(func(wb *badgerdb.WriteBatch) error {
+		return s.db.View(func(txn *badgerdb.Txn) error {
+			n := 0
+			for _, id := range ids {
+				e, err := loadJSON[model.Edge](txn, edgeKey(id))
+				if err != nil {
+					return err
+				}
+				if e == nil {
+					continue
+				}
+				if err := deleteEdge(wb, e); err != nil {
+					return err
+				}
+				n++
+			}
+			deleted = n
+			return nil
+		})
+	})
+	return deleted, err
+}
+
 // labelEntry is one node in a read-only store's label index.
 type labelEntry struct{ lower, id string }
 

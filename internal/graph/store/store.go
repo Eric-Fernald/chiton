@@ -65,6 +65,13 @@ type NodeDeleter interface {
 	DeleteByIDs(ctx context.Context, ids []string) (int, error)
 }
 
+// EdgeDeleter is an optional capability for deleting edges by ID while keeping their endpoints. Callers use the
+// DeleteEdges helper.
+type EdgeDeleter interface {
+	// DeleteEdges deletes the given edges. Missing IDs are skipped. Returns the number actually deleted.
+	DeleteEdges(ctx context.Context, ids []string) (int, error)
+}
+
 // ReadOnlyAware is an optional capability letting callers detect a read-only store and fail writes early
 // with an actionable message instead of a raw backend error.
 type ReadOnlyAware interface {

@@ -26,12 +26,16 @@ use the equivalent CLI subcommand noted per flow.
   structured result.
 - `submit_extraction` writes the concepts and edges back. It needs a writable
   store: run `chiton serve --writable`, or use `chiton extract submit <file>`.
+- A result is the source's full current set. When a changed section comes back
+  as pending, submit every concept it still supports: a concept or edge the new
+  result omits loses its link to that source.
 
 CLI equivalents:
 
 ```sh
 chiton extract pending --out tasks.json   # emit semantic-extraction task specs
 chiton extract submit results.json        # ingest concepts + edges
+chiton verify sweep                       # demote concepts no source links to; re-link moved decision targets
 ```
 
 ## LLM rule analysis

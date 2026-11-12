@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"slices"
 	"strings"
@@ -105,14 +106,24 @@ type SubmitResult struct {
 
 // SubmitReport summarises what Submit wrote.
 type SubmitReport struct {
-	TaskID        string `json:"task_id"`
-	ConceptsAdded int    `json:"concepts_added"`
-	EdgesAdded    int    `json:"edges_added"`
-	Ambiguous     int    `json:"ambiguous"`
+	TaskID          string `json:"task_id"`
+	ConceptsAdded   int    `json:"concepts_added"`
+	ConceptsUpdated int    `json:"concepts_updated"`
+	EdgesAdded      int    `json:"edges_added"`
+	EdgesRemoved    int    `json:"edges_removed"`
+	Ambiguous       int    `json:"ambiguous"`
 }
 
+// Attrs Submit and SweepOrphans keep on concepts. attrExtractedFrom is also stamped on the edges a task writes.
+const (
+	attrExtractedFrom = "extracted_from" // ID of the task (source node) that wrote it
+	attrOrphanedAt    = "orphaned_at"    // RFC 3339 time SweepOrphans found no source linking to the concept
+)
+
 // Submit writes concept nodes and semantic edges (INFERRED, or AMBIGUOUS below threshold), marks the source
-// done, and embeds the new concepts if the Service has an embedder. Stable IDs make re-submits a no-op.
+// done, and embeds the written concepts if the Service has an embedder. A result is the source's full current
+// set: edges an earlier submit for this task wrote and this one omits are deleted. Stable IDs make an identical
+// re-submit a no-op.
 func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, error) {
 	if r.TaskID == "" {
 		return SubmitReport{}, fmt.Errorf("submit: task_id is required")
@@ -154,8 +165,8 @@ func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, err
 			Label:     label,
 			SourceURI: uri,
 			Attrs: map[string]any{
-				"description":    strings.TrimSpace(c.Description),
-				"extracted_from": r.TaskID,
+				"description":     strings.TrimSpace(c.Description),
+				attrExtractedFrom: r.TaskID,
 			},
 			Provenance: prov,
 			Confidence: conf,
@@ -165,10 +176,10 @@ func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, err
 		nodes = append(nodes, n)
 	}
 	// conceptID keeps the dropped IDs, so this task's edges still link to concepts other tasks created.
-	if nodes, err = s.dropExisting(ctx, nodes); err != nil {
+	if nodes, rep.ConceptsUpdated, err = s.writableConcepts(ctx, r.TaskID, nodes); err != nil {
 		return SubmitReport{}, err
 	}
-	rep.ConceptsAdded = len(nodes)
+	rep.ConceptsAdded = len(nodes) - rep.ConceptsUpdated
 	for _, n := range nodes {
 		if n.Provenance == model.ProvAmbiguous {
 			rep.Ambiguous++
@@ -214,6 +225,7 @@ func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, err
 			Kind:       kind,
 			Provenance: prov,
 			Confidence: conf,
+			Attrs:      map[string]any{attrExtractedFrom: r.TaskID},
 			CreatedAt:  now,
 		})
 		rep.EdgesAdded++
@@ -235,10 +247,19 @@ func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, err
 				Kind:       model.EdgeDescribes,
 				Provenance: prov,
 				Confidence: conf,
+				Attrs:      map[string]any{attrExtractedFrom: r.TaskID},
 				CreatedAt:  now,
 			})
 			rep.EdgesAdded++
 		}
+	}
+
+	stale, err := s.staleEdges(ctx, r.TaskID, edges)
+	if err != nil {
+		return SubmitReport{}, err
+	}
+	if rep.EdgesRemoved, err = store.DeleteEdges(ctx, s.store, stale); err != nil {
+		return SubmitReport{}, fmt.Errorf("delete superseded edges: %w", err)
 	}
 
 	if len(edges) > 0 {
@@ -258,11 +279,12 @@ func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, err
 	return rep, nil
 }
 
-// dropExisting removes concepts already in the store. Concept IDs are global (concept://<slug>), so a task may
-// link to another task's concept but never rewrite its description, provenance, or confidence.
-func (s *Service) dropExisting(ctx context.Context, concepts []model.Node) ([]model.Node, error) {
+// writableConcepts keeps the concepts taskID may write and counts those that already exist. Concept IDs are
+// global (concept://<slug>), so a task may link to another task's concept but only rewrite one it created or one
+// SweepOrphans left without a source.
+func (s *Service) writableConcepts(ctx context.Context, taskID string, concepts []model.Node) ([]model.Node, int, error) {
 	if len(concepts) == 0 {
-		return concepts, nil
+		return concepts, 0, nil
 	}
 	ids := make([]string, len(concepts))
 	for i, c := range concepts {
@@ -270,13 +292,120 @@ func (s *Service) dropExisting(ctx context.Context, concepts []model.Node) ([]mo
 	}
 	existing, err := store.GetNodes(ctx, s.store, ids)
 	if err != nil {
-		return nil, fmt.Errorf("load existing concepts: %w", err)
+		return nil, 0, fmt.Errorf("load existing concepts: %w", err)
 	}
-	have := make(map[string]bool, len(existing))
+	have := make(map[string]model.Node, len(existing))
 	for _, n := range existing {
-		have[n.ID] = true
+		have[n.ID] = n
 	}
-	return slices.DeleteFunc(concepts, func(n model.Node) bool { return have[n.ID] }), nil
+	var keep []model.Node
+	updated := 0
+	for _, c := range concepts {
+		old, exists := have[c.ID]
+		if !exists {
+			keep = append(keep, c)
+			continue
+		}
+		orphaned := model.AttrString(old.Attrs, attrOrphanedAt) != ""
+		owned := model.AttrString(old.Attrs, attrExtractedFrom) == taskID
+		if !orphaned && (!owned || sameConcept(old, c)) {
+			continue
+		}
+		c.CreatedAt = old.CreatedAt
+		keep = append(keep, c)
+		updated++
+	}
+	return keep, updated, nil
+}
+
+// sameConcept reports whether a and b agree on everything a submit sets besides the owner.
+func sameConcept(a, b model.Node) bool {
+	return a.Provenance == b.Provenance && a.Confidence == b.Confidence &&
+		model.AttrString(a.Attrs, "description") == model.AttrString(b.Attrs, "description")
+}
+
+// staleEdges returns the IDs of edges an earlier submit for taskID wrote that keep omits: inferred edges from the
+// source to a concept, and edges between concepts stamped with the task. An edge between concepts written before
+// the stamp existed has no owner and stays.
+func (s *Service) staleEdges(ctx context.Context, taskID string, keep []model.Edge) ([]string, error) {
+	sub, err := s.store.Neighbors(ctx, taskID, 2, semanticKinds)
+	if err != nil {
+		return nil, fmt.Errorf("load prior edges: %w", err)
+	}
+	kept := make(map[string]bool, len(keep))
+	for _, e := range keep {
+		kept[e.ID] = true
+	}
+	isConcept := make(map[string]bool, len(sub.Nodes))
+	for _, n := range sub.Nodes {
+		isConcept[n.ID] = n.Kind == model.KindConcept
+	}
+	var stale []string
+	for _, e := range sub.Edges {
+		if kept[e.ID] || e.Provenance == model.ProvExtracted {
+			continue
+		}
+		fromSource := e.Src == taskID && isConcept[e.Dst]
+		if fromSource || model.AttrString(e.Attrs, attrExtractedFrom) == taskID {
+			stale = append(stale, e.ID)
+		}
+	}
+	return stale, nil
+}
+
+// SweepReport summarises what SweepOrphans changed.
+type SweepReport struct {
+	Demoted int `json:"demoted"`
+}
+
+// SweepOrphans demotes to AMBIGUOUS every concept that no source node links to, and stamps it with
+// attrs["orphaned_at"] so the next task to extract it can take it over. A link from another concept is not
+// evidence. Already-stamped concepts are skipped, so a repeat sweep changes nothing.
+func (s *Service) SweepOrphans(ctx context.Context) (SweepReport, error) {
+	if store.IsReadOnly(s.store) {
+		return SweepReport{}, fmt.Errorf("sweep: store is read-only — stop 'chiton serve' or restart it with --writable")
+	}
+	concepts, err := store.NodesMatching(ctx, s.store, store.NodeFilter{Kinds: []model.NodeKind{model.KindConcept}})
+	if err != nil {
+		return SweepReport{}, fmt.Errorf("load concepts: %w", err)
+	}
+	isConcept := make(map[string]bool, len(concepts))
+	for _, c := range concepts {
+		isConcept[c.ID] = true
+	}
+	edges, err := s.store.AllEdges(ctx)
+	if err != nil {
+		return SweepReport{}, fmt.Errorf("load edges: %w", err)
+	}
+	sourced := map[string]bool{}
+	for _, e := range edges {
+		switch {
+		case isConcept[e.Dst] && !isConcept[e.Src]:
+			sourced[e.Dst] = true
+		case isConcept[e.Src] && !isConcept[e.Dst]:
+			sourced[e.Src] = true
+		}
+	}
+	stamp := s.now().UTC().Format(time.RFC3339)
+	var demoted []model.Node
+	for _, c := range concepts {
+		if sourced[c.ID] || model.AttrString(c.Attrs, attrOrphanedAt) != "" {
+			continue
+		}
+		attrs := maps.Clone(c.Attrs)
+		if attrs == nil {
+			attrs = map[string]any{}
+		}
+		attrs[attrOrphanedAt] = stamp
+		c.Attrs, c.Provenance = attrs, model.ProvAmbiguous
+		demoted = append(demoted, c)
+	}
+	if len(demoted) > 0 {
+		if err := s.store.UpsertNodes(ctx, demoted); err != nil {
+			return SweepReport{}, fmt.Errorf("demote orphaned concepts: %w", err)
+		}
+	}
+	return SweepReport{Demoted: len(demoted)}, nil
 }
 
 // embedConcepts embeds concepts in one batch, retrying per concept on failure so only concepts that fail alone
@@ -309,25 +438,17 @@ func embedderUnreachable(err error) bool {
 	return errors.As(err, &ne) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
+// semanticKinds are the edge kinds a submit may write.
+var semanticKinds = []model.EdgeKind{
+	model.EdgeDescribes, model.EdgeElaborates, model.EdgeRationaleFor, model.EdgeSimilarTo,
+	model.EdgeContradicts, model.EdgeDerivedFrom, model.EdgeReferences,
+}
+
 // edgeKind normalises a host-supplied edge kind to a known semantic kind,
 // defaulting to DESCRIBES for empty/unknown values.
 func edgeKind(raw string) model.EdgeKind {
-	switch model.EdgeKind(strings.ToUpper(strings.TrimSpace(raw))) {
-	case model.EdgeDescribes:
-		return model.EdgeDescribes
-	case model.EdgeElaborates:
-		return model.EdgeElaborates
-	case model.EdgeRationaleFor:
-		return model.EdgeRationaleFor
-	case model.EdgeSimilarTo:
-		return model.EdgeSimilarTo
-	case model.EdgeContradicts:
-		return model.EdgeContradicts
-	case model.EdgeDerivedFrom:
-		return model.EdgeDerivedFrom
-	case model.EdgeReferences:
-		return model.EdgeReferences
-	default:
-		return model.EdgeDescribes
+	if k := model.EdgeKind(strings.ToUpper(strings.TrimSpace(raw))); slices.Contains(semanticKinds, k) {
+		return k
 	}
+	return model.EdgeDescribes
 }
