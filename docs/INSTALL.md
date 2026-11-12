@@ -464,7 +464,8 @@ By default `chiton serve` opens the store **read-only** so other read-only
 commands can run beside it (and, on Linux/macOS, writers such as
 `build`/`embed`; on Windows a writer fails fast while the server runs). The read
 tools work in this mode, but the write tools (`submit_extraction`,
-`submit_analysis`, `submit_meeting_links`, `add_url`) need a writable store.
+`submit_analysis`, `submit_meeting_links`, `submit_verification`, `add_url`)
+need a writable store.
 Either:
 
 - start the server with `chiton serve --writable` (the server then holds the

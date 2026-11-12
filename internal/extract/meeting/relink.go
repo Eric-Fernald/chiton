@@ -16,10 +16,12 @@ import (
 // governed after the symbol's node (and with it the edge) is gone.
 const attrGoverns = "governs"
 
-// governRef is one entry of a decision's governs attr. NodeID is "" while no node matches Label.
+// governRef is one entry of a decision's governs attr. NodeID is "" while no node matches Label. Rejected marks
+// a reference whose link a verification pass removed, which Relink must not restore.
 type governRef struct {
-	Label  string
-	NodeID string
+	Label    string
+	NodeID   string
+	Rejected bool
 }
 
 // governed reads n's governs attr as the store returns it. recorded is false for a decision written before the
@@ -33,7 +35,8 @@ func governed(n model.Node) (refs []governRef, recorded bool) {
 	for _, item := range list {
 		m, _ := item.(map[string]any)
 		if label := model.AttrString(m, "label"); label != "" {
-			refs = append(refs, governRef{Label: label, NodeID: model.AttrString(m, "node_id")})
+			rejected, _ := m["rejected"].(bool)
+			refs = append(refs, governRef{Label: label, NodeID: model.AttrString(m, "node_id"), Rejected: rejected})
 		}
 	}
 	return refs, true
@@ -44,8 +47,72 @@ func governsAttr(refs []governRef) []map[string]any {
 	out := make([]map[string]any, len(refs))
 	for i, r := range refs {
 		out[i] = map[string]any{"label": r.Label, "node_id": r.NodeID}
+		if r.Rejected {
+			out[i]["rejected"] = true
+		}
 	}
 	return out
+}
+
+// governsOf returns d's governs entries and the nodes it has a live DECIDED_IN edge to (ID → label), leaving out
+// its meeting. For a decision written before the attr existed, recorded is false and refs lists the live links.
+func (s *LinkService) governsOf(ctx context.Context, d model.Node) (refs []governRef, linked map[string]string, recorded bool, err error) {
+	sub, err := s.store.Neighbors(ctx, d.ID, 1, []model.EdgeKind{model.EdgeDecidedIn})
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("load links of decision %s: %w", d.ID, err)
+	}
+	linked = map[string]string{}
+	for _, n := range sub.Nodes {
+		if n.ID != d.ID && n.Kind != model.KindMeeting {
+			linked[n.ID] = n.Label
+		}
+	}
+	if refs, recorded = governed(d); !recorded {
+		for _, id := range slices.Sorted(maps.Keys(linked)) {
+			refs = append(refs, governRef{Label: linked[id], NodeID: id})
+		}
+	}
+	return refs, linked, recorded, nil
+}
+
+// RejectLink removes the DECIDED_IN edge from a decision to a node it does not govern and marks the reference
+// rejected, so Relink leaves it removed. Re-submitting the meeting's linkage starts over.
+func (s *LinkService) RejectLink(ctx context.Context, decisionID, symbolID string) error {
+	if store.IsReadOnly(s.store) {
+		return fmt.Errorf("reject link: store is read-only — stop 'chiton serve' or restart it with --writable")
+	}
+	d, err := s.store.GetNode(ctx, decisionID)
+	if err != nil {
+		return fmt.Errorf("load decision: %w", err)
+	}
+	if d == nil || d.Kind != model.KindDecision {
+		return fmt.Errorf("reject link: %q is not a decision", decisionID)
+	}
+	refs, linked, _, err := s.governsOf(ctx, *d)
+	if err != nil {
+		return err
+	}
+	label, ok := linked[symbolID]
+	if !ok {
+		return fmt.Errorf("reject link: decision %s has no link to %s", decisionID, symbolID)
+	}
+	i := slices.IndexFunc(refs, func(r governRef) bool { return r.NodeID == symbolID })
+	if i < 0 {
+		refs = append(refs, governRef{Label: label})
+		i = len(refs) - 1
+	}
+	refs[i].NodeID, refs[i].Rejected = "", true
+	if d.Attrs == nil {
+		d.Attrs = map[string]any{}
+	}
+	d.Attrs[attrGoverns] = governsAttr(refs)
+	if _, err := store.DeleteEdges(ctx, s.store, []string{model.NewEdgeID(decisionID, symbolID, model.EdgeDecidedIn)}); err != nil {
+		return fmt.Errorf("delete rejected link: %w", err)
+	}
+	if err := s.store.UpsertNodes(ctx, []model.Node{*d}); err != nil {
+		return fmt.Errorf("update decision: %w", err)
+	}
+	return nil
 }
 
 // governEdges links a decision to a symbol it governs: decision DECIDED_IN symbol, symbol DISCUSSED_IN meeting,
@@ -66,8 +133,8 @@ type RelinkReport struct {
 
 // Relink restores decision→symbol links that deleting a symbol's node removed. A symbol that moved files gets a
 // new node ID, so each governs entry without a live DECIDED_IN edge is looked up again by exact label. A label
-// with no exact match stays unlinked and is reported. Decisions linked before governs existed have it filled in
-// from the edges they still have.
+// with no exact match stays unlinked and is reported, and a rejected entry is left alone. Decisions linked before
+// governs existed have it filled in from the edges they still have.
 func (s *LinkService) Relink(ctx context.Context) (RelinkReport, error) {
 	if store.IsReadOnly(s.store) {
 		return RelinkReport{}, fmt.Errorf("relink: store is read-only — stop 'chiton serve' or restart it with --writable")
@@ -82,27 +149,14 @@ func (s *LinkService) Relink(ctx context.Context) (RelinkReport, error) {
 	var edges []model.Edge
 	unresolved := map[string]bool{}
 	for _, d := range decisions {
-		sub, err := s.store.Neighbors(ctx, d.ID, 1, []model.EdgeKind{model.EdgeDecidedIn})
+		refs, linked, recorded, err := s.governsOf(ctx, d)
 		if err != nil {
-			return RelinkReport{}, fmt.Errorf("load links of decision %s: %w", d.ID, err)
+			return RelinkReport{}, err
 		}
-		// A decision's DECIDED_IN edges reach its meeting and the symbols it governs.
-		linked := map[string]string{} // governed node ID → label
-		for _, n := range sub.Nodes {
-			if n.ID != d.ID && n.Kind != model.KindMeeting {
-				linked[n.ID] = n.Label
-			}
-		}
-		refs, recorded := governed(d)
 		changed := !recorded
-		if !recorded {
-			for _, id := range slices.Sorted(maps.Keys(linked)) {
-				refs = append(refs, governRef{Label: linked[id], NodeID: id})
-			}
-		}
 		meetingID := model.AttrString(d.Attrs, "meeting_id")
 		for i, ref := range refs {
-			if _, ok := linked[ref.NodeID]; ok {
+			if _, ok := linked[ref.NodeID]; ok || ref.Rejected {
 				continue
 			}
 			id, _ := s.matchSymbol(ctx, ref.Label)

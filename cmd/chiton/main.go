@@ -38,6 +38,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/install"
 	mcpsrv "github.com/Eric-Fernald/chiton/internal/mcp"
 	"github.com/Eric-Fernald/chiton/internal/report"
+	"github.com/Eric-Fernald/chiton/internal/verify"
 	mcpsdk "github.com/mark3labs/mcp-go/server"
 )
 
@@ -1030,6 +1031,7 @@ func buildSemanticDeps(cmd *cobra.Command, cfg *config.Config, gs store.GraphSto
 	deps.MeetingLinker = meeting.NewLinkService(gs, cfg.Semantic.ConfidenceThreshold)
 	deps.URLIngester = urlingest.New(gs)
 	deps.ProjectRoot = config.ProjectDir()
+	deps.Verifier = verify.New(gs, deps.ProjectRoot, cfg.Semantic.ConfidenceThreshold)
 
 	emb, err := newEmbedder(cfg, "", "")
 	if err != nil {

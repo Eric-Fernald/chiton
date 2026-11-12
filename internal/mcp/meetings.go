@@ -122,6 +122,7 @@ func decisionsAboutHandler(gs store.GraphStore) mcpsdk.ToolHandlerFunc {
 			Confidence float32          `json:"confidence"`
 			Provenance model.Provenance `json:"provenance"`
 			Governs    []string         `json:"governs,omitempty"`
+			Drift      []driftView      `json:"drift,omitempty"`
 			Meeting    string           `json:"meeting"`
 			Date       string           `json:"date,omitempty"`
 			Actions    []actionView     `json:"action_items,omitempty"`
@@ -145,6 +146,7 @@ func decisionsAboutHandler(gs store.GraphStore) mcpsdk.ToolHandlerFunc {
 					Confidence: d.Confidence,
 					Provenance: d.Provenance,
 					Governs:    d.Governs,
+					Drift:      d.Drift,
 					Meeting:    v.Title,
 					Date:       v.Date,
 					Actions:    actions,
@@ -281,12 +283,19 @@ type actionView struct {
 	Assignee string `json:"assignee,omitempty"`
 }
 
+// driftView is one governed symbol whose code no longer matches the decision, as submit_verification recorded it.
+type driftView struct {
+	Symbol string `json:"symbol"`
+	Note   string `json:"note,omitempty"`
+}
+
 type decisionView struct {
 	Summary    string           `json:"summary"`
 	Rationale  string           `json:"rationale,omitempty"`
 	Confidence float32          `json:"confidence"`
 	Provenance model.Provenance `json:"provenance"`
 	Governs    []string         `json:"governs,omitempty"`
+	Drift      []driftView      `json:"drift,omitempty"`
 	Actions    []actionView     `json:"action_items,omitempty"`
 }
 
@@ -416,12 +425,13 @@ func buildMeetingViews(ctx context.Context, gs store.GraphStore) ([]meetingView,
 
 	// Index decision → (governed symbol labels, meeting id).
 	decGoverns := map[string][]string{}
+	decDrift := map[string][]driftView{}
 	decMeeting := map[string]string{}
 	for _, d := range nodes {
 		if d.Kind != model.KindDecision {
 			continue
 		}
-		sub, err := gs.Neighbors(ctx, d.ID, 1, []model.EdgeKind{model.EdgeDecidedIn})
+		sub, err := gs.Neighbors(ctx, d.ID, 1, []model.EdgeKind{model.EdgeDecidedIn, model.EdgeContradicts})
 		if err != nil {
 			return nil, err
 		}
@@ -430,8 +440,15 @@ func buildMeetingViews(ctx context.Context, gs store.GraphStore) ([]meetingView,
 			byID[n.ID] = n
 		}
 		for _, e := range sub.Edges {
+			// symbol --CONTRADICTS--> decision is drift a verification pass recorded. AMBIGUOUS drift stays hidden.
+			if src, ok := byID[e.Src]; ok && e.Kind == model.EdgeContradicts && e.Dst == d.ID {
+				if e.Provenance != model.ProvAmbiguous {
+					decDrift[d.ID] = append(decDrift[d.ID], driftView{Symbol: src.Label, Note: model.AttrString(e.Attrs, "note")})
+				}
+				continue
+			}
 			dst, ok := byID[e.Dst]
-			if e.Src != d.ID || !ok {
+			if e.Src != d.ID || !ok || e.Kind != model.EdgeDecidedIn {
 				continue
 			}
 			if dst.Kind == model.KindMeeting {
@@ -458,6 +475,7 @@ func buildMeetingViews(ctx context.Context, gs store.GraphStore) ([]meetingView,
 			Confidence: n.Confidence,
 			Provenance: n.Provenance,
 			Governs:    dedupeStrings(decGoverns[n.ID]),
+			Drift:      decDrift[n.ID],
 			Actions:    actionItems(n),
 		})
 	}

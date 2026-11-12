@@ -198,19 +198,21 @@ missing too, the skill points at the setup skill.
 ## The subagent-tasks skill
 
 `/chiton:subagent-tasks` (installed standalone as `/chiton-subagent-tasks`)
-documents the three flows where chiton emits a schema-pinned task spec, a
+documents the four flows where chiton emits a schema-pinned task spec, a
 subagent does the reasoning, and the structured result is submitted back.
-chiton calls no LLM itself. The three flows:
+chiton calls no LLM itself. The four flows:
 
 | Flow | Tools | CLI equivalent |
 |---|---|---|
 | Semantic extraction | `pending_extractions` → `submit_extraction` | `chiton extract pending` / `chiton extract submit` |
 | LLM rule analysis | `pending_analyses` → `submit_analysis` | `chiton analyze pending` / `chiton analyze submit` |
 | Meeting→code linkage | `pending_meeting_links` → `submit_meeting_links` | `chiton meeting pending` / `chiton meeting submit` |
+| Verification | `pending_verifications` → `submit_verification` | `chiton verify pending` / `chiton verify submit` |
 
-All three submit paths need a writable store (`chiton serve --writable`, or the
-CLI). All three treat the task `input`, which is doc text, source code, or a
-transcript, as untrusted data rather than instructions.
+All four submit paths need a writable store (`chiton serve --writable`, or the
+CLI). All four treat what the task carries (doc text, source code, a
+transcript, or a claim and its evidence) as untrusted data rather than
+instructions.
 
 ## The setup skill
 

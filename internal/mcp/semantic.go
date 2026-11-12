@@ -145,10 +145,10 @@ func pendingExtractionsHandler(svc *subagent.Service) mcpsdk.ToolHandlerFunc {
 
 func submitExtractionTool() mcplib.Tool {
 	return mcplib.NewTool("submit_extraction",
-		mcplib.WithDescription("Ingest the results of one extraction task (from pending_extractions). Creates concept nodes and semantic edges tagged INFERRED (or AMBIGUOUS below the confidence threshold). Idempotent: re-submitting the same task is a no-op."),
+		mcplib.WithDescription("Ingest the results of one extraction task (from pending_extractions). Creates concept nodes and semantic edges tagged INFERRED (or AMBIGUOUS below the confidence threshold). A result is the source's full current set: edges an earlier submit for the task wrote and this one omits are removed."),
 		mcplib.WithString("task_id",
 			mcplib.Required(),
-			mcplib.Description("The task spec's id: a doc_section or image node ID from pending_extractions. Concepts that already exist are linked, never overwritten."),
+			mcplib.Description("The task spec's id: a doc_section or image node ID from pending_extractions. A concept another task created is linked, not overwritten."),
 		),
 		mcplib.WithArray("concepts",
 			mcplib.Required(),

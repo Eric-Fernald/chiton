@@ -3,6 +3,7 @@ package meeting
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
@@ -143,6 +144,72 @@ func TestRelinkLeavesIntactLinksAlone(t *testing.T) {
 	}
 	if after, _ := gs.AllEdges(ctx); len(after) != len(before) {
 		t.Errorf("edge count changed from %d to %d", len(before), len(after))
+	}
+}
+
+// A link the verifier rejected must stay gone: the symbol still exists under the same name, so Relink would
+// otherwise put it straight back.
+func TestRejectLinkRemovesEdgeAndRelinkLeavesItRemoved(t *testing.T) {
+	gs := newStore(t)
+	ctx := context.Background()
+	svc := NewLinkService(gs, 0.5)
+	dec := submitRetryDecision(t, gs, svc, "fetchAll", "cacheGet")
+	fetchAll := symbolNode("fetchAll", "file://client.go").ID
+	cacheGet := symbolNode("cacheGet", "file://cache.go").ID
+
+	if err := svc.RejectLink(ctx, dec, fetchAll); err != nil {
+		t.Fatal(err)
+	}
+	if decidedIn(t, gs, dec, fetchAll) {
+		t.Error("rejected link still present")
+	}
+	if !decidedIn(t, gs, dec, cacheGet) {
+		t.Error("rejecting one link removed another")
+	}
+
+	rep, err := svc.Relink(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Relinked != 0 || len(rep.Unresolved) != 0 {
+		t.Errorf("relink after reject = %+v, want nothing restored or reported", rep)
+	}
+	if decidedIn(t, gs, dec, fetchAll) {
+		t.Error("Relink restored a rejected link")
+	}
+}
+
+func TestRejectLinkOnDecisionWithoutGovernsKeepsItsOtherLinks(t *testing.T) {
+	gs := newStore(t)
+	ctx := context.Background()
+	svc := NewLinkService(gs, 0.5)
+	dec := submitRetryDecision(t, gs, svc, "fetchAll", "cacheGet")
+	old, _ := gs.GetNode(ctx, dec)
+	delete(old.Attrs, "governs")
+	if err := gs.UpsertNodes(ctx, []model.Node{*old}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.RejectLink(ctx, dec, symbolNode("fetchAll", "file://client.go").ID); err != nil {
+		t.Fatal(err)
+	}
+	want := []governRef{
+		{Label: "cacheGet", NodeID: symbolNode("cacheGet", "file://cache.go").ID},
+		{Label: "fetchAll", Rejected: true},
+	}
+	got := governedBy(t, gs, dec)
+	slices.SortFunc(got, func(a, b governRef) int { return strings.Compare(a.Label, b.Label) })
+	if !slices.Equal(got, want) {
+		t.Fatalf("governs = %+v, want %+v", got, want)
+	}
+}
+
+func TestRejectLinkErrorsWhenNotLinked(t *testing.T) {
+	gs := newStore(t)
+	svc := NewLinkService(gs, 0.5)
+	dec := submitRetryDecision(t, gs, svc, "fetchAll")
+	if err := svc.RejectLink(context.Background(), dec, symbolNode("cacheGet", "file://cache.go").ID); err == nil {
+		t.Fatal("rejecting a link that does not exist succeeded")
 	}
 }
 
