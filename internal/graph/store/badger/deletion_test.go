@@ -66,6 +66,54 @@ func TestDeleteByIDsRemovesNodesEdgesAndEmbeddings(t *testing.T) {
 	}
 }
 
+func TestDeleteEdgesRemovesRecordsAndAdjacency(t *testing.T) {
+	ctx := context.Background()
+	gs, err := Open(filepath.Join(t.TempDir(), "graph.badger"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gs.Close()
+
+	if err := gs.UpsertNodes(ctx, []model.Node{
+		{ID: "a", Kind: model.KindDocSection, Label: "a", SourceURI: "file://a"},
+		{ID: "b", Kind: model.KindConcept, Label: "b", SourceURI: "concept://b"},
+		{ID: "c", Kind: model.KindConcept, Label: "c", SourceURI: "concept://c"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gs.UpsertEdges(ctx, []model.Edge{
+		{ID: "ab", Src: "a", Dst: "b", Kind: model.EdgeDescribes},
+		{ID: "ac", Src: "a", Dst: "c", Kind: model.EdgeDescribes},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := gs.DeleteEdges(ctx, []string{"ab", "missing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("DeleteEdges deleted %d, want 1", n)
+	}
+	edges, _ := gs.AllEdges(ctx)
+	if len(edges) != 1 || edges[0].ID != "ac" {
+		t.Fatalf("edges after delete = %+v, want only ac", edges)
+	}
+	// Both endpoints survive, and neither still lists the other as a neighbor.
+	for _, id := range []string{"a", "b"} {
+		sub, err := gs.Neighbors(ctx, id, 1, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(sub.Nodes) == 0 {
+			t.Fatalf("node %s should remain", id)
+		}
+		if slices.ContainsFunc(sub.Edges, func(e model.Edge) bool { return e.ID == "ab" }) {
+			t.Fatalf("node %s still has the deleted edge in its adjacency", id)
+		}
+	}
+}
+
 func TestDeleteBySourceURIExactMatch(t *testing.T) {
 	ctx := context.Background()
 	gs, err := Open(filepath.Join(t.TempDir(), "graph.badger"))

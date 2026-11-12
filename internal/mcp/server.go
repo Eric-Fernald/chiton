@@ -22,6 +22,7 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/graph/retrieve"
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
 	urlingest "github.com/Eric-Fernald/chiton/internal/ingest/url"
+	"github.com/Eric-Fernald/chiton/internal/verify"
 )
 
 // Deps carries the optional services behind the semantic, analysis, and meeting tools. Every field can be
@@ -34,6 +35,8 @@ type Deps struct {
 	// MeetingLinker backs pending_meeting_links / submit_meeting_links
 	// (meeting→code linkage). nil disables those tools.
 	MeetingLinker *meeting.LinkService
+	// Verifier backs pending_verifications / submit_verification. nil disables those tools.
+	Verifier *verify.Service
 	// URLIngester backs the add_url write tool. nil (e.g. a read-only
 	// server) makes add_url report that it is unavailable.
 	URLIngester *urlingest.Ingester
@@ -83,6 +86,8 @@ func New(gs store.GraphStore, overlay *cluster.Results, deps Deps) *mcpsdk.MCPSe
 	s.AddTool(pendingMeetingLinksTool(), pendingMeetingLinksHandler(deps.MeetingLinker))
 	s.AddTool(submitMeetingLinksTool(), submitMeetingLinksHandler(deps.MeetingLinker))
 	s.AddTool(addURLTool(), addURLHandler(deps.URLIngester))
+	s.AddTool(pendingVerificationsTool(), pendingVerificationsHandler(deps.Verifier))
+	s.AddTool(submitVerificationTool(), submitVerificationHandler(deps.Verifier))
 	return s
 }
 

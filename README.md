@@ -41,7 +41,7 @@ When sources conflict, prefer `EXTRACTED` facts over `INFERRED` ones.
   ingest            extract              store + index            serve
   ------            -------              -------------            -----
   file walk    →    Go AST (go/ast)  →   BadgerDB graph      →   MCP (stdio/HTTP)
-  fsnotify          line scanners        (encrypted at rest)      20 graph + semantic
+  fsnotify          line scanners        (encrypted at rest)      22 graph + semantic
   git hooks         Markdown structure   pure-Go vector index     + analysis tools
                     image nodes          Leiden communities       CLI (thin wrapper)
                     rule engine          betweenness / god nodes
@@ -82,9 +82,9 @@ The plugin provides:
 - **Three skills:** `/chiton:graph` (when to reach for the graph instead of
   grep), `/chiton:subagent-tasks` (semantic extraction, LLM rules, meeting→code
   linkage), and `/chiton:setup` (first-run install, build, verify).
-- **The MCP server**, read-only by default. The four write tools
-  (`submit_extraction`, `submit_analysis`, `submit_meeting_links`, `add_url`)
-  report themselves unavailable until you run `chiton serve --writable` or use
+- **The MCP server**, read-only by default. The five write tools
+  (`submit_extraction`, `submit_analysis`, `submit_meeting_links`,
+  `submit_verification`, `add_url`) report themselves unavailable until you run `chiton serve --writable` or use
   the CLI write path.
 - **A `chiton` command** on the assistant's shell `PATH`, so it can run CLI
   commands even when the binary is not on yours.
@@ -199,6 +199,8 @@ starts your assistant (see [Encryption at rest](#encryption-at-rest)).
 | `chiton embed` | Embed nodes for semantic search (`--provider`, `--all`, `--link-similar`, `--exact`). Covers the whole store, re-embedding only nodes whose text or model changed. |
 | `chiton search <query>` | Hybrid semantic + graph search from the CLI. |
 | `chiton extract pending\|submit` | Emit semantic-extraction task specs / ingest the structured results. |
+| `chiton verify sweep` | Demote concepts no source backs any more to `AMBIGUOUS`, and re-link decisions whose governed symbol moved files. A name several symbols share is listed, not guessed. Deterministic, no LLM. |
+| `chiton verify pending\|submit` | Emit tasks that re-check inferred concepts and decisions against their current sources / apply the verdicts. Only claims whose evidence changed are emitted. |
 | `chiton analyze <path>` | Run deterministic rules; persist findings as graph nodes. `--diff` / `--since <ref>`, `--no-llm`. |
 | `chiton analyze pending\|submit` | Emit LLM-rule task specs / ingest LLM findings. |
 | `chiton findings list\|explain` | Inspect persisted findings (filter by severity, category, scope). |
@@ -242,6 +244,7 @@ wrapper over the same logic.
 | `search_meetings` | Find ingested meetings by content, with their decisions and linked code symbols. Participant names (PII) hidden unless `include_pii`. |
 | `decisions_about` | Decisions made about a topic or code symbol, with their rationale, the meeting they were decided in, and the code they govern. |
 | `pending_meeting_links` / `submit_meeting_links` | Subagent meeting→code linkage: transcript + candidate-symbol task specs in, decisions + edges out. |
+| `pending_verifications` / `submit_verification` | Subagent re-check of inferred claims: a concept against the text it came from, a decision against the code it governs. Verdicts must quote the evidence. Drift shows up in `decisions_about`. |
 | `add_url` | Fetch a URL (article, paper PDF, or YouTube transcript) and ingest it as a `url` node with `doc_section` children. |
 
 > **Note:** `query_graph` matches node *labels*, not call sites. A `CALLS` edge
@@ -251,9 +254,9 @@ wrapper over the same logic.
 > file nodes.
 
 Write tools (`submit_extraction`, `submit_analysis`, `submit_meeting_links`,
-`add_url`) need a writable store: run `chiton serve --writable`, or use the CLI
-write path (`chiton extract submit`, `chiton analyze submit`, `chiton meeting
-submit`, `chiton add-url`). On Windows, writers such as `build` and `embed`
+`submit_verification`, `add_url`) need a writable store: run `chiton serve
+--writable`, or use the CLI write path (`chiton extract submit`, `chiton analyze
+submit`, `chiton meeting submit`, `chiton verify submit`, `chiton add-url`). On Windows, writers such as `build` and `embed`
 fail with `in use by another chiton process` while a server is running, so stop
 it first or submit through `chiton serve --writable`.
 

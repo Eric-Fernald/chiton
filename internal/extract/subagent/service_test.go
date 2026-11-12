@@ -464,3 +464,337 @@ func TestSubmitKeepsExistingConcept(t *testing.T) {
 		t.Error("d2 was not linked to the existing concept")
 	}
 }
+
+func conceptNodeID(label string) string {
+	return model.NewNodeID("concept://"+model.Slug(label, "concept"), label)
+}
+
+func hasEdge(t *testing.T, gs store.GraphStore, src, dst string, kind model.EdgeKind) bool {
+	t.Helper()
+	edges, err := gs.AllEdges(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return slices.ContainsFunc(edges, func(e model.Edge) bool { return e.Src == src && e.Dst == dst && e.Kind == kind })
+}
+
+// A resubmission is the source's full current set, so a concept the new result omits loses its link to the source.
+func TestResubmitDropsEdgesTheNewResultOmits(t *testing.T) {
+	gs := newStore(t)
+	ctx := context.Background()
+	_ = gs.UpsertNodes(ctx, []model.Node{docSection("d1", "Auth", "we use JWTs and sessions")})
+	svc := New(gs, nil, 0.5)
+	if _, err := svc.Submit(ctx, SubmitResult{TaskID: "d1", Concepts: []ConceptResult{
+		{Label: "JWT", Confidence: 0.9}, {Label: "Session", Confidence: 0.9},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := svc.Submit(ctx, SubmitResult{TaskID: "d1", Concepts: []ConceptResult{{Label: "JWT", Confidence: 0.9}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.EdgesRemoved != 1 {
+		t.Errorf("EdgesRemoved = %d, want 1", rep.EdgesRemoved)
+	}
+	if hasEdge(t, gs, "d1", conceptNodeID("Session"), model.EdgeDescribes) {
+		t.Error("d1 still describes Session, which the resubmission omitted")
+	}
+	if !hasEdge(t, gs, "d1", conceptNodeID("JWT"), model.EdgeDescribes) {
+		t.Error("d1 lost its edge to JWT, which the resubmission kept")
+	}
+	if n, _ := gs.GetNode(ctx, conceptNodeID("Session")); n == nil {
+		t.Error("Session concept was deleted; Submit should only unlink it")
+	}
+}
+
+func TestResubmitDropsOmittedConceptToConceptEdge(t *testing.T) {
+	gs := newStore(t)
+	ctx := context.Background()
+	_ = gs.UpsertNodes(ctx, []model.Node{docSection("d1", "Auth", "JWTs carry the session")})
+	svc := New(gs, nil, 0.5)
+	concepts := []ConceptResult{{Label: "JWT", Confidence: 0.9}, {Label: "Session", Confidence: 0.9}}
+	describes := []EdgeResult{{To: "JWT", Confidence: 0.9}, {To: "Session", Confidence: 0.9}}
+	if _, err := svc.Submit(ctx, SubmitResult{TaskID: "d1", Concepts: concepts,
+		Edges: append(slices.Clone(describes), EdgeResult{From: "JWT", To: "Session", Kind: "ELABORATES", Confidence: 0.8}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	jwt, session := conceptNodeID("JWT"), conceptNodeID("Session")
+	if !hasEdge(t, gs, jwt, session, model.EdgeElaborates) {
+		t.Fatal("setup: JWT→Session edge missing")
+	}
+
+	if _, err := svc.Submit(ctx, SubmitResult{TaskID: "d1", Concepts: concepts, Edges: describes}); err != nil {
+		t.Fatal(err)
+	}
+	if hasEdge(t, gs, jwt, session, model.EdgeElaborates) {
+		t.Error("JWT→Session survived a resubmission that omitted it")
+	}
+}
+
+// Reconciling one source must not touch edges another source's task wrote.
+func TestResubmitKeepsOtherTasksEdges(t *testing.T) {
+	gs := newStore(t)
+	ctx := context.Background()
+	_ = gs.UpsertNodes(ctx, []model.Node{docSection("d1", "Auth", "we use JWTs"), docSection("d2", "Notes", "JWTs and sessions")})
+	svc := New(gs, nil, 0.5)
+	if _, err := svc.Submit(ctx, SubmitResult{TaskID: "d1", Concepts: []ConceptResult{{Label: "JWT", Confidence: 0.9}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Submit(ctx, SubmitResult{TaskID: "d2",
+		Concepts: []ConceptResult{{Label: "JWT", Confidence: 0.9}, {Label: "Session", Confidence: 0.9}},
+		Edges: []EdgeResult{
+			{To: "JWT", Confidence: 0.9}, {To: "Session", Confidence: 0.9},
+			{From: "JWT", To: "Session", Kind: "ELABORATES", Confidence: 0.8},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := svc.Submit(ctx, SubmitResult{TaskID: "d1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.EdgesRemoved != 1 {
+		t.Errorf("EdgesRemoved = %d, want 1 (only d1→JWT)", rep.EdgesRemoved)
+	}
+	jwt, session := conceptNodeID("JWT"), conceptNodeID("Session")
+	if hasEdge(t, gs, "d1", jwt, model.EdgeDescribes) {
+		t.Error("d1→JWT survived an empty resubmission")
+	}
+	if !hasEdge(t, gs, "d2", jwt, model.EdgeDescribes) || !hasEdge(t, gs, jwt, session, model.EdgeElaborates) {
+		t.Error("d1's resubmission removed edges d2's task wrote")
+	}
+}
+
+// The task that created a concept may correct it; TestSubmitKeepsExistingConcept covers every other task.
+func TestOwnerResubmitRewritesItsConcept(t *testing.T) {
+	gs := newStore(t)
+	ctx := context.Background()
+	_ = gs.UpsertNodes(ctx, []model.Node{docSection("d1", "Auth", "we use JWTs")})
+	svc := New(gs, nil, 0.5)
+	first := SubmitResult{TaskID: "d1", Concepts: []ConceptResult{{Label: "JWT", Description: "a cookie", Confidence: 0.6}}}
+	if _, err := svc.Submit(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := gs.GetNode(ctx, conceptNodeID("JWT"))
+
+	rep, err := svc.Submit(ctx, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.ConceptsUpdated != 0 {
+		t.Errorf("ConceptsUpdated = %d for an identical resubmission, want 0", rep.ConceptsUpdated)
+	}
+
+	rep, err = svc.Submit(ctx, SubmitResult{TaskID: "d1",
+		Concepts: []ConceptResult{{Label: "JWT", Description: "JSON Web Token", Confidence: 0.9}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.ConceptsAdded != 0 || rep.ConceptsUpdated != 1 {
+		t.Errorf("report = %+v, want 0 added and 1 updated", rep)
+	}
+	after, _ := gs.GetNode(ctx, conceptNodeID("JWT"))
+	if model.AttrString(after.Attrs, "description") != "JSON Web Token" || after.Confidence != 0.9 {
+		t.Errorf("owner's correction not applied: %+v", after)
+	}
+	if !after.CreatedAt.Equal(before.CreatedAt) {
+		t.Errorf("CreatedAt changed on update: %v → %v", before.CreatedAt, after.CreatedAt)
+	}
+}
+
+func TestSweepOrphansDemotesConceptsNoSourceLinksTo(t *testing.T) {
+	gs := newStore(t)
+	ctx := context.Background()
+	concept := func(id string) model.Node {
+		return model.Node{ID: id, Kind: model.KindConcept, Label: id, SourceURI: "concept://" + id,
+			Provenance: model.ProvInferred, Confidence: 0.9}
+	}
+	_ = gs.UpsertNodes(ctx, []model.Node{docSection("d1", "Auth", "x"), concept("linked"), concept("viaconcept"),
+		concept("alone"), concept("island1"), concept("island2")})
+	_ = gs.UpsertEdges(ctx, []model.Edge{
+		{ID: "e1", Src: "d1", Dst: "linked", Kind: model.EdgeDescribes, Provenance: model.ProvInferred},
+		// The submit schema lets a source describe one concept and relate a second to it, so a concept reached
+		// through a sourced one is still backed by that source.
+		{ID: "e2", Src: "linked", Dst: "viaconcept", Kind: model.EdgeElaborates, Provenance: model.ProvInferred},
+		// Two concepts that only link to each other have no source behind either.
+		{ID: "e3", Src: "island1", Dst: "island2", Kind: model.EdgeElaborates, Provenance: model.ProvInferred},
+	})
+	svc := New(gs, nil, 0.5)
+
+	rep, err := svc.SweepOrphans(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Demoted != 3 {
+		t.Errorf("Demoted = %d, want 3", rep.Demoted)
+	}
+	for id, want := range map[string]model.Provenance{
+		"linked": model.ProvInferred, "viaconcept": model.ProvInferred, "alone": model.ProvAmbiguous,
+		"island1": model.ProvAmbiguous, "island2": model.ProvAmbiguous,
+	} {
+		n, _ := gs.GetNode(ctx, id)
+		if n.Provenance != want {
+			t.Errorf("%s provenance = %s, want %s", id, n.Provenance, want)
+		}
+		if orphaned := model.AttrString(n.Attrs, "orphaned_at") != ""; orphaned != (want == model.ProvAmbiguous) {
+			t.Errorf("%s orphaned_at set = %v", id, orphaned)
+		}
+	}
+
+	if rep, err = svc.SweepOrphans(ctx); err != nil || rep.Demoted != 0 {
+		t.Errorf("second sweep = %+v, %v; want nothing left to demote", rep, err)
+	}
+}
+
+// An orphan has no owner left, so the next task to extract it takes it over and it is visible again.
+func TestSubmitAdoptsOrphanedConcept(t *testing.T) {
+	gs := newStore(t)
+	ctx := context.Background()
+	_ = gs.UpsertNodes(ctx, []model.Node{docSection("d1", "Auth", "sessions"), docSection("d2", "Notes", "sessions again")})
+	svc := New(gs, nil, 0.5)
+	if _, err := svc.Submit(ctx, SubmitResult{TaskID: "d1",
+		Concepts: []ConceptResult{{Label: "Session", Description: "old", Confidence: 0.9}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Submit(ctx, SubmitResult{TaskID: "d1"}); err != nil {
+		t.Fatal(err)
+	}
+	if rep, err := svc.SweepOrphans(ctx); err != nil || rep.Demoted != 1 {
+		t.Fatalf("setup sweep = %+v, %v; want Session demoted", rep, err)
+	}
+
+	if _, err := svc.Submit(ctx, SubmitResult{TaskID: "d2",
+		Concepts: []ConceptResult{{Label: "Session", Description: "server-side login state", Confidence: 0.8}}}); err != nil {
+		t.Fatal(err)
+	}
+	n, _ := gs.GetNode(ctx, conceptNodeID("Session"))
+	if n.Provenance != model.ProvInferred || model.AttrString(n.Attrs, "orphaned_at") != "" ||
+		model.AttrString(n.Attrs, "extracted_from") != "d2" || model.AttrString(n.Attrs, "description") != "server-side login state" {
+		t.Fatalf("orphan was not adopted by d2: %+v", n)
+	}
+}
+
+// `chiton embed --link-similar` writes unstamped INFERRED SIMILAR_TO edges between any embedded nodes. They say
+// two nodes read alike, not that a source describes a concept.
+func TestSimilarityEdgesAreNotExtractionLinks(t *testing.T) {
+	gs := newStore(t)
+	ctx := context.Background()
+	_ = gs.UpsertNodes(ctx, []model.Node{
+		docSection("d1", "Auth", "we use JWTs"),
+		{ID: "sym", Kind: model.KindSymbol, Label: "parseToken", SourceURI: "file://a.go"},
+		{ID: "lookalike", Kind: model.KindConcept, Label: "Lookalike", SourceURI: "concept://lookalike",
+			Provenance: model.ProvInferred, Confidence: 0.9},
+	})
+	svc := New(gs, nil, 0.5)
+	res := SubmitResult{TaskID: "d1", Concepts: []ConceptResult{{Label: "JWT", Confidence: 0.9}}}
+	if _, err := svc.Submit(ctx, res); err != nil {
+		t.Fatal(err)
+	}
+	jwt := conceptNodeID("JWT")
+	similar := func(src, dst string) model.Edge {
+		return model.Edge{ID: model.NewEdgeID(src, dst, model.EdgeSimilarTo), Src: src, Dst: dst,
+			Kind: model.EdgeSimilarTo, Provenance: model.ProvInferred, Confidence: 0.9}
+	}
+	if err := gs.UpsertEdges(ctx, []model.Edge{similar("d1", jwt), similar("sym", "lookalike")}); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := svc.Submit(ctx, res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.EdgesRemoved != 0 || !hasEdge(t, gs, "d1", jwt, model.EdgeSimilarTo) {
+		t.Errorf("resubmit removed a similarity edge it did not write (EdgesRemoved = %d)", rep.EdgesRemoved)
+	}
+
+	if _, err := svc.SweepOrphans(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := gs.GetNode(ctx, "lookalike"); n.Provenance != model.ProvAmbiguous {
+		t.Error("a concept with only a similarity edge to a symbol was treated as sourced")
+	}
+}
+
+// A verifier's demotion and its record must survive the owner extracting the concept again, or the next
+// extraction silently overrules the check.
+func TestOwnerResubmitKeepsVerificationState(t *testing.T) {
+	gs := newStore(t)
+	ctx := context.Background()
+	_ = gs.UpsertNodes(ctx, []model.Node{docSection("d1", "Auth", "we use JWTs")})
+	svc := New(gs, nil, 0.5)
+	first := SubmitResult{TaskID: "d1", Concepts: []ConceptResult{{Label: "JWT", Description: "a cookie", Confidence: 0.9}}}
+	if _, err := svc.Submit(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	n, _ := gs.GetNode(ctx, conceptNodeID("JWT"))
+	n.Provenance = model.ProvAmbiguous
+	n.Attrs[model.AttrVerifyDemoted] = true
+	n.Attrs["verdict"] = "unsupported"
+	if err := gs.UpsertNodes(ctx, []model.Node{*n}); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := svc.Submit(ctx, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.ConceptsUpdated != 0 {
+		t.Errorf("ConceptsUpdated = %d: an identical resubmit rewrote a demoted concept", rep.ConceptsUpdated)
+	}
+
+	if _, err := svc.Submit(ctx, SubmitResult{TaskID: "d1",
+		Concepts: []ConceptResult{{Label: "JWT", Description: "JSON Web Token", Confidence: 0.9}}}); err != nil {
+		t.Fatal(err)
+	}
+	n, _ = gs.GetNode(ctx, conceptNodeID("JWT"))
+	if model.AttrString(n.Attrs, "description") != "JSON Web Token" {
+		t.Errorf("owner's new description not applied: %+v", n)
+	}
+	if n.Provenance != model.ProvAmbiguous || n.Attrs[model.AttrVerifyDemoted] != true || model.AttrString(n.Attrs, "verdict") != "unsupported" {
+		t.Errorf("re-extraction undid the verifier's demotion or dropped its record: %+v", n)
+	}
+}
+
+// edgeFailStore fails UpsertEdges while fail is set.
+type edgeFailStore struct {
+	*badgerstore.Store
+	fail bool
+}
+
+func (s *edgeFailStore) UpsertEdges(ctx context.Context, edges []model.Edge) error {
+	if s.fail {
+		return errors.New("disk full")
+	}
+	return s.Store.UpsertEdges(ctx, edges)
+}
+
+// A submit whose edge write fails must be safe to retry: the task stays pending and nothing already linked is lost.
+func TestFailedEdgeWriteLeavesTaskPendingAndOldEdges(t *testing.T) {
+	gs := &edgeFailStore{Store: newStore(t), fail: true}
+	ctx := context.Background()
+	_ = gs.UpsertNodes(ctx, []model.Node{docSection("d1", "Auth", "we use JWTs")})
+	svc := New(gs, nil, 0.5)
+	jwtOnly := SubmitResult{TaskID: "d1", Concepts: []ConceptResult{{Label: "JWT", Confidence: 0.9}}}
+
+	if _, err := svc.Submit(ctx, jwtOnly); err == nil {
+		t.Fatal("Submit succeeded although the edge write failed")
+	}
+	if specs, _ := svc.Pending(ctx, "", 0); len(specs) != 1 {
+		t.Fatalf("a failed submit marked the task done: %d pending", len(specs))
+	}
+
+	gs.fail = false
+	if _, err := svc.Submit(ctx, jwtOnly); err != nil {
+		t.Fatal(err)
+	}
+	gs.fail = true
+	if _, err := svc.Submit(ctx, SubmitResult{TaskID: "d1", Concepts: []ConceptResult{{Label: "Session", Confidence: 0.9}}}); err == nil {
+		t.Fatal("Submit succeeded although the edge write failed")
+	}
+	if !hasEdge(t, gs, "d1", conceptNodeID("JWT"), model.EdgeDescribes) {
+		t.Error("a failed resubmit deleted the edges of the previous result")
+	}
+}

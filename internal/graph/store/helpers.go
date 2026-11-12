@@ -268,6 +268,15 @@ func DeleteNodes(ctx context.Context, gs GraphStore, nodes []model.Node) (int, e
 	return total, nil
 }
 
+// DeleteEdges removes edges by ID via EdgeDeleter and returns how many it deleted. A store without the
+// capability keeps them, so it returns 0.
+func DeleteEdges(ctx context.Context, gs GraphStore, ids []string) (int, error) {
+	if d, ok := gs.(EdgeDeleter); ok && len(ids) > 0 {
+		return d.DeleteEdges(ctx, ids)
+	}
+	return 0, nil
+}
+
 // Sync flushes gs's writes to stable storage when gs is a Syncer; otherwise it does nothing.
 func Sync(gs GraphStore) error {
 	if s, ok := gs.(Syncer); ok {

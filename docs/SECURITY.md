@@ -40,10 +40,11 @@ has not been asked to ingest anything.
 - **stdio binds no port.** The process talks to the assistant over its own
   stdin/stdout. Nothing is listening.
 - The store is opened **read-only** unless you pass `--writable`.
-- **20 MCP tools** are registered. 16 are read-only queries against the local
-  (normally encrypted) graph. The 4 write tools are `submit_extraction`,
-  `submit_analysis`, `submit_meeting_links` and `add_url`. They are still
-  *listed*, but fail against a read-only store; `add_url` refuses **before** it
+- **22 MCP tools** are registered. 17 are read-only queries against the local
+  (normally encrypted) graph. The 5 write tools are `submit_extraction`,
+  `submit_analysis`, `submit_meeting_links`, `submit_verification` and
+  `add_url`. They are still *listed*, but fail against a read-only store;
+  `add_url` refuses **before** it
   fetches anything (`internal/ingest/url/ingest.go`).
 - **Exactly one tool causes any socket activity: `semantic_search`.** To turn
   the question into a vector, it POSTs the query text to the configured
@@ -543,6 +544,8 @@ http/https URL**. This is the widest capability chiton exposes over MCP. It
 accepts only http/https; bare paths and `file://` URLs are refused, so an
 injected instruction can't make it read a local file. `pending_analyses` is
 likewise confined to the project root and skips symlinked files.
+`pending_verifications` reads the source lines of symbols that decisions govern,
+and only from files that resolve, symlinks included, inside the project root.
 
 Shipped mitigations (`internal/ingest/url/`):
 

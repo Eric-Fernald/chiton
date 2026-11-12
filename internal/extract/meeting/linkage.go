@@ -85,6 +85,7 @@ type LinkReport struct {
 	TaskID         string   `json:"task_id"`
 	DecisionsAdded int      `json:"decisions_added"`
 	EdgesAdded     int      `json:"edges_added"`
+	EdgesRemoved   int      `json:"edges_removed"` // links an earlier submit wrote that this one omits
 	LinkedSymbols  int      `json:"linked_symbols"`
 	Ambiguous      int      `json:"ambiguous"`
 	UnresolvedRefs []string `json:"unresolved_refs,omitempty"`
@@ -240,25 +241,27 @@ func (s *LinkService) Submit(ctx context.Context, r LinkResult) (LinkReport, err
 			rep.EdgesAdded++
 		}
 
-		// References → code symbols the decision governs.
+		// References → code symbols the decision governs. Every named reference is recorded, linked or not,
+		// so Relink can retry it.
+		var governs []governRef
+		named := map[string]bool{}
 		for _, ref := range d.References {
+			ref = strings.TrimSpace(ref)
+			if ref == "" || named[ref] {
+				continue
+			}
+			named[ref] = true
 			symID := s.resolveSymbol(ctx, ref)
+			governs = append(governs, governRef{Label: ref, NodeID: symID})
 			if symID == "" {
-				if r := strings.TrimSpace(ref); r != "" {
-					unresolved[r] = true
-				}
+				unresolved[ref] = true
 				continue
 			}
 			linkedSymbols[symID] = true
-			// decision --DECIDED_IN--> symbol (the code the decision governs).
-			edges = append(edges, typedEdge(decID, symID, model.EdgeDecidedIn, prov, conf, now, nil))
-			// symbol --DISCUSSED_IN--> meeting (code discussed in the meeting).
-			edges = append(edges, typedEdge(symID, r.TaskID, model.EdgeDiscussedIn, prov, conf, now, nil))
-			// A MENTIONED edge from meeting to symbol lets "what did this meeting mention?" also cover
-			// decision-governed symbols, matching the discussed-only path below.
-			edges = append(edges, typedEdge(r.TaskID, symID, model.EdgeMentioned, prov, conf, now, nil))
+			edges = append(edges, governEdges(decID, symID, r.TaskID, prov, conf, now)...)
 			rep.EdgesAdded += 3
 		}
+		decAttrs[attrGoverns] = governsAttr(governs)
 
 		// Action items → ACTION_FOR a person (created if new).
 		for _, ai := range d.ActionItems {
@@ -327,46 +330,66 @@ func (s *LinkService) Submit(ctx context.Context, r LinkResult) (LinkReport, err
 			return LinkReport{}, fmt.Errorf("upsert linkage edges: %w", err)
 		}
 	}
+	// New edges are in before the superseded ones go, so a failure here loses nothing.
+	stale, err := s.staleLinkEdges(ctx, r.TaskID, keep, edges)
+	if err != nil {
+		return LinkReport{}, err
+	}
+	if rep.EdgesRemoved, err = store.DeleteEdges(ctx, s.store, stale); err != nil {
+		return LinkReport{}, fmt.Errorf("delete superseded links: %w", err)
+	}
 
 	rep.LinkedSymbols = len(linkedSymbols)
 	rep.UnresolvedRefs = sortedKeys(unresolved)
 	return rep, nil
 }
 
+// linkKinds are the edge kinds that Submit, and a verification verdict on its decisions, write around a meeting.
+var linkKinds = []model.EdgeKind{
+	model.EdgeDecidedIn, model.EdgeDiscussedIn, model.EdgeMentioned,
+	model.EdgeActionFor, model.EdgeRationaleFor, model.EdgeContradicts,
+}
+
+// staleLinkEdges returns the IDs of linkage edges around the meeting and its kept decisions that written omits.
+// A submission is the meeting's full linkage: a decision keeps its ID when its summary is unchanged, so without
+// this its links to references the new result dropped would stay. Ingest's own edges (meeting to participant)
+// are EXTRACTED and stay, and so does recorded drift for a symbol the result still links.
+func (s *LinkService) staleLinkEdges(ctx context.Context, meetingID string, keep map[string]bool, written []model.Edge) ([]string, error) {
+	kept := make(map[string]bool, len(written))
+	governs := map[[2]string]bool{} // {decision, symbol}
+	for _, e := range written {
+		kept[e.ID] = true
+		if e.Kind == model.EdgeDecidedIn {
+			governs[[2]string{e.Src, e.Dst}] = true
+		}
+	}
+	seen := map[string]bool{}
+	var stale []string
+	for _, id := range append(sortedKeys(keep), meetingID) {
+		sub, err := s.store.Neighbors(ctx, id, 1, linkKinds)
+		if err != nil {
+			return nil, fmt.Errorf("load prior links: %w", err)
+		}
+		for _, e := range sub.Edges {
+			if e.Provenance == model.ProvExtracted || kept[e.ID] || seen[e.ID] {
+				continue
+			}
+			if e.Kind == model.EdgeContradicts && governs[[2]string{e.Dst, e.Src}] {
+				continue
+			}
+			seen[e.ID] = true
+			stale = append(stale, e.ID)
+		}
+	}
+	return stale, nil
+}
+
 // resolveSymbol resolves a label to a node ID by exact case-insensitive symbol match, then exact match on
 // another node kind, then substring match. It returns "" rather than invent a link to an unknown symbol.
 func (s *LinkService) resolveSymbol(ctx context.Context, label string) string {
-	label = strings.TrimSpace(label)
-	if label == "" {
-		return ""
-	}
-	nodes, err := s.store.SearchNodes(ctx, label, 25)
-	if err != nil || len(nodes) == 0 {
-		return ""
-	}
-	lower := strings.ToLower(label)
-	var exactOther, contains string
-	for _, n := range nodes {
-		if n.Kind == model.KindMeeting || n.Kind == model.KindMeetingTurn ||
-			n.Kind == model.KindPerson || n.Kind == model.KindDecision ||
-			n.Kind == model.KindRationale {
-			continue // never link a decision to another meeting-domain node
-		}
-		if strings.EqualFold(n.Label, label) {
-			if n.Kind == model.KindSymbol {
-				return n.ID // best: exact symbol match
-			}
-			if exactOther == "" {
-				exactOther = n.ID
-			}
-			continue
-		}
-		if contains == "" && strings.Contains(strings.ToLower(n.Label), lower) {
-			contains = n.ID
-		}
-	}
-	if exactOther != "" {
-		return exactOther
+	exact, contains := s.matchSymbol(ctx, label)
+	if exact != "" {
+		return exact
 	}
 	return contains
 }

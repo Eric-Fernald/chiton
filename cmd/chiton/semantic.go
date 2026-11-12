@@ -371,20 +371,25 @@ func extractSubmitCmd() *cobra.Command {
 			svc := subagent.New(gs, emb, cfg.Semantic.ConfidenceThreshold)
 
 			out := cmd.OutOrStdout()
-			var concepts, edges, ambiguous int
+			var concepts, updated, edges, removed, ambiguous int
 			for _, r := range results {
 				rep, err := svc.Submit(cmd.Context(), r)
 				if err != nil {
 					return err
 				}
 				concepts += rep.ConceptsAdded
+				updated += rep.ConceptsUpdated
 				edges += rep.EdgesAdded
+				removed += rep.EdgesRemoved
 				ambiguous += rep.Ambiguous
 				fmt.Fprintf(out, "submit: %s — %d concept(s), %d edge(s), %d ambiguous\n",
 					rep.TaskID, rep.ConceptsAdded, rep.EdgesAdded, rep.Ambiguous)
 			}
 			fmt.Fprintf(out, "submit: done — %d task(s), %d concept(s), %d edge(s), %d ambiguous\n",
 				len(results), concepts, edges, ambiguous)
+			if updated > 0 || removed > 0 {
+				fmt.Fprintf(out, "submit: %d existing concept(s) updated, %d superseded edge(s) removed\n", updated, removed)
+			}
 			if emb != nil {
 				fmt.Fprintln(out, "submit: restart 'chiton serve' to index new concepts for semantic_search")
 			}
