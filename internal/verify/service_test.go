@@ -2,6 +2,7 @@ package verify
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Eric-Fernald/chiton/internal/extract/meeting"
+	"github.com/Eric-Fernald/chiton/internal/extract/subagent"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 	"github.com/Eric-Fernald/chiton/internal/graph/store"
 	badgerstore "github.com/Eric-Fernald/chiton/internal/graph/store/badger"
@@ -631,5 +633,162 @@ func TestPendingFiltersByKindAndLimit(t *testing.T) {
 	limited, err := f.svc.Pending(context.Background(), "", 1)
 	if err != nil || len(limited) != 1 {
 		t.Errorf("limit 1 returned %d task(s), %v", len(limited), err)
+	}
+}
+
+// --- review fixes ---
+
+// Only the Go extractor records where a function ends. Every other symbol has a start line alone, and one
+// declaration line is not enough to judge a decision against.
+func TestDecisionEvidenceCoversTheBodyWhenTheSpanHasNoEnd(t *testing.T) {
+	f := seedDecisionInRoot(t)
+	ctx := context.Background()
+	sym := node(t, f.gs, f.symbol)
+	sym.Span = &model.SourceSpan{StartLine: 3}
+	other := model.Node{
+		ID: model.NewNodeID(sym.SourceURI, "other"), Kind: model.KindSymbol, Label: "other", SourceURI: sym.SourceURI,
+		Span: &model.SourceSpan{StartLine: 7}, Provenance: model.ProvExtracted, Confidence: 1,
+	}
+	if err := f.gs.UpsertNodes(ctx, []model.Node{*sym, other}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := onlyTask(t, f.svc, KindDecisionDrift).Evidence[0].Text
+	if !strings.Contains(got, "const maxRetries = 3") {
+		t.Errorf("evidence stops at the declaration line:\n%s", got)
+	}
+	if strings.Contains(got, "func other") {
+		t.Errorf("evidence runs into the next symbol:\n%s", got)
+	}
+
+	// With no later symbol in the file, the body runs to the end of it.
+	if _, err := store.DeleteNodes(ctx, f.gs, []model.Node{other}); err != nil {
+		t.Fatal(err)
+	}
+	if got := onlyTask(t, f.svc, KindDecisionDrift).Evidence[0].Text; !strings.Contains(got, "const maxRetries = 3") {
+		t.Errorf("evidence for the last symbol stops at the declaration line:\n%s", got)
+	}
+}
+
+func TestLowConfidenceVerdictDoesNotLoseTheDemotion(t *testing.T) {
+	gs := newStore(t)
+	seedConcept(t, gs)
+	svc := New(gs, t.TempDir(), 0.5)
+	ctx := context.Background()
+	submit := func(r Result) {
+		t.Helper()
+		spec := onlyTask(t, svc, KindConceptSupport)
+		r.TaskID, r.Fingerprint = spec.ID, spec.Fingerprint
+		if _, err := svc.Submit(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	submit(Result{Verdict: Unsupported, Confidence: 0.9})
+
+	setSection(t, gs, "Maybe a JWT is involved somewhere here.")
+	submit(Result{Verdict: Supported, Quote: "a JWT is involved", Confidence: 0.3})
+	if node(t, gs, conceptID).Provenance != model.ProvAmbiguous {
+		t.Fatal("an unsure supported verdict lifted the demotion")
+	}
+
+	setSection(t, gs, "Every request carries a JWT again.")
+	submit(Result{Verdict: Supported, Quote: "carries a JWT again", Confidence: 0.9})
+	if got := node(t, gs, conceptID).Provenance; got != model.ProvInferred {
+		t.Errorf("provenance = %s: the concept stayed hidden after a confident supported verdict", got)
+	}
+}
+
+// The verifier only sees what the task carries. "Nothing here supports it" proves nothing about text left out.
+func TestNegativeVerdictIsNotAppliedOnTruncatedEvidence(t *testing.T) {
+	ctx := context.Background()
+	t.Run("more sections than a task carries", func(t *testing.T) {
+		gs := newStore(t)
+		seedConcept(t, gs)
+		for i := range maxEvidence {
+			id := fmt.Sprintf("extra%d", i)
+			_ = gs.UpsertNodes(ctx, []model.Node{{ID: id, Kind: model.KindDocSection, Label: id, SourceURI: "file://doc.md",
+				Attrs: map[string]any{"text": "unrelated text"}, Provenance: model.ProvExtracted, Confidence: 1}})
+			_ = gs.UpsertEdges(ctx, []model.Edge{{ID: model.NewEdgeID(id, conceptID, model.EdgeDescribes), Src: id, Dst: conceptID,
+				Kind: model.EdgeDescribes, Provenance: model.ProvInferred}})
+		}
+		svc := New(gs, t.TempDir(), 0.5)
+		spec := onlyTask(t, svc, KindConceptSupport)
+		if !spec.Truncated || len(spec.Evidence) != maxEvidence {
+			t.Fatalf("spec truncated=%v with %d evidence items, want truncated with %d", spec.Truncated, len(spec.Evidence), maxEvidence)
+		}
+		rep, err := svc.Submit(ctx, Result{TaskID: spec.ID, Fingerprint: spec.Fingerprint, Verdict: Unsupported, Confidence: 0.9})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rep.Applied || node(t, gs, conceptID).Provenance != model.ProvInferred {
+			t.Errorf("unsupported was applied on truncated evidence (report %+v)", rep)
+		}
+	})
+	t.Run("section longer than a task carries", func(t *testing.T) {
+		gs := newStore(t)
+		seedConcept(t, gs)
+		setSection(t, gs, strings.Repeat("filler ", maxEvidenceChars)+"and finally the JWT.")
+		svc := New(gs, t.TempDir(), 0.5)
+		if spec := onlyTask(t, svc, KindConceptSupport); !spec.Truncated {
+			t.Error("a clipped section did not mark the task truncated")
+		}
+	})
+	t.Run("whole evidence fits", func(t *testing.T) {
+		gs := newStore(t)
+		seedConcept(t, gs)
+		if spec := onlyTask(t, New(gs, t.TempDir(), 0.5), KindConceptSupport); spec.Truncated {
+			t.Error("a task with all of its evidence is marked truncated")
+		}
+	})
+}
+
+// The delete rule has to survive the normal flow, where a changed section is extracted again before it is
+// verified again.
+func TestSecondUnsupportedStillDeletesAfterTheOwnerExtractsAgain(t *testing.T) {
+	gs := newStore(t)
+	ctx := context.Background()
+	setSection(t, gs, authText)
+	extractor := subagent.New(gs, nil, 0.5)
+	extract := func(description string) {
+		t.Helper()
+		if _, err := extractor.Submit(ctx, subagent.SubmitResult{TaskID: sectionID,
+			Concepts: []subagent.ConceptResult{{Label: "OAuth", Description: description, Confidence: 0.9}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	extract("the auth protocol")
+	svc := New(gs, t.TempDir(), 0.5)
+	spec := onlyTask(t, svc, KindConceptSupport)
+	if _, err := svc.Submit(ctx, Result{TaskID: spec.ID, Fingerprint: spec.Fingerprint, Verdict: Unsupported, Confidence: 0.9}); err != nil {
+		t.Fatal(err)
+	}
+
+	setSection(t, gs, "We now authenticate with mutual TLS.")
+	extract("the auth protocol in use")
+	if n := node(t, gs, spec.ID); n.Provenance != model.ProvAmbiguous {
+		t.Fatalf("re-extraction lifted the verifier's demotion: %+v", n)
+	}
+	spec = onlyTask(t, svc, KindConceptSupport)
+	if _, err := svc.Submit(ctx, Result{TaskID: spec.ID, Fingerprint: spec.Fingerprint, Verdict: Unsupported, Confidence: 0.9}); err != nil {
+		t.Fatal(err)
+	}
+	if node(t, gs, spec.ID) != nil {
+		t.Error("concept survived a second unsupported verdict because it had been extracted again in between")
+	}
+}
+
+// A section that merely reads like a concept (an edge from `chiton embed --link-similar`) never claimed it.
+func TestSimilarSectionIsNotEvidence(t *testing.T) {
+	gs := newStore(t)
+	ctx := context.Background()
+	seedConcept(t, gs)
+	_ = gs.UpsertNodes(ctx, []model.Node{{ID: "lookalike", Kind: model.KindDocSection, Label: "Tokens", SourceURI: "file://other.md",
+		Attrs: map[string]any{"text": "Tokens of every kind."}, Provenance: model.ProvExtracted, Confidence: 1}})
+	_ = gs.UpsertEdges(ctx, []model.Edge{{ID: model.NewEdgeID(conceptID, "lookalike", model.EdgeSimilarTo), Src: conceptID, Dst: "lookalike",
+		Kind: model.EdgeSimilarTo, Provenance: model.ProvInferred, Confidence: 0.9}})
+
+	spec := onlyTask(t, New(gs, t.TempDir(), 0.5), KindConceptSupport)
+	if len(spec.Evidence) != 1 || spec.Evidence[0].NodeID != sectionID {
+		t.Errorf("evidence = %+v, want only the section that describes the concept", spec.Evidence)
 	}
 }

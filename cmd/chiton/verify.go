@@ -130,13 +130,14 @@ func verifySweepCmd() *cobra.Command {
 		Short: "Demote concepts no source links to and re-link decisions to moved symbols",
 		Long: `sweep makes two deterministic passes over the graph. It calls no LLM.
 
-Concepts that no doc section, image or email links to any more become AMBIGUOUS,
-which the read tools hide by default. The next extraction that names such a
-concept takes it over and makes it visible again.
+Concepts that no source backs any more become AMBIGUOUS, which the read tools
+hide by default. A source backs the concepts it links to and the concepts those
+are related to. The next extraction that names a hidden concept takes it over
+and makes it visible again.
 
 Decisions whose governed symbol was deleted are looked up again by exact name,
-which restores the link when the symbol only moved to another file. Names that
-match nothing are listed.`,
+which restores the link when the symbol only moved to another file. A name that
+matches nothing, or that several symbols share, is listed and left unlinked.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, gs, err := loadStore(false)
@@ -163,6 +164,10 @@ func runVerifySweep(ctx context.Context, gs store.GraphStore, threshold float32,
 	if len(links.Unresolved) > 0 {
 		fmt.Fprintf(out, "verify sweep: %d decision reference(s) match no node: %s\n",
 			len(links.Unresolved), strings.Join(links.Unresolved, ", "))
+	}
+	if len(links.Ambiguous) > 0 {
+		fmt.Fprintf(out, "verify sweep: %d decision reference(s) match several nodes and were left unlinked: %s\n",
+			len(links.Ambiguous), strings.Join(links.Ambiguous, ", "))
 	}
 	return nil
 }

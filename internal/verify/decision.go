@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/Eric-Fernald/chiton/internal/fsutil"
@@ -13,8 +14,8 @@ import (
 )
 
 // decisionClaims builds one task per node decision d governs, checked against that node's current source. A
-// governed node whose source can't be read reliably is left out.
-func (s *Service) decisionClaims(ctx context.Context, d model.Node) ([]claim, error) {
+// governed node whose source can't be read reliably is left out. files caches what the call has read.
+func (s *Service) decisionClaims(ctx context.Context, d model.Node, files sourceFiles) ([]claim, error) {
 	sub, err := s.store.Neighbors(ctx, d.ID, 1, []model.EdgeKind{model.EdgeDecidedIn})
 	if err != nil {
 		return nil, fmt.Errorf("load links of decision %s: %w", d.ID, err)
@@ -34,7 +35,7 @@ func (s *Service) decisionClaims(ctx context.Context, d model.Node) ([]claim, er
 		if e.Src != d.ID || !ok || sym.Kind == model.KindMeeting {
 			continue
 		}
-		source, ok := s.sourceText(ctx, sym)
+		source, truncated, ok := s.sourceText(ctx, sym, files)
 		if !ok {
 			continue
 		}
@@ -46,6 +47,7 @@ func (s *Service) decisionClaims(ctx context.Context, d model.Node) ([]claim, er
 			Claim:        text,
 			Evidence:     evidence,
 			Fingerprint:  fingerprint(KindDecisionDrift, text, evidence),
+			Truncated:    truncated,
 			Schema:       decisionSchema,
 			Instructions: decisionInstructions,
 		}})
@@ -53,32 +55,89 @@ func (s *Service) decisionClaims(ctx context.Context, d model.Node) ([]claim, er
 	return claims, nil
 }
 
+// sourceFiles caches, for one Pending or Submit call, each source file read for decision evidence, keyed by
+// URI. Several governed symbols often share a file, which is then read and hashed once.
+type sourceFiles map[string]*sourceFile
+
+type sourceFile struct {
+	lines  []string // nil when the file can't be used: outside the root, unreadable, or changed since indexing
+	starts []int    // ascending start lines of the file's symbols, loaded on first need
+	loaded bool
+}
+
 // sourceText returns what n says now: its stored text, or for a code symbol the lines of its span read from
-// disk. ok is false when the file is outside the project root, unreadable, or changed since it was indexed.
-func (s *Service) sourceText(ctx context.Context, n model.Node) (text string, ok bool) {
+// disk. truncated reports that the text was cut to fit a task. ok is false when the file is outside the project
+// root, unreadable, or changed since it was indexed.
+func (s *Service) sourceText(ctx context.Context, n model.Node, files sourceFiles) (text string, truncated, ok bool) {
 	if text := strings.TrimSpace(model.AttrString(n.Attrs, "text")); text != "" {
-		return clip(text), true
+		text, truncated = clip(text)
+		return text, truncated, true
 	}
-	path, isFile := model.PathFromFileURI(n.SourceURI)
-	if !isFile || n.Span == nil || n.Span.StartLine <= 0 {
-		return "", false
+	if n.Span == nil || n.Span.StartLine <= 0 {
+		return "", false, false
+	}
+	f := s.sourceFile(ctx, n.SourceURI, files)
+	start, end := n.Span.StartLine, n.Span.EndLine
+	if end < start {
+		// Only the Go extractor records where a function ends. Without an end line the symbol runs to the
+		// line before the file's next symbol, or to the end of the file. One declaration line is not enough
+		// to judge a decision against.
+		end = len(f.lines)
+		if next := s.nextSymbolStart(ctx, n.SourceURI, start, f); next > 0 {
+			end = next - 1
+		}
+	}
+	end = min(end, len(f.lines))
+	if start > end {
+		return "", false, false
+	}
+	text, truncated = clip(strings.TrimRight(strings.Join(f.lines[start-1:end], "\n"), " \t\n"))
+	return text, truncated, strings.TrimSpace(text) != ""
+}
+
+// sourceFile reads uri's file once per call.
+func (s *Service) sourceFile(ctx context.Context, uri string, files sourceFiles) *sourceFile {
+	if f, ok := files[uri]; ok {
+		return f
+	}
+	f := &sourceFile{}
+	files[uri] = f
+	path, isFile := model.PathFromFileURI(uri)
+	if !isFile {
+		return f
 	}
 	// Task specs carry file contents, so nothing outside the project root (symlinks resolved) is read.
 	abs, err := fsutil.ResolveWithin(s.root, path)
 	if err != nil {
-		return "", false
+		return f
 	}
 	data, err := os.ReadFile(abs)
-	if err != nil || !s.indexedAs(ctx, n.SourceURI, data) {
-		return "", false
+	if err != nil || !s.indexedAs(ctx, uri, data) {
+		return f
 	}
-	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
-	start, end := n.Span.StartLine, min(max(n.Span.EndLine, n.Span.StartLine), len(lines))
-	if start > end {
-		return "", false
+	f.lines = strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	return f
+}
+
+// nextSymbolStart returns the start line of the first symbol in uri's file that begins after line, or 0 when
+// there is none (or the file's symbols can't be listed).
+func (s *Service) nextSymbolStart(ctx context.Context, uri string, line int, f *sourceFile) int {
+	if !f.loaded {
+		f.loaded = true
+		symbols, err := store.NodesMatching(ctx, s.store, store.NodeFilter{Kinds: []model.NodeKind{model.KindSymbol}, SourceURI: uri})
+		if err == nil {
+			for _, sym := range symbols {
+				if sym.Span != nil && sym.Span.StartLine > 0 {
+					f.starts = append(f.starts, sym.Span.StartLine)
+				}
+			}
+			slices.Sort(f.starts)
+		}
 	}
-	text = strings.Join(lines[start-1:end], "\n")
-	return clip(text), strings.TrimSpace(text) != ""
+	if i, _ := slices.BinarySearch(f.starts, line+1); i < len(f.starts) {
+		return f.starts[i]
+	}
+	return 0
 }
 
 // indexedAs reports whether data is the content the graph's spans for uri were taken from. After an edit the

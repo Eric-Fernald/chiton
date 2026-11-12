@@ -61,6 +61,37 @@ func TestVerifySubmitAppliesEachResultAndSummarises(t *testing.T) {
 	}
 }
 
+func TestVerifySweepListsNamesSeveralNodesShare(t *testing.T) {
+	ctx := context.Background()
+	gs, err := badgerstore.Open(filepath.Join(t.TempDir(), "graph.badger"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gs.Close()
+	sym := func(uri string) model.Node {
+		return model.Node{ID: model.NewNodeID(uri, "Open"), Kind: model.KindSymbol, Label: "Open", SourceURI: uri}
+	}
+	if err := gs.UpsertNodes(ctx, []model.Node{
+		sym("file://store.go"), sym("file://cli.go"),
+		{ID: "dec", Kind: model.KindDecision, Label: "Open read-only by default", SourceURI: "decision://m",
+			Provenance: model.ProvInferred, Confidence: 0.9,
+			Attrs: map[string]any{"meeting_id": "m", "governs": []map[string]any{{"label": "Open", "node_id": "gone"}}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	if err := runVerifySweep(ctx, gs, 0.5, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "match several nodes") || !strings.Contains(out.String(), "Open") {
+		t.Errorf("output should list Open as shared by several nodes:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "match no node") {
+		t.Errorf("an ambiguous name was reported as matching nothing:\n%s", out.String())
+	}
+}
+
 func TestVerifySweepDemotesOrphansAndReportsLostDecisionLinks(t *testing.T) {
 	ctx := context.Background()
 	gs, err := badgerstore.Open(filepath.Join(t.TempDir(), "graph.badger"))

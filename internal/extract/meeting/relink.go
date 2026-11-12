@@ -129,6 +129,7 @@ func governEdges(decID, symID, meetingID string, prov model.Provenance, conf flo
 type RelinkReport struct {
 	Relinked   int      `json:"relinked"`
 	Unresolved []string `json:"unresolved,omitempty"` // labels no node matches by exact name
+	Ambiguous  []string `json:"ambiguous,omitempty"`  // labels several nodes share, left unlinked
 }
 
 // Relink restores decision→symbol links that deleting a symbol's node removed. A symbol that moved files gets a
@@ -147,7 +148,7 @@ func (s *LinkService) Relink(ctx context.Context) (RelinkReport, error) {
 	var rep RelinkReport
 	var nodes []model.Node
 	var edges []model.Edge
-	unresolved := map[string]bool{}
+	unresolved, ambiguous := map[string]bool{}, map[string]bool{}
 	for _, d := range decisions {
 		refs, linked, recorded, err := s.governsOf(ctx, d)
 		if err != nil {
@@ -159,9 +160,13 @@ func (s *LinkService) Relink(ctx context.Context) (RelinkReport, error) {
 			if _, ok := linked[ref.NodeID]; ok || ref.Rejected {
 				continue
 			}
-			id, _ := s.matchSymbol(ctx, ref.Label)
+			id, shared := s.uniqueMatch(ctx, ref.Label)
 			if id == "" || meetingID == "" {
-				unresolved[ref.Label] = true
+				if shared {
+					ambiguous[ref.Label] = true
+				} else {
+					unresolved[ref.Label] = true
+				}
 				changed = changed || ref.NodeID != ""
 				refs[i].NodeID = ""
 				continue
@@ -189,8 +194,46 @@ func (s *LinkService) Relink(ctx context.Context) (RelinkReport, error) {
 			return RelinkReport{}, fmt.Errorf("restore decision links: %w", err)
 		}
 	}
-	rep.Unresolved = sortedKeys(unresolved)
+	rep.Unresolved, rep.Ambiguous = sortedKeys(unresolved), sortedKeys(ambiguous)
 	return rep, nil
+}
+
+// uniqueMatch returns the one code-side node whose label is exactly label (case-insensitive), preferring a
+// definition over other kinds and ignoring the reference stubs that share a function's label. When several
+// qualify it returns "" with shared set: names like Open and New exist in many packages, and a decision is not
+// attached to a guess. It reads every match, so the true one can't fall outside a result cap.
+func (s *LinkService) uniqueMatch(ctx context.Context, label string) (id string, shared bool) {
+	nodes, err := s.store.SearchNodes(ctx, label, 0)
+	if err != nil {
+		return "", false
+	}
+	var symbols, others []string
+	for _, n := range nodes {
+		switch {
+		case !codeSide(n) || model.IsExternal(n) || !strings.EqualFold(n.Label, label):
+		case n.Kind == model.KindSymbol:
+			symbols = append(symbols, n.ID)
+		default:
+			others = append(others, n.ID)
+		}
+	}
+	candidates := symbols
+	if len(candidates) == 0 {
+		candidates = others
+	}
+	if len(candidates) == 1 {
+		return candidates[0], false
+	}
+	return "", len(candidates) > 1
+}
+
+// codeSide reports whether a decision may be linked to n. Meeting-domain nodes are never link targets.
+func codeSide(n model.Node) bool {
+	switch n.Kind {
+	case model.KindMeeting, model.KindMeetingTurn, model.KindPerson, model.KindDecision, model.KindRationale:
+		return false
+	}
+	return true
 }
 
 // matchSymbol looks label up among code-side nodes. exact is a case-insensitive whole-label match, preferring a
@@ -206,10 +249,8 @@ func (s *LinkService) matchSymbol(ctx context.Context, label string) (exact, con
 	}
 	lower := strings.ToLower(label)
 	for _, n := range nodes {
-		if n.Kind == model.KindMeeting || n.Kind == model.KindMeetingTurn ||
-			n.Kind == model.KindPerson || n.Kind == model.KindDecision ||
-			n.Kind == model.KindRationale {
-			continue // never link a decision to another meeting-domain node
+		if !codeSide(n) {
+			continue
 		}
 		if strings.EqualFold(n.Label, label) {
 			if n.Kind == model.KindSymbol {

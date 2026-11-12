@@ -85,6 +85,9 @@ chiton meeting submit results.json         # ingest decisions + DECIDED_IN edges
   Chiton refuses a quote that is not there, so copy it, don't paraphrase.
 - Give an honest `confidence`. Below the threshold the verdict is recorded and
   nothing else changes, which is the right outcome when you are unsure.
+- A task marked `truncated` carries only part of the evidence. Judge what is
+  there. Chiton records `unsupported` or `mislinked` on such a task without
+  acting on it.
 
 CLI equivalents:
 

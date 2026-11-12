@@ -87,14 +87,17 @@ type Evidence struct {
 
 // TaskSpec is one claim to check. Claim and Evidence are ingested data. Schema and Instructions are constants.
 type TaskSpec struct {
-	ID           string     `json:"id"` // the submit task_id: a concept node ID, or "<decision ID>:<symbol ID>"
-	Kind         string     `json:"kind"`
-	Label        string     `json:"label"`
-	Claim        string     `json:"claim"`
-	Evidence     []Evidence `json:"evidence"`
-	Fingerprint  string     `json:"fingerprint"` // echoed on submit, so a verdict on outdated evidence is refused
-	Schema       string     `json:"schema"`
-	Instructions string     `json:"instructions"`
+	ID          string     `json:"id"` // the submit task_id: a concept node ID, or "<decision ID>:<symbol ID>"
+	Kind        string     `json:"kind"`
+	Label       string     `json:"label"`
+	Claim       string     `json:"claim"`
+	Evidence    []Evidence `json:"evidence"`
+	Fingerprint string     `json:"fingerprint"` // echoed on submit, so a verdict on outdated evidence is refused
+	// Truncated is set when the task carries only part of the evidence. A negative verdict is then recorded
+	// but not acted on, since the missing part may hold the support.
+	Truncated    bool   `json:"truncated,omitempty"`
+	Schema       string `json:"schema"`
+	Instructions string `json:"instructions"`
 }
 
 // claim is one checkable claim as Pending and Submit both derive it from the store.
@@ -146,8 +149,9 @@ func (s *Service) Pending(ctx context.Context, kind string, limit int) ([]TaskSp
 		if err != nil {
 			return nil, fmt.Errorf("load decisions: %w", err)
 		}
+		files := sourceFiles{}
 		for _, d := range decisions {
-			claims, err := s.decisionClaims(ctx, d)
+			claims, err := s.decisionClaims(ctx, d, files)
 			if err != nil {
 				return nil, err
 			}
@@ -224,7 +228,11 @@ func (s *Service) Submit(ctx context.Context, r Result) (Report, error) {
 		return Report{}, fmt.Errorf("submit: a drifted verdict needs a note saying what the code does now")
 	}
 
-	rep.Applied = r.Confidence >= s.threshold
+	// The verifier sees only what the task carries, so "nothing here supports it" says nothing about the part
+	// left out. A negative verdict on partial evidence is recorded, never acted on.
+	confident := r.Confidence >= s.threshold
+	negative := r.Verdict == Unsupported || r.Verdict == Mislinked
+	rep.Applied = confident && !(negative && c.spec.Truncated)
 	record := func(attrs map[string]any, fp string) {
 		attrs[attrVerifiedFP] = fp
 		attrs[attrVerifiedAt] = s.now().UTC().Format(time.RFC3339)
@@ -243,6 +251,9 @@ func (s *Service) Submit(ctx context.Context, r Result) (Report, error) {
 	}
 	if !rep.Applied {
 		rep.Effect = "recorded only: confidence is below the threshold"
+		if confident {
+			rep.Effect = "recorded only: the task carried part of the evidence, so a negative verdict is not acted on"
+		}
 	}
 	return rep, nil
 }
@@ -259,7 +270,7 @@ func (s *Service) claimFor(ctx context.Context, taskID string) (claim, error) {
 	case n == nil:
 		return claim{}, unknown
 	case isPair && n.Kind == model.KindDecision:
-		claims, err := s.decisionClaims(ctx, *n)
+		claims, err := s.decisionClaims(ctx, *n, sourceFiles{})
 		if err != nil {
 			return claim{}, err
 		}
@@ -316,16 +327,16 @@ func quotedFrom(evidence []Evidence, quote string) (string, error) {
 // squeeze collapses each run of whitespace in s to one space.
 func squeeze(s string) string { return strings.Join(strings.Fields(s), " ") }
 
-// clip cuts text to maxEvidenceChars bytes on a rune boundary.
-func clip(text string) string {
+// clip cuts text to maxEvidenceChars bytes on a rune boundary and reports whether it cut anything.
+func clip(text string) (string, bool) {
 	if len(text) <= maxEvidenceChars {
-		return text
+		return text, false
 	}
 	n := maxEvidenceChars
 	for n > 0 && !utf8.RuneStart(text[n]) {
 		n--
 	}
-	return text[:n]
+	return text[:n], true
 }
 
 func setOrDelete(attrs map[string]any, key, value string) {
@@ -334,15 +345,4 @@ func setOrDelete(attrs map[string]any, key, value string) {
 		return
 	}
 	attrs[key] = value
-}
-
-// attrFloat reads a numeric attr, which is a float64 once it has been through the store.
-func attrFloat(attrs map[string]any, key string) float32 {
-	switch v := attrs[key].(type) {
-	case float64:
-		return float32(v)
-	case float32:
-		return v
-	}
-	return 0
 }

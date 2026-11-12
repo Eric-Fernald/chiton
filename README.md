@@ -199,7 +199,7 @@ starts your assistant (see [Encryption at rest](#encryption-at-rest)).
 | `chiton embed` | Embed nodes for semantic search (`--provider`, `--all`, `--link-similar`, `--exact`). Covers the whole store, re-embedding only nodes whose text or model changed. |
 | `chiton search <query>` | Hybrid semantic + graph search from the CLI. |
 | `chiton extract pending\|submit` | Emit semantic-extraction task specs / ingest the structured results. |
-| `chiton verify sweep` | Demote concepts no source links to any more to `AMBIGUOUS`, and re-link decisions whose governed symbol moved files. Deterministic, no LLM. |
+| `chiton verify sweep` | Demote concepts no source backs any more to `AMBIGUOUS`, and re-link decisions whose governed symbol moved files. A name several symbols share is listed, not guessed. Deterministic, no LLM. |
 | `chiton verify pending\|submit` | Emit tasks that re-check inferred concepts and decisions against their current sources / apply the verdicts. Only claims whose evidence changed are emitted. |
 | `chiton analyze <path>` | Run deterministic rules; persist findings as graph nodes. `--diff` / `--since <ref>`, `--no-llm`. |
 | `chiton analyze pending\|submit` | Emit LLM-rule task specs / ingest LLM findings. |

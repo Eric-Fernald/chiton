@@ -2,6 +2,7 @@ package meeting
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -125,6 +126,126 @@ func TestRelinkReportsSymbolThatIsGone(t *testing.T) {
 	}
 	if got := governedBy(t, gs, dec); len(got) != 1 || got[0] != (governRef{Label: "fetchAll"}) {
 		t.Errorf("governs = %+v, want fetchAll kept with no node", got)
+	}
+}
+
+// Names like Open and New exist in many packages. With two candidates there is no telling which one the decision
+// was about, so Relink links neither.
+func TestRelinkDoesNotGuessBetweenSameNamedSymbols(t *testing.T) {
+	gs := newStore(t)
+	ctx := context.Background()
+	svc := NewLinkService(gs, 0.5)
+	dec := submitRetryDecision(t, gs, svc, "fetchAll")
+	deleteSymbol(t, gs, "fetchAll", "file://client.go")
+	a, b := symbolNode("fetchAll", "file://http.go"), symbolNode("fetchAll", "file://legacy.go")
+	if err := gs.UpsertNodes(ctx, []model.Node{a, b}); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := svc.Relink(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Relinked != 0 || !slices.Equal(rep.Ambiguous, []string{"fetchAll"}) || len(rep.Unresolved) != 0 {
+		t.Errorf("report = %+v, want fetchAll reported ambiguous", rep)
+	}
+	if decidedIn(t, gs, dec, a.ID) || decidedIn(t, gs, dec, b.ID) {
+		t.Error("Relink picked one of two same-named symbols")
+	}
+}
+
+// The reference stub a caller in another package points at shares the function's label. It is not a second
+// definition, and a crowd of longer names must not push the real match out of reach.
+func TestRelinkFindsTheOneDefinitionAmongStubsAndLongerNames(t *testing.T) {
+	gs := newStore(t)
+	ctx := context.Background()
+	svc := NewLinkService(gs, 0.5)
+	dec := submitRetryDecision(t, gs, svc, "fetchAll")
+	deleteSymbol(t, gs, "fetchAll", "file://client.go")
+	moved := symbolNode("fetchAll", "file://http.go")
+	stub := symbolNode("fetchAll", "pkg://example.com/client")
+	stub.Attrs = map[string]any{"external": true}
+	nodes := []model.Node{moved, stub}
+	for i := range 400 {
+		nodes = append(nodes, symbolNode(fmt.Sprintf("fetchAllPages%d", i), "file://pages.go"))
+	}
+	if err := gs.UpsertNodes(ctx, nodes); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := svc.Relink(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Relinked != 1 || !decidedIn(t, gs, dec, moved.ID) {
+		t.Errorf("report = %+v, want the decision relinked to the moved definition", rep)
+	}
+}
+
+// A resubmission is the meeting's full linkage, so a decision that no longer names a symbol loses its links to it.
+func TestResubmitDropsLinksToReferencesNoLongerNamed(t *testing.T) {
+	gs := newStore(t)
+	ctx := context.Background()
+	meetingID := seedMeetingAndCode(t, gs)
+	svc := NewLinkService(gs, 0.5)
+	submit := func(ref string, discussed ...string) LinkReport {
+		t.Helper()
+		rep, err := svc.Submit(ctx, LinkResult{TaskID: meetingID, Discussed: discussed,
+			Decisions: []DecisionResult{{Summary: "Cap retries at 3", Confidence: 0.9, References: []string{ref}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rep
+	}
+	has := func(src, dst string, kind model.EdgeKind) bool {
+		t.Helper()
+		edges, _ := gs.AllEdges(ctx)
+		return slices.ContainsFunc(edges, func(e model.Edge) bool { return e.Src == src && e.Dst == dst && e.Kind == kind })
+	}
+	fetchAll, cacheGet := symbolNode("fetchAll", "file://client.go").ID, symbolNode("cacheGet", "file://cache.go").ID
+
+	submit("fetchAll", "cacheGet")
+	decisions, _ := store.NodesMatching(ctx, gs, store.NodeFilter{Kinds: []model.NodeKind{model.KindDecision}})
+	dec := decisions[0].ID
+	// Drift a verification verdict recorded against the old reference.
+	if err := gs.UpsertEdges(ctx, []model.Edge{{ID: model.NewEdgeID(fetchAll, dec, model.EdgeContradicts), Src: fetchAll, Dst: dec,
+		Kind: model.EdgeContradicts, Provenance: model.ProvInferred, Confidence: 0.9}}); err != nil {
+		t.Fatal(err)
+	}
+	participants := 0
+	edges, _ := gs.AllEdges(ctx)
+	for _, e := range edges {
+		if e.Src == meetingID && e.Kind == model.EdgeMentioned && e.Provenance == model.ProvExtracted {
+			participants++
+		}
+	}
+
+	rep := submit("cacheGet")
+	if rep.EdgesRemoved == 0 {
+		t.Errorf("EdgesRemoved = 0, want the old reference's edges counted")
+	}
+	for name, gone := range map[string]bool{
+		"decision DECIDED_IN fetchAll":  has(dec, fetchAll, model.EdgeDecidedIn),
+		"fetchAll DISCUSSED_IN meeting": has(fetchAll, meetingID, model.EdgeDiscussedIn),
+		"meeting MENTIONED fetchAll":    has(meetingID, fetchAll, model.EdgeMentioned),
+		"fetchAll CONTRADICTS decision": has(fetchAll, dec, model.EdgeContradicts),
+	} {
+		if gone {
+			t.Errorf("%s survived a resubmission that no longer names fetchAll", name)
+		}
+	}
+	if !has(dec, cacheGet, model.EdgeDecidedIn) || !has(cacheGet, meetingID, model.EdgeDiscussedIn) {
+		t.Error("the new reference is not linked")
+	}
+	after := 0
+	edges, _ = gs.AllEdges(ctx)
+	for _, e := range edges {
+		if e.Src == meetingID && e.Kind == model.EdgeMentioned && e.Provenance == model.ProvExtracted {
+			after++
+		}
+	}
+	if after != participants || participants == 0 {
+		t.Errorf("participant edges went from %d to %d; ingest's own edges must stay", participants, after)
 	}
 }
 

@@ -3,6 +3,10 @@ package model
 // DefaultConfidenceThreshold splits INFERRED from AMBIGUOUS when none is set.
 const DefaultConfidenceThreshold float32 = 0.5
 
+// AttrVerifyDemoted is set (true) on a concept that a verification verdict demoted to AMBIGUOUS. It lives here
+// because the extraction flow must leave such a concept demoted when its owner extracts it again.
+const AttrVerifyDemoted = "demoted_by_verify"
+
 // ResolveProvenance maps a host-supplied confidence to a provenance tag and a
 // clamped confidence. At or above threshold → INFERRED; below → AMBIGUOUS.
 func ResolveProvenance(confidence, threshold float32) (Provenance, float32) {

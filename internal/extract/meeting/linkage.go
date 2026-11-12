@@ -85,6 +85,7 @@ type LinkReport struct {
 	TaskID         string   `json:"task_id"`
 	DecisionsAdded int      `json:"decisions_added"`
 	EdgesAdded     int      `json:"edges_added"`
+	EdgesRemoved   int      `json:"edges_removed"` // links an earlier submit wrote that this one omits
 	LinkedSymbols  int      `json:"linked_symbols"`
 	Ambiguous      int      `json:"ambiguous"`
 	UnresolvedRefs []string `json:"unresolved_refs,omitempty"`
@@ -329,10 +330,58 @@ func (s *LinkService) Submit(ctx context.Context, r LinkResult) (LinkReport, err
 			return LinkReport{}, fmt.Errorf("upsert linkage edges: %w", err)
 		}
 	}
+	// New edges are in before the superseded ones go, so a failure here loses nothing.
+	stale, err := s.staleLinkEdges(ctx, r.TaskID, keep, edges)
+	if err != nil {
+		return LinkReport{}, err
+	}
+	if rep.EdgesRemoved, err = store.DeleteEdges(ctx, s.store, stale); err != nil {
+		return LinkReport{}, fmt.Errorf("delete superseded links: %w", err)
+	}
 
 	rep.LinkedSymbols = len(linkedSymbols)
 	rep.UnresolvedRefs = sortedKeys(unresolved)
 	return rep, nil
+}
+
+// linkKinds are the edge kinds that Submit, and a verification verdict on its decisions, write around a meeting.
+var linkKinds = []model.EdgeKind{
+	model.EdgeDecidedIn, model.EdgeDiscussedIn, model.EdgeMentioned,
+	model.EdgeActionFor, model.EdgeRationaleFor, model.EdgeContradicts,
+}
+
+// staleLinkEdges returns the IDs of linkage edges around the meeting and its kept decisions that written omits.
+// A submission is the meeting's full linkage: a decision keeps its ID when its summary is unchanged, so without
+// this its links to references the new result dropped would stay. Ingest's own edges (meeting to participant)
+// are EXTRACTED and stay, and so does recorded drift for a symbol the result still links.
+func (s *LinkService) staleLinkEdges(ctx context.Context, meetingID string, keep map[string]bool, written []model.Edge) ([]string, error) {
+	kept := make(map[string]bool, len(written))
+	governs := map[[2]string]bool{} // {decision, symbol}
+	for _, e := range written {
+		kept[e.ID] = true
+		if e.Kind == model.EdgeDecidedIn {
+			governs[[2]string{e.Src, e.Dst}] = true
+		}
+	}
+	seen := map[string]bool{}
+	var stale []string
+	for _, id := range append(sortedKeys(keep), meetingID) {
+		sub, err := s.store.Neighbors(ctx, id, 1, linkKinds)
+		if err != nil {
+			return nil, fmt.Errorf("load prior links: %w", err)
+		}
+		for _, e := range sub.Edges {
+			if e.Provenance == model.ProvExtracted || kept[e.ID] || seen[e.ID] {
+				continue
+			}
+			if e.Kind == model.EdgeContradicts && governs[[2]string{e.Dst, e.Src}] {
+				continue
+			}
+			seen[e.ID] = true
+			stale = append(stale, e.ID)
+		}
+	}
+	return stale, nil
 }
 
 // resolveSymbol resolves a label to a node ID by exact case-insensitive symbol match, then exact match on

@@ -975,13 +975,22 @@ re-verify. Judge each `claim` against its `evidence`, then call
 Two task kinds:
 
 - `concept_support`: a concept, checked against the text of every doc section
-  linked to it (at most 6 sections, 6 000 characters each). A concept with no
-  text evidence, such as one only an image describes, gets no task.
+  an extraction linked to it (at most 6 sections, 6 000 characters each). A
+  section that only reads like the concept, linked by `chiton embed
+  --link-similar`, is not evidence. A concept with no text evidence, such as
+  one only an image describes, gets no task.
 - `decision_drift`: one task per symbol a decision governs, checked against the
-  symbol's current source lines. The file is read from disk and must lie inside
+  symbol's current source lines. Only the Go extractor records where a function
+  ends, so any other symbol runs to the line before the file's next symbol, or
+  to the end of the file. The file is read from disk and must lie inside
   the project root, symlinks resolved. A symbol whose file changed since it was
   indexed is skipped until the next `chiton build` or `chiton sync`, because its
   stored line span may no longer point at it.
+
+A task whose evidence was cut to fit carries `"truncated": true`. The verifier
+then sees only part of the evidence, so `submit_verification` records a
+negative verdict (`unsupported`, `mislinked`) on such a task without acting on
+it.
 
 | Parameter | Type | Required / default | Description |
 |---|---|---|---|
@@ -1115,8 +1124,10 @@ no-op.
 Ingest the result of one meeting-linkage task (from `pending_meeting_links`).
 Creates decision/rationale nodes and `DECIDED_IN` / `DISCUSSED_IN` /
 `ACTION_FOR` / `RATIONALE_FOR` / `MENTIONED` edges tagged `INFERRED` (or
-`AMBIGUOUS` below the confidence threshold). Re-submitting supersedes the
-meeting's prior decisions. Each decision keeps the references it named in
+`AMBIGUOUS` below the confidence threshold). **A result is the meeting's full
+linkage.** Re-submitting supersedes the meeting's prior decisions and removes
+the links of kept decisions to references the new result no longer names
+(`edges_removed`). Each decision keeps the references it named in
 `attrs.governs`, so `chiton verify sweep` can restore a link after the symbol
 moves to another file. Decision and rationale nodes are stored under
 `decision://<meeting source_uri>`, so re-ingesting the transcript or Slack
@@ -1153,6 +1164,7 @@ conversation keeps them and their edges. **Requires a writable store.**
   "task_id": "3a4b5c6d7e8f9012",
   "decisions_added": 1,
   "edges_added": 4,
+  "edges_removed": 0,
   "linked_symbols": 2,
   "ambiguous": 0
 }
@@ -1179,9 +1191,9 @@ What a verdict at or above the threshold does:
 |---|---|
 | `supported` | Records the verdict and quote. Restores a concept an earlier `unsupported` verdict demoted, and removes recorded drift. Provenance stays `INFERRED`: `EXTRACTED` still means the parser saw it. |
 | `revised` | Rewrites the concept's description. Run `chiton embed` to refresh its vector. |
-| `unsupported` | Demotes the concept to `AMBIGUOUS`. A second `unsupported` verdict, given after the evidence changed again, deletes it. |
+| `unsupported` | Demotes the concept to `AMBIGUOUS`. A second `unsupported` verdict, given after the evidence changed again, deletes it. The demotion survives the concept being extracted again, and only a `supported` or `revised` verdict lifts it. Not acted on when the task was `truncated`. |
 | `drifted` | Keeps the decision's link and adds a `CONTRADICTS` edge from the symbol to the decision, which `decisions_about` shows as `drift`. |
-| `mislinked` | Removes the decision's `DECIDED_IN` edge to that symbol. `chiton verify sweep` will not restore it. |
+| `mislinked` | Removes the decision's `DECIDED_IN` edge to that symbol. `chiton verify sweep` will not restore it. Not acted on when the task was `truncated`. |
 
 The verdict is stored with its fingerprint, on the concept node or on the
 decision's `DECIDED_IN` edge, so the claim is not checked again until its claim
