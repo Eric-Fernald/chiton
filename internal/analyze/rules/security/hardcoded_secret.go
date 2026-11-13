@@ -20,6 +20,7 @@ func (HardcodedSecret) Meta() analyze.Meta {
 		Category:   analyze.CategorySecurity,
 		Severity:   analyze.SeverityCritical,
 		Scope:      analyze.FileScope,
+		Languages:  analyze.SourceLangs,
 		Summary:    "Inline credential pattern detected (AWS key, JWT, bearer token, etc.)",
 		Fix:        "Move the value to an environment variable or secret manager.",
 		Provenance: analyze.ProvenanceDeterministic,

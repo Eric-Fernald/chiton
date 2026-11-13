@@ -264,7 +264,7 @@ func TestChunkTextHardCap(t *testing.T) {
 	// A single unbroken block longer than size (no paragraph breaks) must still
 	// be split so no chunk exceeds the budget.
 	one := strings.Repeat("x", 100)
-	chunks := chunkText(one, 10, 40)
+	chunks := chunkText(one, 10)
 	if len(chunks) != 10 {
 		t.Errorf("chunks=%d want 10", len(chunks))
 	}
@@ -275,6 +275,28 @@ func TestChunkTextHardCap(t *testing.T) {
 	}
 	if strings.Join(chunks, "") != one {
 		t.Error("split chunks do not reconstitute the original text")
+	}
+}
+
+// TestBuildGraphKeepsWholeLongBody checks a long body becomes many sections within the size cap and none of
+// its lines is dropped.
+func TestBuildGraphKeepsWholeLongBody(t *testing.T) {
+	line := "We decided to ship the retry backoff change next sprint.\n"
+	const lines = 10_000
+	nodes, _, _, _ := buildGraph(Message{Subject: "long", Body: strings.Repeat(line, lines)}, "email://message/long", time.Now())
+	kept := 0
+	for _, node := range nodes {
+		if node.Kind != model.KindDocSection {
+			continue
+		}
+		txt, _ := node.Attrs["text"].(string)
+		if len(txt) > maxSectionBytes {
+			t.Errorf("section %q is %d bytes, over the %d cap", node.Label, len(txt), maxSectionBytes)
+		}
+		kept += strings.Count(txt, "retry backoff")
+	}
+	if kept != lines {
+		t.Errorf("sections hold %d of the body's %d lines", kept, lines)
 	}
 }
 

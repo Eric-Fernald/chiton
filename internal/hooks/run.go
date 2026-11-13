@@ -106,6 +106,13 @@ func scanStaged(ctx context.Context, az *analyze.Analyzer, root string) (*analyz
 func FormatResult(w io.Writer, r *Result) {
 	fmt.Fprintf(w, "chiton %s: %d files scanned, %d findings (%d blocking) [%s]\n",
 		r.Stage, r.FilesScanned, r.TotalFindings, r.BlockingCount, r.Duration.Round(time.Millisecond))
+	// A skipped file was never checked, so say so even when the gate passes.
+	if len(r.Skipped) > 0 {
+		fmt.Fprintf(w, "warning: %d path(s) could not be analyzed and were not checked:\n", len(r.Skipped))
+		for _, s := range r.Skipped {
+			fmt.Fprintf(w, "  %s\n", s)
+		}
+	}
 	if r.BlockingCount == 0 {
 		return
 	}

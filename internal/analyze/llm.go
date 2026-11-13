@@ -23,7 +23,7 @@ import (
 // single huge generated file can't blow the host assistant's context budget.
 const maxLLMInputBytes = 60_000
 
-// llmStateFile is the .chiton sidecar file that records submitted (rule, file-content) tasks. It lives
+// llmStateFile is the .chiton sidecar file that records submitted (rule, file, content) tasks. It lives
 // outside the graph so marker nodes don't flood clustering and summaries.
 const llmStateFile = "llm-analyzed.json"
 
@@ -31,6 +31,8 @@ const llmStateFile = "llm-analyzed.json"
 // code can never end up in a chiton prompt.
 const llmSubmitSchema = `{
   "task_id": "<echo the task id>",
+  "rule_id": "<echo the task's rule_id>",
+  "target_uri": "<echo the task's source_uri>",
   "findings": [
     {"line": <1-based start line of the problem>,
      "end_line": <end line, optional>,
@@ -43,7 +45,7 @@ const llmSubmitSchema = `{
 // LLMTaskSpec is one LLM rule applied to one file. Input carries the source, and Schema and
 // Instructions define the JSON to return through submit_analysis or `chiton analyze submit`.
 type LLMTaskSpec struct {
-	ID           string `json:"id"`       // stable: sha256(rule_id + content_sha)
+	ID           string `json:"id"`       // stable: sha256(rule_id + source_uri + content_sha)
 	RuleID       string `json:"rule_id"`  // also echoed back on submit
 	Category     string `json:"category"` // the rule's category
 	Severity     string `json:"severity"` // default severity for findings
@@ -119,10 +121,10 @@ type llmStateEntry struct {
 	At        time.Time `json:"at"`
 }
 
-// LLMTaskID is the stable task ID for an (LLM rule, file-content) pair. Keying on the content SHA
-// means a changed file yields a fresh task.
-func LLMTaskID(ruleID, contentSHA string) string {
-	h := sha256.Sum256([]byte("llm-task::" + ruleID + "::" + contentSHA))
+// LLMTaskID is the stable task ID for an (LLM rule, file URI, file content) triple. The URI keeps
+// byte-identical files apart, and the content SHA means a changed file yields a fresh task.
+func LLMTaskID(ruleID, targetURI, contentSHA string) string {
+	h := sha256.Sum256([]byte("llm-task::" + ruleID + "::" + targetURI + "::" + contentSHA))
 	return hex.EncodeToString(h[:16])
 }
 
@@ -183,7 +185,7 @@ func (s *LLMService) Pending(ctx context.Context, root, ruleFilter string, limit
 
 		for _, r := range applicable {
 			m := r.meta
-			id := LLMTaskID(m.ID, contentSHA)
+			id := LLMTaskID(m.ID, uri, contentSHA)
 			if _, done := state.Analyzed[id]; done {
 				continue
 			}
@@ -241,10 +243,7 @@ func (s *LLMService) Submit(ctx context.Context, r LLMResult) (LLMReport, error)
 	rep := LLMReport{TaskID: r.TaskID}
 
 	// Derive the file node ID exactly as the AST extractors do, so AFFECTS points at the real file node.
-	var targetNodeID string
-	if r.TargetURI != "" {
-		targetNodeID = model.NewNodeID(r.TargetURI, r.TargetURI)
-	}
+	targetNodeID := model.NewNodeID(r.TargetURI, r.TargetURI)
 
 	// FindingID ignores the message, so same-line findings collide. Keep the highest-confidence one so a
 	// colliding AMBIGUOUS finding never downgrades a confident INFERRED one.
@@ -331,18 +330,18 @@ func (s *LLMService) Submit(ctx context.Context, r LLMResult) (LLMReport, error)
 	return rep, nil
 }
 
-// verifyTaskBinding re-derives LLMTaskID(rule, sha(file)) from target_uri's current content and
-// rejects a mismatch. It skips a non-file or unreadable target, which has no findings to overwrite.
+// verifyTaskBinding rejects a target_uri that is not a file:// URI (a finding needs a file to hang on), then
+// re-derives the task ID from the file's current content and rejects a mismatch. An unreadable file passes.
 func (s *LLMService) verifyTaskBinding(taskID, ruleID, targetURI string) error {
 	path, ok := model.PathFromFileURI(targetURI)
-	if !ok {
-		return nil
+	if !ok || path == "" {
+		return fmt.Errorf("submit: target_uri is required and must be the task spec's source_uri (a file:// URI), got %q", targetURI)
 	}
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}
-	if want := LLMTaskID(ruleID, model.ContentSHA(content)); want != taskID {
+	if want := LLMTaskID(ruleID, targetURI, model.ContentSHA(content)); want != taskID {
 		return fmt.Errorf("submit: task_id does not match rule %q and target_uri %q "+
 			"(wrong file, or the file changed since the task was issued — re-run pending_analyses)", ruleID, targetURI)
 	}

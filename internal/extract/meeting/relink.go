@@ -237,15 +237,16 @@ func codeSide(n model.Node) bool {
 }
 
 // matchSymbol looks label up among code-side nodes. exact is a case-insensitive whole-label match, preferring a
-// symbol over another kind. contains is the first node whose label merely contains label.
-func (s *LinkService) matchSymbol(ctx context.Context, label string) (exact, contains string) {
+// symbol over another kind. contains is the first node whose label merely contains label. Like uniqueMatch it
+// reads every match, so a result cap can't hide the symbol behind same-named nodes.
+func (s *LinkService) matchSymbol(ctx context.Context, label string) (exact, contains string, err error) {
 	label = strings.TrimSpace(label)
 	if label == "" {
-		return "", ""
+		return "", "", nil
 	}
-	nodes, err := s.store.SearchNodes(ctx, label, 25)
+	nodes, err := s.store.SearchNodes(ctx, label, 0)
 	if err != nil {
-		return "", ""
+		return "", "", fmt.Errorf("look up %q: %w", label, err)
 	}
 	lower := strings.ToLower(label)
 	for _, n := range nodes {
@@ -254,7 +255,7 @@ func (s *LinkService) matchSymbol(ctx context.Context, label string) (exact, con
 		}
 		if strings.EqualFold(n.Label, label) {
 			if n.Kind == model.KindSymbol {
-				return n.ID, contains // best: exact symbol match
+				return n.ID, contains, nil // best: exact symbol match
 			}
 			if exact == "" {
 				exact = n.ID
@@ -265,5 +266,5 @@ func (s *LinkService) matchSymbol(ctx context.Context, label string) (exact, con
 			contains = n.ID
 		}
 	}
-	return exact, contains
+	return exact, contains, nil
 }

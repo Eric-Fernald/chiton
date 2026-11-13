@@ -19,6 +19,7 @@ func (MagicNumber) Meta() analyze.Meta {
 		Category:   analyze.CategoryQuality,
 		Severity:   analyze.SeverityLow,
 		Scope:      analyze.FileScope,
+		Languages:  analyze.SourceLangs,
 		Summary:    "Unnamed integer literal in code (>= 100); consider naming it.",
 		Fix:        "Extract the value into a named constant explaining its meaning.",
 		Provenance: analyze.ProvenanceDeterministic,

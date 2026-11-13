@@ -40,12 +40,12 @@ are (re-)embedded; vectors of deleted or no-longer-embeddable nodes are pruned.
 The default provider is local Ollama (no data leaves the machine). Use
 --provider hash for an offline, dependency-free embedder (lower quality; good
 for CI and demos). Restart 'chiton serve' afterwards to load the new vectors.`,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) (err error) {
 			cfg, gs, err := loadStore(false)
 			if err != nil {
 				return err
 			}
-			defer gs.Close()
+			defer closeGraphStore(gs.Close, &err)
 			out := cmd.OutOrStdout()
 
 			es, ok := store.GraphStore(gs).(store.EmbeddingStore)
@@ -338,7 +338,7 @@ func extractSubmitCmd() *cobra.Command {
 		Use:   "submit <results.json>",
 		Short: "Ingest extraction results (a SubmitResult object or array)",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (err error) {
 			cfg, err := config.Load()
 			if err != nil {
 				return err
@@ -357,7 +357,7 @@ func extractSubmitCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer gs.Close()
+			defer closeGraphStore(gs.Close, &err)
 
 			// Embed new concepts inline unless --no-embed; ignore embedder
 			// construction errors so submit still works offline.
@@ -371,33 +371,49 @@ func extractSubmitCmd() *cobra.Command {
 			svc := subagent.New(gs, emb, cfg.Semantic.ConfidenceThreshold)
 
 			out := cmd.OutOrStdout()
-			var concepts, updated, edges, removed, ambiguous int
-			for _, r := range results {
-				rep, err := svc.Submit(cmd.Context(), r)
-				if err != nil {
-					return err
-				}
-				concepts += rep.ConceptsAdded
-				updated += rep.ConceptsUpdated
-				edges += rep.EdgesAdded
-				removed += rep.EdgesRemoved
-				ambiguous += rep.Ambiguous
-				fmt.Fprintf(out, "submit: %s — %d concept(s), %d edge(s), %d ambiguous\n",
-					rep.TaskID, rep.ConceptsAdded, rep.EdgesAdded, rep.Ambiguous)
-			}
-			fmt.Fprintf(out, "submit: done — %d task(s), %d concept(s), %d edge(s), %d ambiguous\n",
-				len(results), concepts, edges, ambiguous)
-			if updated > 0 || removed > 0 {
-				fmt.Fprintf(out, "submit: %d existing concept(s) updated, %d superseded edge(s) removed\n", updated, removed)
-			}
+			err = runExtractSubmit(cmd.Context(), svc, results, out)
 			if emb != nil {
 				fmt.Fprintln(out, "submit: restart 'chiton serve' to index new concepts for semantic_search")
 			}
-			return nil
+			return err
 		},
 	}
 	cmd.Flags().StringVar(&provider, "provider", "", "Embedding provider for new concepts (ollama|hash)")
 	cmd.Flags().StringVar(&modelName, "model", "", "Embedding model override")
 	cmd.Flags().BoolVar(&noEmbed, "no-embed", false, "Do not embed new concepts (defer to a later 'chiton embed')")
 	return cmd
+}
+
+// runExtractSubmit applies each result and prints what happened. One failed result (its section is gone, say)
+// does not stop the rest. It returns an error when any failed.
+func runExtractSubmit(ctx context.Context, svc *subagent.Service, results []subagent.SubmitResult, out io.Writer) error {
+	var concepts, updated, edges, removed, dropped, ambiguous, failed int
+	for _, r := range results {
+		rep, err := svc.Submit(ctx, r)
+		if err != nil {
+			failed++
+			fmt.Fprintf(out, "submit: %s: failed — %v\n", r.TaskID, err)
+			continue
+		}
+		concepts += rep.ConceptsAdded
+		updated += rep.ConceptsUpdated
+		edges += rep.EdgesAdded
+		removed += rep.EdgesRemoved
+		dropped += rep.EdgesDropped
+		ambiguous += rep.Ambiguous
+		fmt.Fprintf(out, "submit: %s — %d concept(s), %d edge(s), %d ambiguous\n",
+			rep.TaskID, rep.ConceptsAdded, rep.EdgesAdded, rep.Ambiguous)
+	}
+	fmt.Fprintf(out, "submit: done — %d task(s), %d concept(s), %d edge(s), %d ambiguous, %d failed\n",
+		len(results), concepts, edges, ambiguous, failed)
+	if updated > 0 || removed > 0 {
+		fmt.Fprintf(out, "submit: %d existing concept(s) updated, %d superseded edge(s) removed\n", updated, removed)
+	}
+	if dropped > 0 {
+		fmt.Fprintf(out, "submit: %d edge(s) dropped: their 'to' named no concept in the same result\n", dropped)
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d of %d extraction result(s) failed", failed, len(results))
+	}
+	return nil
 }

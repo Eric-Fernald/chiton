@@ -21,6 +21,7 @@ func (LongFunction) Meta() analyze.Meta {
 		Category:   analyze.CategoryQuality,
 		Severity:   analyze.SeverityLow,
 		Scope:      analyze.FileScope,
+		Languages:  analyze.SourceLangs,
 		Summary:    fmt.Sprintf("Function exceeds %d lines.", LongFunctionLines),
 		Fix:        "Extract helpers or split the function along logical seams.",
 		Provenance: analyze.ProvenanceDeterministic,

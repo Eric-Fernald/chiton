@@ -39,7 +39,7 @@ func teamsFetchCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "fetch --meeting <online-meeting-id>",
 		Short: "Fetch and ingest all transcripts for one Teams meeting",
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) (err error) {
 			if meetingID == "" {
 				return fmt.Errorf("--meeting <online-meeting-id> is required")
 			}
@@ -51,7 +51,7 @@ func teamsFetchCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer gs.Close()
+			defer closeGraphStore(gs.Close, &err)
 
 			rep, err := teams.NewIngester(gs, src).IngestMeeting(cmd.Context(), meetingID)
 			if err != nil {
@@ -81,7 +81,7 @@ named by --client-state-file).
 
 Bind to localhost behind a tunnel/reverse proxy; Graph requires HTTPS and a
 public URL for the subscription itself.`,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) (err error) {
 			if err := secretFlagRemoved(cmd, "client-state", "client-state-file", "CHITON_TEAMS_CLIENT_STATE"); err != nil {
 				return err
 			}
@@ -103,7 +103,7 @@ public URL for the subscription itself.`,
 			if err != nil {
 				return err
 			}
-			defer gs.Close()
+			defer closeGraphStore(gs.Close, &err)
 
 			ing := teams.NewIngester(gs, src)
 			out := cmd.OutOrStdout()

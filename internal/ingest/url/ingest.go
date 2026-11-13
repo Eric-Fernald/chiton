@@ -19,7 +19,7 @@ import (
 // concept-extraction task stays within a sane context budget.
 const defaultSectionBytes = 8000
 
-// maxSections bounds how many doc_section children a single huge page produces.
+// maxSections bounds how many doc_section children a single huge page produces; text past them is dropped.
 const maxSections = 60
 
 // Ingester turns a URL into graph nodes. The zero value is not usable; build one
@@ -80,6 +80,8 @@ type Report struct {
 	TextBytes     int    `json:"text_bytes"`
 	Sections      int    `json:"sections"`
 	NodesUpserted int    `json:"nodes_upserted"`
+	// Truncated is set when the text ran past maxSections sections and the rest was dropped.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // Add fetches a URL (or local file) and upserts a url node and its doc_section children. It is idempotent
@@ -142,6 +144,14 @@ func (ing *Ingester) Add(ctx context.Context, rawURL string, opts AddOptions) (R
 	if opts.Contributor != "" {
 		urlAttrs["contributor"] = opts.Contributor
 	}
+	limit := opts.MaxTextBytes
+	if limit <= 0 {
+		limit = defaultSectionBytes
+	}
+	chunks, truncated := chunkText(text, limit, maxSections)
+	if truncated {
+		urlAttrs["truncated"] = true // text_bytes counts the whole text, the sections hold only its start
+	}
 
 	nodes := []model.Node{{
 		ID:            urlID,
@@ -157,11 +167,6 @@ func (ing *Ingester) Add(ctx context.Context, rawURL string, opts AddOptions) (R
 	}}
 	var edges []model.Edge
 
-	limit := opts.MaxTextBytes
-	if limit <= 0 {
-		limit = defaultSectionBytes
-	}
-	chunks := chunkText(text, limit, maxSections)
 	for i, sec := range chunks {
 		secLabel := title
 		if len(chunks) > 1 {
@@ -206,12 +211,13 @@ func (ing *Ingester) Add(ctx context.Context, rawURL string, opts AddOptions) (R
 		TextBytes:     len(text),
 		Sections:      len(chunks),
 		NodesUpserted: len(nodes),
+		Truncated:     truncated,
 	}, nil
 }
 
-// chunkText splits text into chunks of at most size bytes at paragraph boundaries. Once maxChunks is
-// reached, the final chunk absorbs the remainder.
-func chunkText(text string, size, maxChunks int) []string {
+// chunkText splits text into chunks of at most size bytes, at paragraph boundaries where it can. It reports
+// whether text past maxChunks chunks was dropped.
+func chunkText(text string, size, maxChunks int) ([]string, bool) {
 	if size <= 0 {
 		size = defaultSectionBytes
 	}

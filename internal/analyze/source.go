@@ -7,6 +7,10 @@ import (
 	"sync"
 )
 
+// SourceLangs is the Meta.Languages list for a rule that reads any source code: every extension with a code
+// extractor, so not Markdown or images. Rules share it, so never mutate it.
+var SourceLangs = []string{"go", "py", "js", "ts", "jsx", "tsx", "rs", "java"}
+
 // IsTestSource reports whether a source URI (or path) points at a test file: Go *_test.go,
 // JS/TS *.test.* or *.spec.*, or anything under a tests/ dir. Rule packages share it so they agree.
 func IsTestSource(sourceURI string) bool {

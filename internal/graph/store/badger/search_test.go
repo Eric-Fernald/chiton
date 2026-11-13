@@ -66,6 +66,53 @@ func TestReadOnlySearchNodesMatchesScan(t *testing.T) {
 	}
 }
 
+// TestSearchNodesLimitKeepsExactLabel checks a limit can't cut off the exact label behind earlier substring matches.
+func TestSearchNodesLimitKeepsExactLabel(t *testing.T) {
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "graph.badger")
+	rw, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := []model.Node{
+		{ID: "n00", Kind: model.KindSymbol, Label: "NewEngine"},
+		{ID: "n01", Kind: model.KindSymbol, Label: "NewStore"},
+		{ID: "n02", Kind: model.KindSymbol, Label: "renew"},
+		{ID: "n03", Kind: model.KindSymbol, Label: "New"},
+		{ID: "n04", Kind: model.KindSymbol, Label: "new"},
+	}
+	if err := rw.UpsertNodes(ctx, nodes); err != nil {
+		t.Fatal(err)
+	}
+	check := func(s *Store, name string) {
+		t.Helper()
+		for limit, want := range map[int][]string{
+			1: {"n03"},
+			2: {"n03", "n04"},
+			3: {"n03", "n04", "n00"},
+			0: {"n03", "n04", "n00", "n01", "n02"},
+		} {
+			got, err := s.SearchNodes(ctx, "New", limit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(idsOf(got), want) {
+				t.Errorf("%s SearchNodes(New, %d) = %v, want exact labels first: %v", name, limit, idsOf(got), want)
+			}
+		}
+	}
+	check(rw, "writable")
+	if err := rw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ro, err := OpenReadOnly(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	check(ro, "read-only")
+}
+
 func TestReadOnlySearchNodesSkipsRecordDecoding(t *testing.T) {
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "graph.badger")

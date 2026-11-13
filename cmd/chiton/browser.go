@@ -37,7 +37,7 @@ func browserIngestCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ingest",
 		Short: "Ingest browser history (auto-detect, or --db <path>)",
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) (err error) {
 			sinceT, err := parseSince(since)
 			if err != nil {
 				return err
@@ -46,7 +46,7 @@ func browserIngestCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer gs.Close()
+			defer closeGraphStore(gs.Close, &err)
 
 			ing := browser.New(gs)
 			opts := browser.Options{Limit: limit, Since: sinceT, MinVisits: minVisits, KeepQuery: keepQuery}
@@ -94,7 +94,7 @@ func browserWatchCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "watch",
 		Short: "Watch browser history and re-ingest as it changes",
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) (err error) {
 			var dbs []browser.DetectedDB
 			if dbPath != "" {
 				dbs = []browser.DetectedDB{{Browser: name, Path: dbPath}}
@@ -109,7 +109,7 @@ func browserWatchCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer gs.Close()
+			defer closeGraphStore(gs.Close, &err)
 
 			// cmd.Context() is cancelled by the root signal handler on Ctrl-C,
 			// so the watcher stops and the store closes cleanly.

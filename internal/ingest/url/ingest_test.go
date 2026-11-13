@@ -130,12 +130,56 @@ func TestChunkText(t *testing.T) {
 	for range 10 {
 		long += "paragraph number with some words here\n\n"
 	}
-	chunks := chunkText(long, 60, 5)
+	chunks, truncated := chunkText(long, 60, 5)
 	if len(chunks) < 2 {
 		t.Errorf("expected multiple chunks, got %d", len(chunks))
 	}
 	if len(chunks) > 5 {
 		t.Errorf("chunks=%d exceeds maxChunks 5", len(chunks))
+	}
+	if !truncated {
+		t.Error("ten paragraphs into five 60-byte chunks should report truncation")
+	}
+}
+
+// A transcript has one newline per turn and never a blank line, so only a hard split keeps its sections in budget.
+func TestAddCapsSectionSizeAndReportsTruncation(t *testing.T) {
+	line := "Host: welcome back to the show, today we talk about retries.\n"
+	cases := []struct {
+		name      string
+		lines     int
+		sections  int
+		truncated bool
+	}{
+		{"fits under the section cap", 2000, 16, false},
+		{"runs past the section cap", 12_000, maxSections, true},
+	}
+	for _, c := range cases {
+		ing, gs := newIngester(t, &fetchResult{
+			canonicalURL: "https://example.com/transcript",
+			contentType:  "text/plain",
+			body:         []byte(strings.Repeat(line, c.lines)),
+		})
+		rep, err := ing.Add(context.Background(), "https://example.com/transcript", AddOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rep.Sections != c.sections || rep.Truncated != c.truncated {
+			t.Errorf("%s: report has %d sections, truncated=%v; want %d, %v", c.name, rep.Sections, rep.Truncated, c.sections, c.truncated)
+		}
+		nodes, _ := gs.AllNodes(context.Background())
+		for _, n := range nodes {
+			switch n.Kind {
+			case model.KindURL:
+				if got, _ := n.Attrs["truncated"].(bool); got != c.truncated {
+					t.Errorf("%s: url node truncated attr = %v, want %v", c.name, n.Attrs["truncated"], c.truncated)
+				}
+			case model.KindDocSection:
+				if txt, _ := n.Attrs["text"].(string); len(txt) > defaultSectionBytes {
+					t.Errorf("%s: section %q is %d bytes, over the %d cap", c.name, n.Label, len(txt), defaultSectionBytes)
+				}
+			}
+		}
 	}
 }
 

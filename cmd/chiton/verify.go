@@ -73,7 +73,7 @@ func verifySubmitCmd() *cobra.Command {
 		Use:   "submit <results.json>",
 		Short: "Apply verification verdicts (a Result object or array)",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (err error) {
 			cfg, err := config.Load()
 			if err != nil {
 				return err
@@ -90,10 +90,8 @@ func verifySubmitCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer gs.Close()
+			defer closeGraphStore(gs.Close, &err)
 			svc := verify.New(gs, config.ProjectDir(), cfg.Semantic.ConfidenceThreshold)
-			// A refused result is not a usage mistake, so keep the flag help out of the output.
-			cmd.SilenceUsage = true
 			return runVerifySubmit(cmd.Context(), svc, results, cmd.OutOrStdout())
 		},
 	}
@@ -139,12 +137,12 @@ Decisions whose governed symbol was deleted are looked up again by exact name,
 which restores the link when the symbol only moved to another file. A name that
 matches nothing, or that several symbols share, is listed and left unlinked.`,
 		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) (err error) {
 			cfg, gs, err := loadStore(false)
 			if err != nil {
 				return err
 			}
-			defer gs.Close()
+			defer closeGraphStore(gs.Close, &err)
 			return runVerifySweep(cmd.Context(), gs, cfg.Semantic.ConfidenceThreshold, cmd.OutOrStdout())
 		},
 	}

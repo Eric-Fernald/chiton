@@ -22,6 +22,7 @@ func (DeeplyNested) Meta() analyze.Meta {
 		Category:   analyze.CategoryQuality,
 		Severity:   analyze.SeverityLow,
 		Scope:      analyze.FileScope,
+		Languages:  analyze.SourceLangs,
 		Summary:    fmt.Sprintf("Code indented deeper than %d levels — high cognitive complexity.", MaxIndent),
 		Fix:        "Extract inner blocks into helper functions, or invert conditions with early returns.",
 		Provenance: analyze.ProvenanceDeterministic,

@@ -37,7 +37,7 @@ func slackFetchCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "fetch --channel <channel-id> [--thread <thread-ts>]",
 		Short: "Fetch and ingest a Slack channel (or a single thread)",
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) (err error) {
 			if channelID == "" {
 				return fmt.Errorf("--channel <channel-id> is required")
 			}
@@ -49,7 +49,7 @@ func slackFetchCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer gs.Close()
+			defer closeGraphStore(gs.Close, &err)
 
 			rep, err := slack.NewIngester(gs, src).IngestConversation(cmd.Context(), channelID, threadTS)
 			if err != nil {
@@ -80,7 +80,7 @@ url_verification handshake and verifies every request's X-Slack-Signature.
 Set CHITON_SLACK_SIGNING_SECRET, or pass --signing-secret-file with the path of
 a file that holds it. Bind to localhost behind a tunnel/reverse proxy; Slack
 requires a public HTTPS Request URL.`,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) (err error) {
 			if err := secretFlagRemoved(cmd, "signing-secret", "signing-secret-file", "CHITON_SLACK_SIGNING_SECRET"); err != nil {
 				return err
 			}
@@ -102,7 +102,7 @@ requires a public HTTPS Request URL.`,
 			if err != nil {
 				return err
 			}
-			defer gs.Close()
+			defer closeGraphStore(gs.Close, &err)
 
 			ing := slack.NewIngester(gs, src)
 			out := cmd.OutOrStdout()

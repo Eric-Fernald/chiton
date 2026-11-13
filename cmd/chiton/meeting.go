@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -55,12 +56,12 @@ func meetingIngestCmd() *cobra.Command {
 		Use:   "ingest <transcript-file>...",
 		Short: "Parse transcript files (.vtt/.srt/.txt) into meeting nodes",
 		Args:  cobra.MinimumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (err error) {
 			_, gs, err := loadStore(false)
 			if err != nil {
 				return err
 			}
-			defer gs.Close()
+			defer closeGraphStore(gs.Close, &err)
 
 			out := cmd.OutOrStdout()
 			ctx := cmd.Context()
@@ -105,7 +106,7 @@ func meetingTranscribeCmd() *cobra.Command {
 meeting. Build chiton with -tags whisper_cgo for the in-process whisper.cpp
 backend instead of the shell-out.`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (err error) {
 			audioPath := args[0]
 			tr, err := audio.New(audio.Config{
 				Binary:   whisperBin,
@@ -133,7 +134,7 @@ backend instead of the shell-out.`,
 			if err != nil {
 				return err
 			}
-			defer gs.Close()
+			defer closeGraphStore(gs.Close, &err)
 			n, err := ingestTranscript(cmd.Context(), gs, tr)
 			if err != nil {
 				return err
@@ -183,7 +184,7 @@ func meetingSubmitCmd() *cobra.Command {
 		Use:   "submit <results.json>",
 		Short: "Ingest meeting-linkage results (a LinkResult object or array)",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (err error) {
 			data, err := os.ReadFile(args[0])
 			if err != nil {
 				return fmt.Errorf("read %s: %w", args[0], err)
@@ -196,32 +197,42 @@ func meetingSubmitCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer gs.Close()
+			defer closeGraphStore(gs.Close, &err)
 
 			svc := meeting.NewLinkService(gs, cfg.Semantic.ConfidenceThreshold)
-			out := cmd.OutOrStdout()
-			var decisions, edges, linked, ambiguous int
-			for _, r := range results {
-				rep, err := svc.Submit(cmd.Context(), r)
-				if err != nil {
-					return err
-				}
-				decisions += rep.DecisionsAdded
-				edges += rep.EdgesAdded
-				linked += rep.LinkedSymbols
-				ambiguous += rep.Ambiguous
-				fmt.Fprintf(out, "submit: %s — %d decision(s), %d edge(s), %d symbol(s) linked, %d ambiguous\n",
-					rep.TaskID, rep.DecisionsAdded, rep.EdgesAdded, rep.LinkedSymbols, rep.Ambiguous)
-				if len(rep.UnresolvedRefs) > 0 {
-					fmt.Fprintf(out, "submit:   unresolved refs: %v\n", rep.UnresolvedRefs)
-				}
-			}
-			fmt.Fprintf(out, "submit: done — %d task(s), %d decision(s), %d edge(s), %d symbol link(s), %d ambiguous\n",
-				len(results), decisions, edges, linked, ambiguous)
-			return nil
+			return runMeetingSubmit(cmd.Context(), svc, results, cmd.OutOrStdout())
 		},
 	}
 	return cmd
+}
+
+// runMeetingSubmit applies each result and prints what happened. One failed result does not stop the rest.
+// It returns an error when any failed.
+func runMeetingSubmit(ctx context.Context, svc *meeting.LinkService, results []meeting.LinkResult, out io.Writer) error {
+	var decisions, edges, linked, ambiguous, failed int
+	for _, r := range results {
+		rep, err := svc.Submit(ctx, r)
+		if err != nil {
+			failed++
+			fmt.Fprintf(out, "submit: %s: failed — %v\n", r.TaskID, err)
+			continue
+		}
+		decisions += rep.DecisionsAdded
+		edges += rep.EdgesAdded
+		linked += rep.LinkedSymbols
+		ambiguous += rep.Ambiguous
+		fmt.Fprintf(out, "submit: %s — %d decision(s), %d edge(s), %d symbol(s) linked, %d ambiguous\n",
+			rep.TaskID, rep.DecisionsAdded, rep.EdgesAdded, rep.LinkedSymbols, rep.Ambiguous)
+		if len(rep.UnresolvedRefs) > 0 {
+			fmt.Fprintf(out, "submit:   unresolved refs: %v\n", rep.UnresolvedRefs)
+		}
+	}
+	fmt.Fprintf(out, "submit: done — %d task(s), %d decision(s), %d edge(s), %d symbol link(s), %d ambiguous, %d failed\n",
+		len(results), decisions, edges, linked, ambiguous, failed)
+	if failed > 0 {
+		return fmt.Errorf("%d of %d meeting-linkage result(s) failed", failed, len(results))
+	}
+	return nil
 }
 
 // addURLCmd ingests an external URL or local file as a url node + doc sections.
@@ -235,12 +246,12 @@ func addURLCmd() *cobra.Command {
 local file and ingest its readable text as a url node with doc_section children,
 so the existing 'chiton extract' / pending_extractions flow extracts its concepts.`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (err error) {
 			_, gs, err := loadStore(false)
 			if err != nil {
 				return err
 			}
-			defer gs.Close()
+			defer closeGraphStore(gs.Close, &err)
 
 			rep, err := urlingest.New(gs).Add(cmd.Context(), args[0], urlingest.AddOptions{
 				Kind:        kind,
@@ -254,6 +265,9 @@ so the existing 'chiton extract' / pending_extractions flow extracts its concept
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "add-url: %q (%s, %s) — %d bytes, %d section(s), %d node(s)\n",
 				rep.Title, rep.Kind, rep.ContentType, rep.TextBytes, rep.Sections, rep.NodesUpserted)
+			if rep.Truncated {
+				fmt.Fprintf(cmd.ErrOrStderr(), "add-url: warning: the text ran past the section cap; only the first %d section(s) were kept\n", rep.Sections)
+			}
 			fmt.Fprintln(out, "add-url: next: 'chiton embed' + 'chiton extract pending' to index its concepts")
 			return nil
 		},

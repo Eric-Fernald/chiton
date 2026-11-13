@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"math/rand"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"slices"
@@ -67,6 +69,10 @@ func rootCmd() *cobra.Command {
 clusters them with Leiden, and serves the result to AI assistants over MCP
 so they spend fewer tokens navigating architecture, docs, and prior tool calls.`,
 		Version: resolveVersion(),
+		// main prints the returned error once; cobra printing it too showed every failure twice.
+		SilenceErrors: true,
+		// Runs after flags and args are validated, so only an error from a running command skips the usage text.
+		PersistentPreRun: func(cmd *cobra.Command, _ []string) { cmd.SilenceUsage = true },
 	}
 
 	root.AddCommand(initCmd(), buildCmd(), queryCmd(), serveCmd(), installCmd(), uninstallCmd(), doctorCmd(), clusterCmd(), reportCmd(), visualizeCmd(), dashboardCmd(), analyzeCmd(), findingsCmd(), hooksCmd(), embedCmd(), searchCmd(), extractCmd(), verifyCmd(), syncCmd(), meetingCmd(), addURLCmd(), teamsCmd(), slackCmd(), browserCmd(), emailCmd(), exportCmd(), mergeCmd(), benchCmd(), versionCmd())
@@ -378,6 +384,12 @@ func openGraphStore(graphPath string, readOnly bool) (*badgerstore.Store, error)
 	if err != nil {
 		return nil, fmt.Errorf("open store: resolve encryption key: %w", err)
 	}
+	if readOnly {
+		// Badger's own error for a store that was never built names a missing directory, not the fix.
+		if _, err := os.Stat(graphPath); errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("open store: no graph at %s: run 'chiton build .' in the project first", graphPath)
+		}
+	}
 	if info.key == nil {
 		if msg := plaintextNotice(graphPath); msg != "" {
 			fmt.Fprintln(os.Stderr, msg)
@@ -476,6 +488,14 @@ func loadStore(readOnly bool) (*config.Config, *badgerstore.Store, error) {
 	return cfg, gs, nil
 }
 
+// closeGraphStore runs a store's Close and reports its failure through *err unless the command already failed.
+// A writable store flushes and seals on Close, so an error there means the command's writes may not have landed.
+func closeGraphStore(closeFn func() error, err *error) {
+	if cerr := closeFn(); cerr != nil && *err == nil {
+		*err = fmt.Errorf("close store: %w", cerr)
+	}
+}
+
 // loadBuildCache loads the content-hash cache that build and sync share beside the graph store, noting on
 // errOut when it belonged to another store and every file will be re-extracted.
 func loadBuildCache(graphPath, storeEpoch string, errOut io.Writer) (*cache.Cache, error) {
@@ -485,6 +505,9 @@ func loadBuildCache(graphPath, storeEpoch string, errOut io.Writer) (*cache.Cach
 	}
 	if ch.Discarded() {
 		fmt.Fprintln(errOut, "chiton: the content cache was written for a different graph store; re-extracting every file")
+	}
+	if err := ch.Corrupt(); err != nil {
+		fmt.Fprintf(errOut, "chiton: ignoring the unreadable content cache (%v); re-extracting every file\n", err)
 	}
 	return ch, nil
 }
@@ -556,7 +579,7 @@ func buildCmd() *cobra.Command {
 		Use:   "build <path>",
 		Short: "Walk a directory and extract its graph",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (err error) {
 			cfg, err := config.Load()
 			if err != nil {
 				return err
@@ -570,7 +593,7 @@ func buildCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer gs.Close()
+			defer closeGraphStore(gs.Close, &err)
 
 			ch, err := loadBuildCache(cfg.GraphPath, gs.Epoch(), cmd.ErrOrStderr())
 			if err != nil {
@@ -962,7 +985,7 @@ exclusively. The 'chiton extract submit' CLI is the alternative write path.
 
 Pass --graph to point at a specific store; this is what 'chiton install'
 records in the MCP config so the server uses the same store as 'chiton build'.`,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) (err error) {
 			cfg, err := config.Load()
 			if err != nil {
 				return err
@@ -977,7 +1000,7 @@ records in the MCP config so the server uses the same store as 'chiton build'.`,
 			if err != nil {
 				return err
 			}
-			defer gs.Close()
+			defer closeGraphStore(gs.Close, &err)
 
 			clusterResults, err := loadClusterSidecar(cfg.GraphPath)
 			if err != nil {
@@ -1324,8 +1347,8 @@ func recordHookScan(ctx context.Context, w io.Writer, stage hooks.Stage, scan *a
 	}
 	gs, err := openGraphStore(cfg.GraphPath, false)
 	if err == nil {
-		defer gs.Close()
 		err = analyze.New(gs, nil).Record(ctx, scan)
+		closeGraphStore(gs.Close, &err)
 	}
 	if err != nil {
 		fmt.Fprintf(w, "chiton %s: note: findings not recorded (%v)\n", stage, err)
@@ -1347,7 +1370,61 @@ func parseStages(raw []string) ([]hooks.Stage, error) {
 	return out, nil
 }
 
+// resolveGitHooksDir returns the directory git runs repoRoot's hooks from, asking git so a linked worktree
+// (shared hooks) and core.hooksPath (husky, lefthook) resolve as git resolves them. It refuses a
+// core.hooksPath outside the repository: hooks written there would run in every repository sharing it.
 func resolveGitHooksDir(repoRoot string) (string, error) {
+	out, err := exec.Command("git", "-C", repoRoot, "rev-parse", "--git-common-dir", "--git-path", "hooks").Output()
+	if errors.Is(err, exec.ErrNotFound) {
+		return gitHooksDirFromLayout(repoRoot)
+	}
+	if err != nil {
+		return "", fmt.Errorf("no git repository at %s", repoRoot)
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) != 2 {
+		return "", fmt.Errorf("unexpected git rev-parse output %q", out)
+	}
+	abs := func(p string) string {
+		p = filepath.FromSlash(strings.TrimSpace(p))
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(repoRoot, p)
+		}
+		return canonicalPath(p)
+	}
+	commonDir, hooksDir := abs(lines[0]), abs(lines[1])
+	if !pathWithin(commonDir, hooksDir) && !pathWithin(canonicalPath(repoRoot), hooksDir) {
+		return "", fmt.Errorf("core.hooksPath points at %s, outside this repository; chiton won't write hooks other repositories would run. "+
+			"Call 'chiton hooks run --stage <stage>' from your own hook there instead", hooksDir)
+	}
+	return hooksDir, nil
+}
+
+// canonicalPath resolves symlinks (and, on Windows, short names) in the part of p that exists, so two
+// spellings of one directory compare equal.
+func canonicalPath(p string) string {
+	p, err := filepath.Abs(p)
+	if err != nil {
+		return p
+	}
+	if real, err := filepath.EvalSymlinks(p); err == nil {
+		return real
+	}
+	parent := filepath.Dir(p)
+	if parent == p {
+		return p
+	}
+	return filepath.Join(canonicalPath(parent), filepath.Base(p))
+}
+
+// pathWithin reports whether target is base or lies under it.
+func pathWithin(base, target string) bool {
+	rel, err := filepath.Rel(base, target)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+}
+
+// gitHooksDirFromLayout finds the hooks directory by reading .git, for a machine with no git on PATH.
+func gitHooksDirFromLayout(repoRoot string) (string, error) {
 	hooksDir := filepath.Join(repoRoot, ".git", "hooks")
 	gitDir := filepath.Join(repoRoot, ".git")
 	info, err := os.Stat(gitDir)

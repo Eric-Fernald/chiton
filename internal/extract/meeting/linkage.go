@@ -251,7 +251,10 @@ func (s *LinkService) Submit(ctx context.Context, r LinkResult) (LinkReport, err
 				continue
 			}
 			named[ref] = true
-			symID := s.resolveSymbol(ctx, ref)
+			symID, err := s.resolveSymbol(ctx, ref)
+			if err != nil {
+				return LinkReport{}, fmt.Errorf("submit: %w", err)
+			}
 			governs = append(governs, governRef{Label: ref, NodeID: symID})
 			if symID == "" {
 				unresolved[ref] = true
@@ -291,7 +294,10 @@ func (s *LinkService) Submit(ctx context.Context, r LinkResult) (LinkReport, err
 	// Symbols merely discussed (no decision): symbol --DISCUSSED_IN--> meeting
 	// and meeting --MENTIONED--> symbol.
 	for _, ref := range r.Discussed {
-		symID := s.resolveSymbol(ctx, ref)
+		symID, err := s.resolveSymbol(ctx, ref)
+		if err != nil {
+			return LinkReport{}, fmt.Errorf("submit: %w", err)
+		}
 		if symID == "" {
 			if rr := strings.TrimSpace(ref); rr != "" {
 				unresolved[rr] = true
@@ -386,12 +392,12 @@ func (s *LinkService) staleLinkEdges(ctx context.Context, meetingID string, keep
 
 // resolveSymbol resolves a label to a node ID by exact case-insensitive symbol match, then exact match on
 // another node kind, then substring match. It returns "" rather than invent a link to an unknown symbol.
-func (s *LinkService) resolveSymbol(ctx context.Context, label string) string {
-	exact, contains := s.matchSymbol(ctx, label)
-	if exact != "" {
-		return exact
+func (s *LinkService) resolveSymbol(ctx context.Context, label string) (string, error) {
+	exact, contains, err := s.matchSymbol(ctx, label)
+	if exact != "" || err != nil {
+		return exact, err
 	}
-	return contains
+	return contains, nil
 }
 
 // deleteSupersededDecisions removes the meeting's decision and rationale nodes not in keep, under DecisionURI or

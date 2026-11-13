@@ -59,7 +59,7 @@ func RemoveRulesBlock(path string) (changed bool, err error) {
 	if !strings.Contains(text, ChitonBlockStart) {
 		return false, nil
 	}
-	next := stripBlock(text)
+	next := stripStrayMarkers(stripAllBlocks(text))
 	if strings.TrimSpace(next) == "" && !isSymlink(path) { // a symlinked rules file is emptied, not unlinked
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return true, fmt.Errorf("remove %s: %w", path, err)
@@ -85,26 +85,41 @@ func RulesFileHasChiton(path string) (bool, error) {
 	return strings.Contains(string(existing), ChitonBlockStart), nil
 }
 
-// blockSpan returns the byte span of the first chiton block. ok is false if a marker is missing or the
-// first end marker precedes the first start marker.
+// blockSpan returns the byte span of the first well-formed chiton block: the first end marker that follows a
+// start marker, paired with the nearest start before it. Text between an unpaired start and that block is the
+// user's, so it stays outside the span.
 func blockSpan(text string) (start, end int, ok bool) {
-	start = strings.Index(text, ChitonBlockStart)
-	end = strings.Index(text, ChitonBlockEnd)
-	if start < 0 || end < 0 || end < start {
+	first := strings.Index(text, ChitonBlockStart)
+	if first < 0 {
 		return 0, 0, false
 	}
+	rel := strings.Index(text[first:], ChitonBlockEnd)
+	if rel < 0 {
+		return 0, 0, false
+	}
+	end = first + rel
+	start = strings.LastIndex(text[:end], ChitonBlockStart)
 	return start, end + len(ChitonBlockEnd), true
 }
 
+// replaceBlock puts block where the first well-formed chiton block is, or appends it when there is none. Any
+// other block and any unpaired marker goes, so one block remains however the file was hand-edited.
 func replaceBlock(text, block string) string {
 	start, end, ok := blockSpan(text)
 	if !ok {
-		// Malformed (e.g. a stray end marker before any start): strip any partial
-		// chiton regions and append a fresh block instead of clobbering user text.
-		return strings.TrimRight(stripAllBlocks(text), "\n") + "\n\n" + block + "\n"
+		return strings.TrimRight(stripStrayMarkers(text), "\n") + "\n\n" + block + "\n"
 	}
-	// Strip any further blocks from the tail so a duplicated block cannot survive the replacement.
-	return text[:start] + block + stripAllBlocks(text[end:])
+	return stripStrayMarkers(text[:start]) + block + stripStrayMarkers(stripAllBlocks(text[end:]))
+}
+
+// stripStrayMarkers removes unpaired marker lines from text that holds no well-formed block, keeping the
+// text around them: what follows an orphan start marker may be the user's.
+func stripStrayMarkers(text string) string {
+	for _, m := range []string{ChitonBlockStart, ChitonBlockEnd} {
+		text = strings.ReplaceAll(text, m+"\n", "")
+		text = strings.ReplaceAll(text, m, "")
+	}
+	return text
 }
 
 // stripAllBlocks removes every well-formed chiton block from text, leaving all
@@ -113,7 +128,7 @@ func stripAllBlocks(text string) string {
 	for {
 		next := stripBlock(text)
 		if next == text {
-			return text // no block is left, or the markers are out of order
+			return text // no well-formed block is left
 		}
 		text = next
 	}

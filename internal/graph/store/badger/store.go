@@ -264,9 +264,6 @@ func dstKey(e *model.Edge) []byte {
 
 // --- transaction helpers ---
 
-// errStopScan, returned from a scan callback, ends the scan early without error.
-var errStopScan = errors.New("stop scan")
-
 // prefixIterator iterates the keys under pfx without prefetching values. Values are small and inline in
 // the LSM tree, so prefetching would only add overhead.
 func prefixIterator(txn *badgerdb.Txn, pfx string) *badgerdb.Iterator {
@@ -285,9 +282,6 @@ func scan(txn *badgerdb.Txn, pfx string, fn func(key, val []byte) error) error {
 		item := it.Item()
 		key := item.Key()[len(pfx):]
 		if err := item.Value(func(v []byte) error { return fn(key, v) }); err != nil {
-			if errors.Is(err, errStopScan) {
-				return nil
-			}
 			return err
 		}
 	}
@@ -985,8 +979,9 @@ type labelOnly struct {
 	Label string `json:"label"`
 }
 
-// SearchNodes returns the nodes whose label contains query (case-insensitive), in key order. A read-only
-// store never changes, so it matches against a label index built on first use; a writable one scans.
+// SearchNodes returns the nodes whose label contains query (case-insensitive): labels equal to query first,
+// then the rest, each in key order, so a limit can't cut off the exact match. A read-only store never
+// changes, so it matches against a label index built on first use; a writable one scans.
 func (s *Store) SearchNodes(ctx context.Context, query string, limit int) ([]model.Node, error) {
 	if s.labels == nil {
 		return s.scanLabels(query, limit)
@@ -996,44 +991,55 @@ func (s *Store) SearchNodes(ctx context.Context, query string, limit int) ([]mod
 		return nil, err
 	}
 	q := strings.ToLower(query)
-	var ids []string
+	var exact, rest []string
 	for _, e := range idx {
-		if !strings.Contains(e.lower, q) {
-			continue
-		}
-		ids = append(ids, e.id)
-		if limit > 0 && len(ids) >= limit {
-			break
+		switch {
+		case e.lower == q:
+			exact = append(exact, e.id)
+		case (limit <= 0 || len(rest) < limit) && strings.Contains(e.lower, q):
+			rest = append(rest, e.id)
 		}
 	}
-	return s.GetNodes(ctx, ids)
+	return s.GetNodes(ctx, capMatches(exact, rest, limit))
+}
+
+// capMatches joins exact label matches and the other matches, exact first, keeping at most limit (all when <= 0).
+func capMatches[T any](exact, rest []T, limit int) []T {
+	out := append(exact, rest...)
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
 }
 
 // scanLabels is SearchNodes over the live key space: it decodes each label, then only matching records in full.
 func (s *Store) scanLabels(query string, limit int) ([]model.Node, error) {
 	q := strings.ToLower(query)
-	var results []model.Node
+	var exact, rest []model.Node
 	err := s.db.View(func(txn *badgerdb.Txn) error {
 		return scan(txn, pfxNode, func(_, v []byte) error {
 			var probe labelOnly
 			if err := json.Unmarshal(v, &probe); err != nil {
 				return err
 			}
-			if !strings.Contains(strings.ToLower(probe.Label), q) {
+			lower := strings.ToLower(probe.Label)
+			isExact := lower == q
+			if !isExact && ((limit > 0 && len(rest) >= limit) || !strings.Contains(lower, q)) {
 				return nil
 			}
 			var n model.Node
 			if err := json.Unmarshal(v, &n); err != nil {
 				return err
 			}
-			results = append(results, n)
-			if limit > 0 && len(results) >= limit {
-				return errStopScan
+			if isExact {
+				exact = append(exact, n)
+			} else {
+				rest = append(rest, n)
 			}
 			return nil
 		})
 	})
-	return results, err
+	return capMatches(exact, rest, limit), err
 }
 
 // loadLabels reads every node's lowercased label, in key order, decoding only the label.

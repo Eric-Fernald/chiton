@@ -107,6 +107,44 @@ func helper() string { return "" }
 	}
 }
 
+// TestGoExtractorGenericReceivers checks methods on generic or parenthesised receivers are labelled with their
+// type, so they don't collapse into the same-named plain function's node.
+func TestGoExtractorGenericReceivers(t *testing.T) {
+	src := `package p
+
+type A[T any] struct{}
+
+func (a *A[T]) Len() int { return 0 }
+
+type B[T, U any] struct{}
+
+func (b *B[T, U]) Len() int { return 0 }
+
+type C[T any] struct{}
+
+func (C[T]) Len() int { return 0 }
+
+type D struct{}
+
+func (d *(D)) Len() int { return 0 }
+
+func Len() int { return 0 }
+`
+	nodes, _, err := (&GoExtractor{}).ExtractFile(context.Background(), writeTempFile(t, "p.go", src))
+	if err != nil {
+		t.Fatalf("ExtractFile: %v", err)
+	}
+	labels := map[string]bool{}
+	for _, n := range nodes {
+		labels[n.Label] = true
+	}
+	for _, want := range []string{"A.Len", "B.Len", "C.Len", "D.Len", "Len"} {
+		if !labels[want] {
+			t.Errorf("missing symbol %q; got %v", want, labels)
+		}
+	}
+}
+
 // TestGoExtractorDedupes checks repeated calls, a doubly imported package, and duplicate init funcs yield each
 // node and edge once.
 func TestGoExtractorDedupes(t *testing.T) {

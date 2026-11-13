@@ -2,6 +2,7 @@ package url
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,12 +13,20 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
+	"unicode/utf8"
 
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
 )
 
 // maxBodyBytes caps how much of a response/file is read into memory.
 const maxBodyBytes = 32 << 20 // 32 MiB
+
+// ytdlpTimeout bounds one yt-dlp run. Callers' contexts carry no deadline, so a hang would hold a worker forever.
+const ytdlpTimeout = 2 * time.Minute
+
+// maxStderrTail caps how much of yt-dlp's stderr an error quotes; the cause is on its last lines.
+const maxStderrTail = 1 << 10
 
 // fetchResult is the raw payload a fetcher returns before text extraction.
 type fetchResult struct {
@@ -40,6 +49,8 @@ type httpFetcher struct {
 	client *http.Client
 	// ytdlp overrides the yt-dlp binary name (default "yt-dlp"); for tests.
 	ytdlp string
+	// ytdlpWait overrides ytdlpTimeout; for tests.
+	ytdlpWait time.Duration
 }
 
 func (h *httpFetcher) fetch(ctx context.Context, rawURL string) (*fetchResult, error) {
@@ -56,7 +67,7 @@ func (h *httpFetcher) fetch(ctx context.Context, rawURL string) (*fetchResult, e
 		}
 		return h.fetchFile(path)
 	case "http", "https":
-		if isYouTube(u.Host) {
+		if isYouTube(u.Hostname()) {
 			return h.fetchYouTube(ctx, rawURL)
 		}
 		return h.fetchHTTP(ctx, rawURL)
@@ -151,10 +162,18 @@ func (h *httpFetcher) fetchYouTube(ctx context.Context, rawURL string) (*fetchRe
 	}
 	defer os.RemoveAll(tmp)
 
+	timeout := h.ytdlpWait
+	if timeout <= 0 {
+		timeout = ytdlpTimeout
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	out := filepath.Join(tmp, "%(id)s.%(ext)s")
 	// #nosec G204 -- bin is an operator-configured tool name; rawURL is an arg.
-	cmd := exec.CommandContext(ctx, bin,
+	cmd := exec.CommandContext(runCtx, bin,
 		"--skip-download",
+		"--no-playlist", // a watch URL with &list= would otherwise fetch every video in the playlist
 		"--write-subs", "--write-auto-subs",
 		"--sub-langs", "en.*",
 		"--sub-format", "vtt",
@@ -164,6 +183,12 @@ func (h *httpFetcher) fetchYouTube(ctx context.Context, rawURL string) (*fetchRe
 	)
 	titleBytes, err := cmd.Output()
 	if err != nil {
+		if ctx.Err() == nil && errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("yt-dlp timed out after %s", timeout)
+		}
+		if tail := stderrTail(err); tail != "" {
+			return nil, fmt.Errorf("yt-dlp failed: %w: %s", err, tail)
+		}
 		return nil, fmt.Errorf("yt-dlp failed: %w", err)
 	}
 	title := strings.TrimSpace(string(titleBytes))
@@ -183,6 +208,24 @@ func (h *httpFetcher) fetchYouTube(ctx context.Context, rawURL string) (*fetchRe
 		ext:          "vtt",
 		body:         body,
 	}, nil
+}
+
+// stderrTail returns the trimmed end of the stderr a failed command left on its ExitError, at most
+// maxStderrTail bytes.
+func stderrTail(err error) string {
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		return ""
+	}
+	s := strings.TrimSpace(string(exit.Stderr))
+	if len(s) > maxStderrTail {
+		s = s[len(s)-maxStderrTail:]
+		for len(s) > 0 && !utf8.RuneStart(s[0]) {
+			s = s[1:]
+		}
+		s = "…" + s
+	}
+	return s
 }
 
 // firstFileWithExt returns the first file in dir whose name ends with ext.
@@ -299,7 +342,7 @@ func contentTypeForExt(ext string) string {
 
 // inferKind guesses a content kind for the url node from the content type/host.
 func inferKind(fr *fetchResult, rawURL string) string {
-	if u, err := url.Parse(rawURL); err == nil && isYouTube(u.Host) {
+	if u, err := url.Parse(rawURL); err == nil && isYouTube(u.Hostname()) {
 		return "video"
 	}
 	switch {

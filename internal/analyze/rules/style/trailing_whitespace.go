@@ -9,8 +9,8 @@ import (
 )
 
 // sourceLangs limits style rules to source code, since Markdown uses two trailing spaces as a hard line
-// break and image or binary files have no real lines. Rules share it, so never mutate it.
-var sourceLangs = []string{"go", "py", "js", "ts", "jsx", "tsx", "rs", "java"}
+// break and image or binary files have no real lines.
+var sourceLangs = analyze.SourceLangs
 
 // TrailingWhitespace flags trailing spaces or tabs at the end of a line, a sign of an editor that isn't
 // configured to strip them on save.

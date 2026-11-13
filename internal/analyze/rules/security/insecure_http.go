@@ -19,6 +19,7 @@ func (InsecureHTTP) Meta() analyze.Meta {
 		Category:   analyze.CategorySecurity,
 		Severity:   analyze.SeverityMedium,
 		Scope:      analyze.FileScope,
+		Languages:  analyze.SourceLangs,
 		Summary:    "Hard-coded http:// URL — traffic is unencrypted in transit.",
 		Fix:        "Switch to https:// or document the loopback/dev-only use.",
 		Provenance: analyze.ProvenanceDeterministic,

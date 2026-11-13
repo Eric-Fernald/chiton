@@ -282,48 +282,122 @@ func TestSyncDirPrunesRemovedFiles(t *testing.T) {
 	}
 }
 
-// TestSyncDirPruneKeepsPresentExcludedFiles verifies prune deletes only files gone from disk, not ones
-// still present but excluded from the walk (here, under an ignored dir that build indexed).
-func TestSyncDirPruneKeepsPresentExcludedFiles(t *testing.T) {
+// mkdirs creates directories under the harness source tree.
+func (h *harness) mkdirs(t *testing.T, names ...string) {
+	t.Helper()
+	for _, name := range names {
+		if err := os.MkdirAll(filepath.Join(h.dir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestSyncDirPrunesIgnoredFiles checks prune removes indexed files the walk policy skips though they are still
+// on disk: one a policy-blind sync put under vendor/, one in a directory .chitonignore names only later.
+func TestSyncDirPrunesIgnoredFiles(t *testing.T) {
 	h := newHarness(t, false, false)
 	ctx := context.Background()
-
-	// Index a file under a dir SyncDir's walk ignores (vendor), simulating a store written before the ignore
-	// policy existed.
-	vendorDir := filepath.Join(h.dir, "vendor")
-	if err := os.MkdirAll(vendorDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	vendored := filepath.Join(vendorDir, "v.go")
-	if err := os.WriteFile(vendored, []byte("package vendor\nfunc V() {}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	h.mkdirs(t, "vendor", "gen")
+	vendored := h.write(t, filepath.Join("vendor", "v.go"), "package vendor\nfunc V() {}\n")
 	if _, err := h.eng.SyncFile(ctx, vendored); err != nil {
 		t.Fatal(err)
 	}
-
+	gen := h.write(t, filepath.Join("gen", "g.go"), "package gen\nfunc G() {}\n")
 	pa := h.write(t, "a.go", "package src\nfunc A() {}\n")
 
-	// SyncDir walks h.dir, skips vendor/, but must not prune v.go (still on disk).
-	if _, err := h.eng.SyncDir(ctx, h.dir, true); err != nil {
-		t.Fatal(err)
-	}
-	if len(h.nodesForURI(t, model.FileURI(vendored))) == 0 {
-		t.Error("vendored file (present on disk, excluded from walk) was wrongly pruned")
-	}
-	if len(h.nodesForURI(t, model.FileURI(pa))) == 0 {
-		t.Error("a.go should be indexed")
-	}
-
-	// Now actually delete the vendored file; prune SHOULD remove it.
-	if err := os.Remove(vendored); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := h.eng.SyncDir(ctx, h.dir, true); err != nil {
 		t.Fatal(err)
 	}
 	if n := len(h.nodesForURI(t, model.FileURI(vendored))); n != 0 {
-		t.Errorf("truly-removed vendored file should be pruned, got %d nodes", n)
+		t.Errorf("vendor/v.go is skipped by the walk policy but kept %d node(s)", n)
+	}
+	if len(h.nodesForURI(t, model.FileURI(gen))) == 0 || len(h.nodesForURI(t, model.FileURI(pa))) == 0 {
+		t.Fatal("gen/g.go and a.go should be indexed")
+	}
+
+	h.write(t, ".chitonignore", "gen/\n")
+	sum, err := h.eng.SyncDir(ctx, h.dir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(h.nodesForURI(t, model.FileURI(gen))); n != 0 || sum.Deleted != 1 {
+		t.Errorf("gen/g.go kept %d node(s) after .chitonignore named gen/ (summary %+v)", n, sum)
+	}
+	if h.cache.Changed(model.FileURI(pa), model.ContentSHA([]byte("package src\nfunc A() {}\n"))) ||
+		len(h.cache.URIs()) != 1 {
+		t.Errorf("cache holds %v; want only a.go", h.cache.URIs())
+	}
+}
+
+// TestSyncDirPruneKeepsFilesOutsideRoot checks a sync of a narrower root leaves the rest of the index alone.
+func TestSyncDirPruneKeepsFilesOutsideRoot(t *testing.T) {
+	h := newHarness(t, false, false)
+	ctx := context.Background()
+	h.mkdirs(t, "sub")
+	pa := h.write(t, "a.go", "package src\nfunc A() {}\n")
+	if _, err := h.eng.SyncFile(ctx, pa); err != nil {
+		t.Fatal(err)
+	}
+	h.write(t, filepath.Join("sub", "b.go"), "package sub\nfunc B() {}\n")
+	if _, err := h.eng.SyncDir(ctx, filepath.Join(h.dir, "sub"), true); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.nodesForURI(t, model.FileURI(pa))) == 0 {
+		t.Error("a.go, outside the synced root, was pruned")
+	}
+}
+
+// TestSyncChangesUnderHonoursIgnorePolicy checks a git change set skips what build and watch skip (default
+// directories, .chitonignore), given the CLI's relative root and git's absolute paths.
+func TestSyncChangesUnderHonoursIgnorePolicy(t *testing.T) {
+	h := newHarness(t, false, false)
+	h.mkdirs(t, "vendor", "gen")
+	kept := h.write(t, "a.go", "package src\nfunc A() {}\n")
+	gen := h.write(t, filepath.Join("gen", "g.go"), "package gen\nfunc G() {}\n")
+	vendored := h.write(t, filepath.Join("vendor", "v.go"), "package vendor\nfunc V() {}\n")
+	h.write(t, ".chitonignore", "gen/\n")
+	t.Chdir(h.dir)
+
+	sum, err := h.eng.SyncChangesUnder(context.Background(), ".",
+		[]Change{{Path: kept, Op: OpUpsert}, {Path: gen, Op: OpUpsert}, {Path: vendored, Op: OpUpsert}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.Upserted != 1 || sum.Skipped != 2 || sum.Deleted != 0 {
+		t.Errorf("summary %+v; want 1 upserted, 2 skipped", sum)
+	}
+	if len(h.nodesForURI(t, model.FileURI(kept))) == 0 {
+		t.Error("a.go should be indexed")
+	}
+	for _, p := range []string{gen, vendored} {
+		if n := len(h.nodesForURI(t, model.FileURI(p))); n != 0 {
+			t.Errorf("%s should be skipped, got %d node(s)", p, n)
+		}
+	}
+}
+
+// TestSyncChangesUnderRemovesIndexedIgnoredFile checks a changed file indexed before the policy skipped it
+// loses its nodes and cache entry rather than being refreshed.
+func TestSyncChangesUnderRemovesIndexedIgnoredFile(t *testing.T) {
+	h := newHarness(t, false, false)
+	ctx := context.Background()
+	h.mkdirs(t, "gen")
+	gen := h.write(t, filepath.Join("gen", "g.go"), "package gen\nfunc G() {}\n")
+	if _, err := h.eng.SyncFile(ctx, gen); err != nil {
+		t.Fatal(err)
+	}
+	h.write(t, ".chitonignore", "gen/\n")
+	h.write(t, filepath.Join("gen", "g.go"), "package gen\nfunc G2() {}\n")
+
+	sum, err := h.eng.SyncChangesUnder(ctx, h.dir, []Change{{Path: gen, Op: OpUpsert}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(h.nodesForURI(t, model.FileURI(gen))); n != 0 || sum.Deleted != 1 || sum.Upserted != 0 {
+		t.Errorf("gen/g.go kept %d node(s) (summary %+v); want it removed", n, sum)
+	}
+	if len(h.cache.URIs()) != 0 {
+		t.Errorf("cache still holds %v", h.cache.URIs())
 	}
 }
 

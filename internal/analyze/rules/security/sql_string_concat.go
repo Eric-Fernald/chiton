@@ -18,6 +18,7 @@ func (SQLStringConcat) Meta() analyze.Meta {
 		Category:   analyze.CategorySecurity,
 		Severity:   analyze.SeverityHigh,
 		Scope:      analyze.FileScope,
+		Languages:  analyze.SourceLangs,
 		Summary:    "SQL keyword built by string concatenation with a variable (SQL injection risk).",
 		Fix:        "Use parameterised queries / prepared statements instead of string building.",
 		Provenance: analyze.ProvenanceDeterministic,

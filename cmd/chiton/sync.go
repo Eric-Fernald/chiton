@@ -110,7 +110,7 @@ func syncWatchCmd() *cobra.Command {
 		Use:   "watch [path]",
 		Short: "Watch a directory tree and re-index files as they change",
 		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (err error) {
 			root := "."
 			if len(args) == 1 {
 				root = args[0]
@@ -119,7 +119,7 @@ func syncWatchCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer closeStore()
+			defer closeGraphStore(closeStore, &err)
 
 			// cmd.Context() is cancelled by the root signal handler on
 			// Ctrl-C / SIGTERM, so the watcher drains and flushes.
@@ -164,7 +164,7 @@ With no flag, defaults to the files in HEAD (post-commit semantics).`,
 }
 
 // runSyncGit re-indexes the files git changed, as `chiton sync git` describes.
-func runSyncGit(cmd *cobra.Command, f *syncEngineFlags, root, since, stage string, args []string) error {
+func runSyncGit(cmd *cobra.Command, f *syncEngineFlags, root, since, stage string, args []string) (err error) {
 	if !gitpkg.Available(root) {
 		return fmt.Errorf("sync git: %s is not a git work tree (or git is not on PATH)", root)
 	}
@@ -186,9 +186,9 @@ func runSyncGit(cmd *cobra.Command, f *syncEngineFlags, root, since, stage strin
 	if err != nil {
 		return err
 	}
-	defer closeStore()
+	defer closeGraphStore(closeStore, &err)
 
-	sum, err := eng.SyncChanges(cmd.Context(), ingest.GitChanges(changes))
+	sum, err := eng.SyncChangesUnder(cmd.Context(), root, ingest.GitChanges(changes))
 	if err != nil {
 		return err
 	}
@@ -237,7 +237,7 @@ func syncOnceCmd() *cobra.Command {
 		Use:   "once [path]",
 		Short: "One-shot incremental reconcile of a directory (re-index changed, prune removed)",
 		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (err error) {
 			root := "."
 			if len(args) == 1 {
 				root = args[0]
@@ -246,7 +246,7 @@ func syncOnceCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer closeStore()
+			defer closeGraphStore(closeStore, &err)
 
 			sum, err := eng.SyncDir(cmd.Context(), root, prune)
 			if err != nil {

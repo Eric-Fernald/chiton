@@ -71,12 +71,12 @@ Node IDs are stable content hashes, so merging is idempotent and dedups nodes
 shared across graphs — the basis for cross-repo knowledge graphs. Point
 graph_path at a fresh store to import, or at an existing one to combine.`,
 		Args: cobra.MinimumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (err error) {
 			_, gs, err := loadStore(false)
 			if err != nil {
 				return err
 			}
-			defer gs.Close()
+			defer closeGraphStore(gs.Close, &err)
 
 			out := cmd.OutOrStdout()
 			var total portable.MergeStats

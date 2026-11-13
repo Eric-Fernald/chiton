@@ -49,7 +49,9 @@ type Result struct {
 	RulesRun     int
 	Findings     []Finding
 	Duration     time.Duration
-	Skipped      []string // paths the walk or extractor could not read; the scan went on without them
+	// Skipped lists what the scan went on without: a path the walk could not read, or "path: reason" for a
+	// file that could not be read or parsed.
+	Skipped []string
 
 	rules     []Rule          // rule nodes Record upserts
 	scanned   map[string]bool // file URIs whose resolved findings Record prunes
@@ -131,7 +133,7 @@ func (a *Analyzer) ScanSources(ctx context.Context, files []SourceFile) (*Result
 		}
 		nodes, edges, err := ex.ExtractSource(ctx, sf.Path, sf.Content)
 		if err != nil {
-			res.Skipped = append(res.Skipped, sf.Path)
+			res.Skipped = append(res.Skipped, skipNote(sf.Path, err))
 			continue
 		}
 		a.matchFile(ctx, newFileTarget(sf.Path, sf.Content, nodes, edges), res)
@@ -174,8 +176,12 @@ func (a *Analyzer) walkAndMatch(ctx context.Context, root string, fileRules []Fi
 		langs[i] = fr.Meta().Languages
 	}
 	skipped, walkErr := walkSources(ctx, root, func(path string) error {
-		ft, nodes, ok := loadFileTarget(ctx, path)
-		if !ok {
+		ft, nodes, err := loadFileTarget(ctx, path)
+		if err != nil {
+			// The file stays out of scannedURIs, so the findings it already has are kept, not pruned.
+			if !errors.Is(err, errUnsupported) {
+				w.skipped = append(w.skipped, skipNote(path, err))
+			}
 			return nil
 		}
 		w.filesScanned++
@@ -183,10 +189,12 @@ func (a *Analyzer) walkAndMatch(ctx context.Context, root string, fileRules []Fi
 			w.scannedURIs[ft.URI] = true
 		}
 
-		ext := FileExt(path)
-		for i, fr := range fileRules {
-			if ruleApplies(langs[i], ext) {
-				w.findings = append(w.findings, fr.MatchFile(ctx, ft)...)
+		if fileRulesApply(ft) {
+			ext := FileExt(path)
+			for i, fr := range fileRules {
+				if ruleApplies(langs[i], ext) {
+					w.findings = append(w.findings, fr.MatchFile(ctx, ft)...)
+				}
 			}
 		}
 
@@ -197,7 +205,7 @@ func (a *Analyzer) walkAndMatch(ctx context.Context, root string, fileRules []Fi
 	if walkErr != nil {
 		return nil, fmt.Errorf("walk: %w", walkErr)
 	}
-	w.skipped = skipped
+	w.skipped = append(w.skipped, skipped...)
 	return w, nil
 }
 
@@ -329,22 +337,31 @@ func deleteFindingNodes(ctx context.Context, gs store.GraphStore, nodes []model.
 	return nil
 }
 
-// loadFileTarget reads and extracts path. ok is false for an unsupported, unreadable, or unparsable
-// file. nodes is the full extraction, including the file node that ft.Nodes omits.
-func loadFileTarget(ctx context.Context, path string) (ft FileTarget, nodes []model.Node, ok bool) {
+// errUnsupported is loadFileTarget's error for a path no extractor handles. Callers pass over it silently.
+var errUnsupported = errors.New("unsupported file type")
+
+// loadFileTarget reads and extracts path, failing with errUnsupported or the read or parse error. nodes is
+// the full extraction, including the file node that ft.Nodes omits.
+func loadFileTarget(ctx context.Context, path string) (ft FileTarget, nodes []model.Node, err error) {
 	ex := extast.ForFile(path)
 	if ex == nil {
-		return ft, nil, false
+		return ft, nil, errUnsupported
 	}
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return ft, nil, false
+		return ft, nil, err
 	}
 	nodes, edges, err := ex.ExtractSource(ctx, path, content)
 	if err != nil {
-		return ft, nil, false
+		return ft, nil, err
 	}
-	return newFileTarget(path, content, nodes, edges), nodes, true
+	return newFileTarget(path, content, nodes, edges), nodes, nil
+}
+
+// skipNote formats a Result.Skipped entry as "path: reason", without the copies of path that err repeats.
+func skipNote(path string, err error) string {
+	reason := strings.ReplaceAll(err.Error(), path+":", "")
+	return path + ": " + strings.Join(strings.Fields(reason), " ")
 }
 
 // newFileTarget builds path's FileTarget from its content and full extraction (file node included).
@@ -378,6 +395,12 @@ func nonFileNodes(nodes []model.Node) []model.Node {
 		}
 	}
 	return out
+}
+
+// fileRulesApply reports whether FileRules may run on ft: only on code, and only with a file URI to target
+// (an image has no file node, so its findings would all share the target "" and never be pruned).
+func fileRulesApply(ft FileTarget) bool {
+	return ft.URI != "" && isCodeFile(FileExt(ft.Path))
 }
 
 // ruleApplies returns true if the rule's language filter accepts the file.

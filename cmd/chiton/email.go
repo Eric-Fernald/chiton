@@ -28,12 +28,12 @@ nodes for the participants. Replies link to the message they answer.
 
 // runEmailSource opens the store read-write, ingests from src, and prints a
 // summary — the shared tail of every email subcommand.
-func runEmailSource(cmd *cobra.Command, src email.Source, opts email.Query) error {
+func runEmailSource(cmd *cobra.Command, src email.Source, opts email.Query) (err error) {
 	_, gs, err := loadStore(false)
 	if err != nil {
 		return err
 	}
-	defer gs.Close()
+	defer closeGraphStore(gs.Close, &err)
 
 	rep, err := email.NewIngester(gs).Ingest(cmd.Context(), src, opts)
 	if err != nil {

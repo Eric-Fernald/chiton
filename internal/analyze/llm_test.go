@@ -2,6 +2,8 @@ package analyze
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -308,7 +310,7 @@ func TestLLMSubmitRejectsMismatchedTarget(t *testing.T) {
 	absOther, _ := filepath.Abs(other)
 	otherURI := "file://" + filepath.ToSlash(absOther)
 	// task_id derived for content that is NOT other.go's → binding mismatch.
-	bogusTaskID := LLMTaskID("llm/test", "deadbeef")
+	bogusTaskID := LLMTaskID("llm/test", otherURI, "deadbeef")
 	if _, err := svc.Submit(ctx, LLMResult{
 		TaskID: bogusTaskID, RuleID: "llm/test", TargetURI: otherURI,
 		Findings: []LLMFindingResult{{Line: 1, Message: "x", Confidence: 0.9}},
@@ -332,6 +334,116 @@ func TestLLMSubmitValidations(t *testing.T) {
 	}
 	if _, err := svc.Submit(ctx, LLMResult{TaskID: "t", RuleID: "llm/unknown"}); err == nil {
 		t.Fatal("expected error for unknown rule")
+	}
+}
+
+// TestLLMSubmitRejectsMissingOrNonFileTarget checks a submit without the task's file:// target_uri is refused
+// and writes nothing: such findings had no file to hang on and collided across files.
+func TestLLMSubmitRejectsMissingOrNonFileTarget(t *testing.T) {
+	ctx := context.Background()
+	gs := newTestStore(t)
+	reg := NewRegistry()
+	reg.Register(fakeLLMRule{id: "llm/test", cat: CategoryBugs, sev: SeverityHigh})
+	stateDir := t.TempDir()
+	svc := NewLLMService(gs, reg, 0.5, stateDir)
+
+	for _, uri := range []string{"", "file://", "internal/db/query.go", "https://example.com/a.go"} {
+		_, err := svc.Submit(ctx, LLMResult{
+			TaskID: "t1", RuleID: "llm/test", TargetURI: uri,
+			Findings: []LLMFindingResult{{Line: 1, Message: "x", Confidence: 0.9}},
+		})
+		if err == nil || !strings.Contains(err.Error(), "target_uri") {
+			t.Errorf("Submit(target_uri=%q) = %v, want an error naming target_uri", uri, err)
+		}
+	}
+	if got := countFindings(ctx, gs); got != 0 {
+		t.Errorf("rejected submits stored %d findings", got)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, llmStateFile)); !os.IsNotExist(err) {
+		t.Errorf("rejected submits wrote the state file (stat err = %v)", err)
+	}
+}
+
+// TestLLMSpecSchemaNamesEverySubmitField checks the schema a task advertises lists each field Submit requires.
+func TestLLMSpecSchemaNamesEverySubmitField(t *testing.T) {
+	for _, field := range []string{`"task_id"`, `"rule_id"`, `"target_uri"`, `"findings"`} {
+		if !strings.Contains(llmSubmitSchema, field) {
+			t.Errorf("submit schema omits %s:\n%s", field, llmSubmitSchema)
+		}
+	}
+}
+
+// TestLLMTasksForIdenticalFilesAreDistinct checks two byte-identical files get separate task IDs, so
+// submitting one leaves the other pending.
+func TestLLMTasksForIdenticalFilesAreDistinct(t *testing.T) {
+	ctx := context.Background()
+	gs := newTestStore(t)
+	tmp := t.TempDir()
+	for _, name := range []string{"a.go", "b.go"} {
+		if err := os.WriteFile(filepath.Join(tmp, name), []byte("package a\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reg := NewRegistry()
+	reg.Register(fakeLLMRule{id: "llm/test", cat: CategoryBugs, sev: SeverityHigh, langs: []string{"go"}})
+	svc := NewLLMService(gs, reg, 0.5, filepath.Join(tmp, ".chiton"))
+
+	specs, err := svc.Pending(ctx, tmp, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(specs) != 2 || specs[0].ID == specs[1].ID {
+		t.Fatalf("want 2 specs with distinct IDs, got %+v", specs)
+	}
+	if _, err := svc.Submit(ctx, LLMResult{TaskID: specs[0].ID, RuleID: specs[0].RuleID, TargetURI: specs[0].SourceURI}); err != nil {
+		t.Fatal(err)
+	}
+	left, err := svc.Pending(ctx, tmp, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 1 || left[0].SourceURI != specs[1].SourceURI {
+		t.Fatalf("submitting %s should leave only %s pending, got %+v", specs[0].Label, specs[1].Label, left)
+	}
+}
+
+// TestLLMStateFromOlderTaskIDsRePends checks a state file written before the file URI joined the task ID
+// (entries keyed on rule + content, some with no target) is read without error: its tasks pend once more.
+func TestLLMStateFromOlderTaskIDsRePends(t *testing.T) {
+	ctx := context.Background()
+	gs := newTestStore(t)
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "a.go")
+	content := []byte("package a\n")
+	if err := os.WriteFile(src, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	uri := model.FileURI(src)
+	oldSum := sha256.Sum256([]byte("llm-task::llm/test::" + model.ContentSHA(content)))
+	oldID := hex.EncodeToString(oldSum[:16])
+	stateDir := filepath.Join(tmp, ".chiton")
+	reg := NewRegistry()
+	reg.Register(fakeLLMRule{id: "llm/test", cat: CategoryBugs, sev: SeverityHigh, langs: []string{"go"}})
+	svc := NewLLMService(gs, reg, 0.5, stateDir)
+	if err := svc.saveState(llmState{Analyzed: map[string]llmStateEntry{
+		oldID:      {RuleID: "llm/test", TargetURI: uri},
+		"orphaned": {RuleID: "llm/test", TargetURI: ""},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	specs, err := svc.Pending(ctx, tmp, "", 0)
+	if err != nil || len(specs) != 1 || specs[0].ID == oldID {
+		t.Fatalf("Pending over old state: err=%v specs=%+v, want the task re-issued under a new ID", err, specs)
+	}
+	if _, err := svc.Submit(ctx, LLMResult{TaskID: specs[0].ID, RuleID: "llm/test", TargetURI: uri}); err != nil {
+		t.Fatalf("Submit over old state: %v", err)
+	}
+	if left, err := svc.Pending(ctx, tmp, "", 0); err != nil || len(left) != 0 {
+		t.Fatalf("after the re-submit: err=%v pending=%+v, want none", err, left)
+	}
+	if _, stale := svc.loadState().Analyzed[oldID]; stale {
+		t.Error("the old-format entry for the same (rule, file) was not replaced")
 	}
 }
 

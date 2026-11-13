@@ -369,17 +369,14 @@ func queryHandler(gs store.GraphStore, r redactor) mcpsdk.ToolHandlerFunc {
 		}
 		limit := clampInt(req.GetInt("limit", 10), 1, 100)
 		prefix := req.GetString("source_prefix", "")
-		nodes, err := gs.SearchNodes(ctx, query, limit)
+		lower := strings.ToLower(prefix)
+		nodes, err := searchKept(ctx, gs, query, limit, func(n model.Node) bool {
+			return !r.hidden(n) && (prefix == "" || strings.Contains(strings.ToLower(n.SourceURI), lower))
+		})
 		if err != nil {
 			return mcplib.NewToolResultErrorFromErr("search failed", err), nil
 		}
-		lower := strings.ToLower(prefix)
-		lean := make([]leanNode, 0, len(nodes))
-		for _, n := range nodes {
-			if !r.hidden(n) && (prefix == "" || strings.Contains(strings.ToLower(n.SourceURI), lower)) {
-				lean = append(lean, r.node(n))
-			}
-		}
+		lean := r.nodes(nodes)
 		switch {
 		case len(lean) > 0:
 			return jsonResult(lean)
@@ -387,6 +384,25 @@ func queryHandler(gs store.GraphStore, r redactor) mcpsdk.ToolHandlerFunc {
 			return mcplib.NewToolResultText(fmt.Sprintf("no nodes found matching %q with source_prefix %q", query, prefix)), nil
 		default:
 			return mcplib.NewToolResultText(fmt.Sprintf("no nodes found matching %q", query)), nil
+		}
+	}
+}
+
+// searchKept returns up to limit nodes whose label contains query and that keep accepts. It widens the search
+// until enough survive, so nodes keep rejects can't use up the limit and hide later matches.
+func searchKept(ctx context.Context, gs store.GraphStore, query string, limit int, keep func(model.Node) bool) ([]model.Node, error) {
+	for fetch := limit; ; fetch *= 4 {
+		nodes, err := gs.SearchNodes(ctx, query, fetch)
+		if err != nil {
+			return nil, err
+		}
+		exhausted := len(nodes) < fetch
+		kept := slices.DeleteFunc(nodes, func(n model.Node) bool { return !keep(n) })
+		if len(kept) >= limit {
+			return kept[:limit], nil
+		}
+		if exhausted {
+			return kept, nil
 		}
 	}
 }
@@ -402,38 +418,35 @@ func shortestPathHandler(gs store.GraphStore, r redactor) mcpsdk.ToolHandlerFunc
 			return mcplib.NewToolResultError(err.Error()), nil
 		}
 
-		fromNodes, err := gs.SearchNodes(ctx, fromLabel, 1)
-		if err != nil {
-			return mcplib.NewToolResultErrorFromErr("search 'from' failed", err), nil
+		// Endpoints resolve as get_node does, so a short name lands on its definition, not the first substring match.
+		res := newResolver(gs)
+		from, fromNote, errRes := lookupNode(ctx, res, r, fromLabel, "")
+		if errRes != nil {
+			return errRes, nil
 		}
-		if len(fromNodes) == 0 || r.hidden(fromNodes[0]) {
-			return mcplib.NewToolResultText(fmt.Sprintf("no node found matching 'from' %q", fromLabel)), nil
-		}
-
-		toNodes, err := gs.SearchNodes(ctx, toLabel, 1)
-		if err != nil {
-			return mcplib.NewToolResultErrorFromErr("search 'to' failed", err), nil
-		}
-		if len(toNodes) == 0 || r.hidden(toNodes[0]) {
-			return mcplib.NewToolResultText(fmt.Sprintf("no node found matching 'to' %q", toLabel)), nil
+		to, toNote, errRes := lookupNode(ctx, res, r, toLabel, "")
+		if errRes != nil {
+			return errRes, nil
 		}
 
-		path, err := gs.ShortestPath(ctx, fromNodes[0].ID, toNodes[0].ID)
+		path, err := gs.ShortestPath(ctx, from.ID, to.ID)
 		if err != nil {
 			return mcplib.NewToolResultErrorFromErr("shortest path failed", err), nil
 		}
 		if len(path.Nodes) == 0 {
 			return mcplib.NewToolResultText(
-				fmt.Sprintf("no path found between %q and %q", fromNodes[0].Label, toNodes[0].Label),
+				fmt.Sprintf("no path found between %q and %q", r.label(from), r.label(to)),
 			), nil
 		}
 		type leanPath struct {
 			Nodes []leanNode `json:"nodes"`
 			Edges []leanEdge `json:"edges"`
+			Note  string     `json:"note,omitempty"`
 		}
 		return jsonResult(leanPath{
 			Nodes: r.nodes(path.Nodes),
 			Edges: toLeanEdges(path.Edges, r.labels(path.Nodes)),
+			Note:  strings.TrimSpace(fromNote + " " + toNote),
 		})
 	}
 }

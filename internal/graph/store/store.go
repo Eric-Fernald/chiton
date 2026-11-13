@@ -128,8 +128,8 @@ type GraphStore interface {
 	// Returns the number of nodes deleted.
 	DeleteBySourceURI(ctx context.Context, uri string) (int, error)
 
-	// SearchNodes returns all nodes whose label contains query (case-insensitive
-	// substring match). Pass limit=0 for no cap; callers typically pass 10.
+	// SearchNodes returns the nodes whose label contains query (case-insensitive), labels equal to query
+	// first so a limit can't cut off the exact match. Pass limit=0 for no cap; callers typically pass 10.
 	SearchNodes(ctx context.Context, query string, limit int) ([]model.Node, error)
 
 	// AllNodes returns every node in the graph. Used by bulk operations such as

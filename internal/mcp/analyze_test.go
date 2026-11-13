@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -117,6 +118,17 @@ func TestSubmitAnalysisHandlerBindsArguments(t *testing.T) {
 	}
 	if llmFindings != 1 {
 		t.Fatalf("expected 1 INFERRED finding in store, got %d", llmFindings)
+	}
+}
+
+// TestSubmitAnalysisToolRequiresEverySubmitField checks the tool definition marks required exactly what
+// LLMService.Submit rejects when missing, target_uri included.
+func TestSubmitAnalysisToolRequiresEverySubmitField(t *testing.T) {
+	required := submitAnalysisTool().InputSchema.Required
+	for _, field := range []string{"task_id", "rule_id", "target_uri", "findings"} {
+		if !slices.Contains(required, field) {
+			t.Errorf("submit_analysis does not require %q (required = %v)", field, required)
+		}
 	}
 }
 

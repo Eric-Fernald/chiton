@@ -91,6 +91,34 @@ func TestDeriveKey_RejectsBadParams(t *testing.T) {
 	}
 }
 
+// TestKeyFileValidate_RejectsExcessiveCost verifies a keyfile can't ask argon2 for terabytes of memory or
+// hours of work: a cloned repo may ship one, and every chiton command would then derive from it.
+func TestKeyFileValidate_RejectsExcessiveCost(t *testing.T) {
+	cases := map[string]func(*KeyFile){
+		"huge memory":     func(kf *KeyFile) { kf.MemoryKiB = 1<<32 - 1 },
+		"over the cap":    func(kf *KeyFile) { kf.MemoryKiB = maxMemoryKiB + 1 },
+		"huge iterations": func(kf *KeyFile) { kf.Iterations = 4_000_000_000 },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			kf, err := DefaultKeyFile()
+			if err != nil {
+				t.Fatal(err)
+			}
+			mutate(kf)
+			// validate, not DeriveKey: an accepted keyfile would attempt the allocation.
+			if err := kf.validate(); err == nil {
+				t.Errorf("validate accepted a keyfile with %s", name)
+			}
+		})
+	}
+	kf, _ := DefaultKeyFile()
+	kf.MemoryKiB, kf.Iterations = maxMemoryKiB, maxIterations
+	if err := kf.validate(); err != nil {
+		t.Errorf("validate rejected params at the cap: %v", err)
+	}
+}
+
 // TestLoadKeyFile_RejectsTampered verifies a hand-edited/corrupt keyfile fails
 // at load time instead of flowing into argon2 and panicking later.
 func TestLoadKeyFile_RejectsTampered(t *testing.T) {

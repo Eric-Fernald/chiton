@@ -10,6 +10,7 @@ import (
 	"maps"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -88,6 +89,9 @@ type Engine struct {
 	lstat    func(string) (fs.FileInfo, error) // os.Lstat; prepare's regular-file check, swappable in tests
 
 	clusterMu sync.Mutex
+	// persistMu is held shared across a store write and its cache update and exclusively by persistCache, so a
+	// save taken while watch workers run never records a write the store sync before it missed.
+	persistMu sync.RWMutex
 
 	touchedMu   sync.Mutex
 	touched     map[string]bool // re-cluster seed IDs
@@ -151,9 +155,10 @@ type BatchSummary struct {
 }
 
 const (
-	syncQueue       = 256    // buffered paths and results between SyncDir's walker, pool, and writer
-	batchRecords    = 20_000 // nodes plus edges per batched ReplaceSources call
-	reasonUnchanged = "unchanged"
+	syncQueue         = 256    // buffered paths and results between SyncDir's walker, pool, and writer
+	batchRecords      = 20_000 // nodes plus edges per batched ReplaceSources call
+	reasonUnchanged   = "unchanged"
+	reasonUnsupported = "unsupported file type"
 )
 
 // prepared is one file read, hashed, and extracted off the writer goroutine.
@@ -177,7 +182,7 @@ func (e *Engine) prepare(ctx context.Context, path string) prepared {
 	p := prepared{path: path, uri: model.FileURI(path)}
 	ex := extast.ForFile(path)
 	if ex == nil {
-		p.out = skipped(path, "unsupported file type")
+		p.out = skipped(path, reasonUnsupported)
 		return p
 	}
 	fi, err := e.lstat(path)
@@ -254,13 +259,19 @@ func (e *Engine) apply(ctx context.Context, batch []prepared, shared map[string]
 			}
 		}
 	}
+	e.persistMu.RLock()
 	deleted, err := store.ReplaceSources(ctx, e.store, updates...)
+	if err == nil {
+		for _, p := range batch {
+			e.cache.Mark(p.uri, p.sha)
+		}
+	}
+	e.persistMu.RUnlock()
 	if err != nil {
 		return nil, fmt.Errorf("replace %d file(s): %w", len(batch), err)
 	}
 	outs := make([]Outcome, len(batch))
 	for i, p := range batch {
-		e.cache.Mark(p.uri, p.sha)
 		outs[i] = e.finish(ctx, p, deleted[i])
 	}
 	return outs, nil
@@ -329,6 +340,7 @@ func (e *Engine) SyncFile(ctx context.Context, path string) (Outcome, error) {
 	case p.gone:
 		return e.deleteURI(ctx, p.uri)
 	case p.out.Skipped:
+		e.logSkip(p.out)
 		return p.out, nil
 	}
 	outs, err := e.apply(ctx, []prepared{p}, nil)
@@ -352,9 +364,24 @@ func (e *Engine) SyncChange(ctx context.Context, ch Change) (Outcome, error) {
 	return e.SyncFile(ctx, ch.Path)
 }
 
-// SyncChanges applies a batch of changes synchronously, then incrementally
-// re-clusters and flushes the cache. Used by the git hooks and `sync git`.
+// SyncChanges applies a batch of changes synchronously, then incrementally re-clusters and flushes the cache.
+// It applies no walk policy; SyncChangesUnder does.
 func (e *Engine) SyncChanges(ctx context.Context, changes []Change) (*BatchSummary, error) {
+	return e.syncChanges(ctx, nil, changes)
+}
+
+// SyncChangesUnder is SyncChanges under root's walk policy, for the git hooks and `sync git`: an upsert of a
+// path build and watch skip is not indexed, and removes the file if an earlier sync indexed it.
+func (e *Engine) SyncChangesUnder(ctx context.Context, root string, changes []Change) (*BatchSummary, error) {
+	policy, err := walk.LoadPolicy(root)
+	if err != nil {
+		return &BatchSummary{}, err
+	}
+	return e.syncChanges(ctx, uriSkipper(policy, root), changes)
+}
+
+// syncChanges applies changes in order; ignored, when non-nil, reports the file URIs the walk policy skips.
+func (e *Engine) syncChanges(ctx context.Context, ignored func(uri string) bool, changes []Change) (*BatchSummary, error) {
 	// Persist the cache even if a later change errors, so files already written
 	// to the store are not needlessly re-extracted on the next run.
 	defer e.saveCache()
@@ -363,7 +390,13 @@ func (e *Engine) SyncChanges(ctx context.Context, changes []Change) (*BatchSumma
 		if err := ctx.Err(); err != nil {
 			return sum, err
 		}
-		out, err := e.SyncChange(ctx, ch)
+		var out Outcome
+		var err error
+		if ch.Op == OpUpsert && ignored != nil && ignored(model.FileURI(ch.Path)) {
+			out, err = e.dropIgnored(ctx, ch.Path)
+		} else {
+			out, err = e.SyncChange(ctx, ch)
+		}
 		if err != nil {
 			return sum, err
 		}
@@ -373,8 +406,36 @@ func (e *Engine) SyncChanges(ctx context.Context, changes []Change) (*BatchSumma
 	return sum, nil
 }
 
+// dropIgnored handles a changed file the walk policy skips: a skip, unless a sync that predates the policy
+// (or ignored it) indexed the file, in which case its nodes go.
+func (e *Engine) dropIgnored(ctx context.Context, path string) (Outcome, error) {
+	uri := model.FileURI(path)
+	indexed, err := store.GetNodes(ctx, e.store, []string{model.NewNodeID(uri, uri)})
+	if err != nil {
+		return Outcome{}, fmt.Errorf("look up %s: %w", uri, err)
+	}
+	if len(indexed) == 0 {
+		return skipped(path, "ignored by the walk policy"), nil
+	}
+	return e.deleteURI(ctx, uri)
+}
+
+// uriSkipper adapts policy, loaded for root, to file URIs. Policy.Skip compares paths lexically against root as
+// given, so each URI's canonical path is re-rooted on it first.
+func uriSkipper(policy *walk.Policy, root string) func(uri string) bool {
+	rootPath, _ := model.PathFromFileURI(model.FileURI(root))
+	return func(uri string) bool {
+		p, ok := model.PathFromFileURI(uri)
+		if !ok {
+			return false
+		}
+		rel, err := filepath.Rel(rootPath, p)
+		return err == nil && policy.Skip(filepath.Join(root, rel), false)
+	}
+}
+
 // SyncDir reconciles a directory tree: GOMAXPROCS workers read and extract each supported file the walk policy
-// keeps, this goroutine writes results in batches, and prune deletes indexed files gone from disk.
+// keeps, this goroutine writes results in batches, and prune deletes indexed files gone from disk or now skipped.
 func (e *Engine) SyncDir(ctx context.Context, root string, prune bool) (sum *BatchSummary, err error) {
 	sum = &BatchSummary{}
 	defer func() { err = errors.Join(err, e.persistCache()) }()
@@ -438,7 +499,7 @@ func (e *Engine) SyncDir(ctx context.Context, root string, prune bool) (sum *Bat
 		return sum, walkErr
 	}
 	if prune {
-		if err := e.prune(ctx, root, seen, sum); err != nil {
+		if err := e.prune(ctx, root, policy, seen, sum); err != nil {
 			return sum, err
 		}
 	}
@@ -489,9 +550,10 @@ func (e *Engine) writeAll(ctx context.Context, results <-chan prepared, sum *Bat
 	return writeBatch()
 }
 
-// logSkip reports a file skipped for any reason but an unchanged hash.
+// logSkip reports a file skipped because it could not be read or parsed. Unchanged and unsupported files are
+// routine: a git change set names every file in the commit.
 func (e *Engine) logSkip(out Outcome) {
-	if out.Reason != reasonUnchanged {
+	if out.Reason != reasonUnchanged && out.Reason != reasonUnsupported {
 		e.log("sync: skip %s: %s", out.Path, out.Reason)
 	}
 }
@@ -501,10 +563,11 @@ func underURI(uri, dirURI string) bool {
 	return uri == dirURI || strings.HasPrefix(uri, strings.TrimSuffix(dirURI, "/")+"/")
 }
 
-// prune deletes indexed files under root that the walk missed and are gone from disk, plus non-canonical aliases
-// of files it re-indexed. A file the walk excluded (ignored, unsupported, narrower root) but still present survives.
-func (e *Engine) prune(ctx context.Context, root string, seen map[string]bool, sum *BatchSummary) error {
+// prune deletes indexed files under root that are gone from disk or that policy now skips, plus non-canonical
+// aliases of files the walk re-indexed. A file still present that the walk missed for another reason survives.
+func (e *Engine) prune(ctx context.Context, root string, policy *walk.Policy, seen map[string]bool, sum *BatchSummary) error {
 	rootURI := model.FileURI(root)
+	ignored := uriSkipper(policy, root)
 	for _, uri := range e.cache.URIs() {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -517,7 +580,7 @@ func (e *Engine) prune(ctx context.Context, root string, seen map[string]bool, s
 		if !underURI(canon, rootURI) {
 			continue
 		}
-		if canon == uri || !seen[canon] {
+		if !ignored(canon) && (canon == uri || !seen[canon]) {
 			// Only a file known to be gone is pruned: a stat error such as EACCES says nothing about whether it exists.
 			if _, err := e.stat(p); !errors.Is(err, fs.ErrNotExist) {
 				if err != nil {
@@ -569,11 +632,17 @@ func (e *Engine) Watch(ctx context.Context, root string) error {
 	if err != nil {
 		return err
 	}
-	// A single-worker, longer-debounced queue serialises cluster passes.
+	// A single-worker, longer-debounced queue serialises cluster passes. Each settled batch also saves the
+	// cache, so a hard kill leaves cache.json one batch behind the store, not the whole session.
 	clusterQ := jobs.New(func(c context.Context, _ string) error {
+		e.saveCache()
 		_, err := e.recluster(c)
 		return err
-	}, jobs.Options{Workers: 1, Debounce: e.cfg.ClusterDebounce})
+	}, jobs.Options{
+		Workers:  1,
+		Debounce: e.cfg.ClusterDebounce,
+		OnError:  func(_ string, err error) { e.log("watch: re-cluster failed: %v", err) },
+	})
 	clusterQ.Start(context.Background())
 
 	fileQ := jobs.New(e.syncKey, jobs.Options{
@@ -588,11 +657,7 @@ func (e *Engine) Watch(ctx context.Context, root string) error {
 	})
 	fileQ.Start(context.Background())
 
-	// An overflow means fsnotify dropped changes; one coalesced rescan feeds the whole tree to fileQ.
-	rescanQ := jobs.New(func(c context.Context, _ string) error {
-		e.log("watch: event overflow — rescanning %s", root)
-		return e.rescan(c, root, policy, fileQ.Enqueue)
-	}, jobs.Options{Workers: 1, Debounce: e.cfg.Debounce})
+	rescanQ := e.rescanQueue(root, policy, fileQ.Enqueue)
 	rescanQ.Start(context.Background())
 
 	w, err := fswatch.New(root, fileQ.Enqueue, fswatch.Options{
@@ -639,6 +704,19 @@ func (e *Engine) Watch(ctx context.Context, root string) error {
 	return nil
 }
 
+// rescanQueue is Watch's overflow queue: fsnotify dropped changes, so one coalesced rescan feeds the whole
+// tree to enqueue.
+func (e *Engine) rescanQueue(root string, policy *walk.Policy, enqueue func(path string)) *jobs.Queue {
+	return jobs.New(func(c context.Context, _ string) error {
+		e.log("watch: event overflow — rescanning %s", root)
+		return e.rescan(c, root, policy, enqueue)
+	}, jobs.Options{
+		Workers:  1,
+		Debounce: e.cfg.Debounce,
+		OnError:  func(_ string, err error) { e.log("watch: rescan failed: %v", err) },
+	})
+}
+
 // pruneDir removes every file indexed under dir (a renamed or deleted directory yields no per-child
 // events) and returns how many it pruned.
 func (e *Engine) pruneDir(ctx context.Context, dir string) int {
@@ -682,6 +760,12 @@ func (e *Engine) recluster(ctx context.Context) (haveSidecar bool, err error) {
 		_, statErr := os.Stat(sidecarPath)
 		return statErr == nil, nil
 	}
+	// A failed pass hands its seeds back, or those nodes would never be re-clustered.
+	defer func() {
+		if err != nil {
+			e.restoreTouched(touched, uris)
+		}
+	}()
 
 	prev, err := cluster.LoadSidecar(sidecarPath, e.cfg.SidecarKey)
 	if err != nil {
@@ -750,11 +834,15 @@ func (e *Engine) deleteURI(ctx context.Context, uri string) (Outcome, error) {
 	if !e.cfg.NoRecluster {
 		e.markSurvivorsTouched(ctx, uri)
 	}
+	e.persistMu.RLock()
 	deleted, err := e.store.DeleteBySourceURI(ctx, uri)
+	if err == nil {
+		e.cache.Delete(uri)
+	}
+	e.persistMu.RUnlock()
 	if err != nil {
 		return Outcome{}, fmt.Errorf("delete %s: %w", uri, err)
 	}
-	e.cache.Delete(uri)
 	if e.analyzer != nil {
 		if _, err := e.analyzer.PruneFileURI(ctx, uri); err != nil {
 			e.log("sync: prune findings for %s failed: %v", uri, err)
@@ -791,6 +879,8 @@ func (e *Engine) flush(ctx context.Context, sum *BatchSummary) {
 // persistCache syncs the store, then saves the content cache, so the cache never vouches for writes a crash lost.
 // On a failed sync the previous cache stays, and the next run re-extracts what this one wrote.
 func (e *Engine) persistCache() error {
+	e.persistMu.Lock()
+	defer e.persistMu.Unlock()
 	if err := store.Sync(e.store); err != nil {
 		return fmt.Errorf("store sync failed, cache not saved: %w", err)
 	}
@@ -846,6 +936,15 @@ func (e *Engine) takeTouched() (ids, uris map[string]bool, dirty bool) {
 	e.touched, e.touchedURIs = map[string]bool{}, map[string]bool{}
 	e.dirty = false
 	return ids, uris, true
+}
+
+// restoreTouched puts back the seeds and URIs a failed re-cluster took, beside any marked since.
+func (e *Engine) restoreTouched(ids, uris map[string]bool) {
+	e.touchedMu.Lock()
+	defer e.touchedMu.Unlock()
+	maps.Copy(e.touched, ids)
+	maps.Copy(e.touchedURIs, uris)
+	e.dirty = true
 }
 
 // GitChanges adapts git-package changes (from a diff) into engine Changes.

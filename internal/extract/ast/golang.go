@@ -323,14 +323,23 @@ func funcLabel(d *goast.FuncDecl) string {
 	return d.Name.Name
 }
 
+// receiverType names a receiver's base type through any pointer, parentheses, and type parameters, so
+// (a *A[T]) and (A) both give "A".
 func receiverType(expr goast.Expr) (string, bool) {
-	switch t := expr.(type) {
-	case *goast.Ident:
-		return t.Name, true
-	case *goast.StarExpr:
-		if id, ok := t.X.(*goast.Ident); ok {
-			return id.Name, true
+	for {
+		switch t := expr.(type) {
+		case *goast.Ident:
+			return t.Name, true
+		case *goast.StarExpr:
+			expr = t.X
+		case *goast.ParenExpr:
+			expr = t.X
+		case *goast.IndexExpr:
+			expr = t.X
+		case *goast.IndexListExpr:
+			expr = t.X
+		default:
+			return "", false
 		}
 	}
-	return "", false
 }

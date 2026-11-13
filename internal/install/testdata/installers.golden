@@ -182,9 +182,7 @@ err: parse $REPO/.aider.conf.yml: yaml: line 1: did not find expected ',' or ']'
   ]
 }
 +++ $REPO/CONVENTIONS.md
-<!-- chiton:end -->
 user text
-<!-- chiton:start -->
 stale
 
 <!-- chiton:start -->
@@ -1222,6 +1220,10 @@ err: refusing to overwrite $HOME/.copilot/mcp-config.json: "mcpServers" is not a
     "$HOME/.copilot/mcp-config.json"
   ]
 }
++++ $REPO/AGENTS.md
+user text
+stale
+
 # copilot-vscode / fresh
 ## install copilot-vscode
 {
@@ -2239,6 +2241,10 @@ err: refusing to overwrite $REPO/opencode.json: "mcp" is not a JSON object
     "$REPO/opencode.json"
   ]
 }
++++ $REPO/AGENTS.md
+user text
+stale
+
 # shared AGENTS.md
 ## install opencode
 {

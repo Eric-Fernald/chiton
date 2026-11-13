@@ -32,6 +32,13 @@ const (
 	keyLengthBytes = 32 // AES-256; every chiton consumer requires exactly this
 )
 
+// Ceilings for the same params, far above the defaults. A keyfile can arrive with a cloned repo, and without
+// them it could make any chiton command try to allocate terabytes or run argon2 for hours.
+const (
+	maxMemoryKiB  = 1024 * 1024 // 1 GiB
+	maxIterations = 32
+)
+
 // KeyFile is the on-disk metadata for deriving a chiton encryption key from a passphrase, which is never
 // persisted. Defaults follow OWASP 2024 Argon2id guidance: 64 MiB, 3 iterations, parallelism 4.
 type KeyFile struct {
@@ -116,8 +123,8 @@ func (kf *KeyFile) Salt() ([]byte, error) {
 	return b, nil
 }
 
-// validate rejects malformed or sub-floor params because argon2.IDKey panics when Iterations or Parallelism
-// is below 1, and low cost params or a short salt would silently weaken the key.
+// validate rejects malformed or out-of-range params because argon2.IDKey panics when Iterations or Parallelism
+// is below 1, low cost params or a short salt would silently weaken the key, and huge ones exhaust the machine.
 func (kf *KeyFile) validate() error {
 	if kf.KDF != "argon2id" {
 		return fmt.Errorf("unsupported KDF %q (want argon2id)", kf.KDF)
@@ -125,14 +132,14 @@ func (kf *KeyFile) validate() error {
 	if kf.KeyLength != keyLengthBytes {
 		return fmt.Errorf("key_length must be %d for AES-256, got %d", keyLengthBytes, kf.KeyLength)
 	}
-	if kf.Iterations < minIterations {
-		return fmt.Errorf("iterations must be >= %d, got %d", minIterations, kf.Iterations)
+	if kf.Iterations < minIterations || kf.Iterations > maxIterations {
+		return fmt.Errorf("iterations must be between %d and %d, got %d", minIterations, maxIterations, kf.Iterations)
 	}
 	if kf.Parallelism < minParallelism {
 		return fmt.Errorf("parallelism must be >= %d, got %d", minParallelism, kf.Parallelism)
 	}
-	if kf.MemoryKiB < minMemoryKiB {
-		return fmt.Errorf("memory_kib must be >= %d (8 MiB), got %d", minMemoryKiB, kf.MemoryKiB)
+	if kf.MemoryKiB < minMemoryKiB || kf.MemoryKiB > maxMemoryKiB {
+		return fmt.Errorf("memory_kib must be between %d (8 MiB) and %d (1 GiB), got %d", minMemoryKiB, maxMemoryKiB, kf.MemoryKiB)
 	}
 	salt, err := kf.Salt()
 	if err != nil {

@@ -69,13 +69,13 @@ const (
 )
 
 // Meta is the metadata a rule registers with the engine. All fields are
-// required except Languages (nil = applies to all) and Fix (optional hint).
+// required except Languages (nil = applies to all code files) and Fix (optional hint).
 type Meta struct {
 	ID         string
 	Category   Category
 	Severity   Severity
 	Scope      Scope
-	Languages  []string // file extensions without the dot, e.g. {"go","py"}. nil = all
+	Languages  []string // file extensions without the dot, e.g. {"go","py"}. nil = all code
 	Summary    string
 	Fix        string
 	Provenance RuleProvenance

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/Eric-Fernald/chiton/internal/extract/meeting"
 	"github.com/Eric-Fernald/chiton/internal/graph/model"
@@ -17,12 +16,9 @@ import (
 	"github.com/Eric-Fernald/chiton/internal/ingest/chunk"
 )
 
-// Section sizing for the doc_section children that carry an email's body, so
-// each downstream concept-extraction task stays within a sane context budget.
-const (
-	maxSectionBytes = 8000
-	maxSections     = 40
-)
+// maxSectionBytes sizes the doc_section children that carry an email's body, so each downstream
+// concept-extraction task stays within a sane context budget. The number of sections is not capped.
+const maxSectionBytes = 8000
 
 // Address is one mailbox: a display name and/or an email address.
 type Address struct {
@@ -219,7 +215,7 @@ func buildGraph(m Message, uri string, now time.Time) ([]model.Node, []model.Edg
 	var edges []model.Edge
 
 	// Body → doc_section children (so concept extraction picks them up for free).
-	for idx, sec := range chunkText(body, maxSectionBytes, maxSections) {
+	for idx, sec := range chunkText(body, maxSectionBytes) {
 		secLabel := subject
 		if idx > 0 {
 			secLabel = fmt.Sprintf("%s §%d", subject, idx+1)
@@ -344,49 +340,15 @@ func firstMessageID(header string) string {
 	return sanitizeMessageID(header)
 }
 
-// chunkText splits text into chunks of at most size bytes on paragraph boundaries. Past maxChunks the tail is
-// still hard-split, so size wins over maxChunks. Empty text yields no chunks.
-func chunkText(text string, size, maxChunks int) []string {
+// chunkText splits text into chunks of at most size bytes, on paragraph boundaries where it can, keeping all
+// of it however many chunks that takes. Empty text yields no chunks.
+func chunkText(text string, size int) []string {
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
 	if size <= 0 {
 		size = maxSectionBytes
 	}
-	// Hard-split oversized paragraphs (HTML bodies lose their breaks) and the post-cap tail so no doc_section
-	// overflows a downstream extraction context.
-	return splitOversized(chunk.Paragraphs(text, size, maxChunks), size)
-}
-
-// splitOversized splits any chunk longer than size into size-bounded pieces on
-// UTF-8 rune boundaries, leaving within-budget chunks untouched.
-func splitOversized(chunks []string, size int) []string {
-	out := make([]string, 0, len(chunks))
-	for _, c := range chunks {
-		for len(c) > size {
-			cut := runeBoundary(c, size)
-			out = append(out, c[:cut])
-			c = c[cut:]
-		}
-		if c != "" {
-			out = append(out, c)
-		}
-	}
-	return out
-}
-
-// runeBoundary returns the largest index <= limit that does not split a UTF-8
-// rune. It always returns > 0 so callers make progress.
-func runeBoundary(s string, limit int) int {
-	if limit >= len(s) {
-		return len(s)
-	}
-	i := limit
-	for i > 0 && !utf8.RuneStart(s[i]) {
-		i--
-	}
-	if i == 0 {
-		return limit // no boundary found (pathological), so force progress
-	}
-	return i
+	chunks, _ := chunk.Paragraphs(text, size, 0)
+	return chunks
 }

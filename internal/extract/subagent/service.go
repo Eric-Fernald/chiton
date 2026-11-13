@@ -111,6 +111,7 @@ type SubmitReport struct {
 	ConceptsUpdated int    `json:"concepts_updated"`
 	EdgesAdded      int    `json:"edges_added"`
 	EdgesRemoved    int    `json:"edges_removed"`
+	EdgesDropped    int    `json:"edges_dropped"` // declared edges whose `to` names no concept in the submission
 	Ambiguous       int    `json:"ambiguous"`
 }
 
@@ -205,7 +206,8 @@ func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, err
 	for _, e := range r.Edges {
 		toID, ok := conceptID[strings.TrimSpace(e.To)]
 		if !ok {
-			continue // edge points at a concept we didn't create; skip
+			rep.EdgesDropped++ // edge points at a concept we didn't create; skip
+			continue
 		}
 		fromID := r.TaskID
 		if f := strings.TrimSpace(e.From); f != "" {
@@ -228,27 +230,27 @@ func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, err
 		rep.EdgesAdded++
 	}
 
-	// If no edge survived (none declared, or all pointed at uncreated concepts), default to DESCRIBES from the
-	// source to every concept so none is orphaned.
-	if len(edges) == 0 {
-		for _, c := range r.Concepts {
-			toID, ok := conceptID[strings.TrimSpace(c.Label)]
-			if !ok {
-				continue
-			}
-			prov, conf := model.ResolveProvenance(c.Confidence, s.threshold)
-			edges = append(edges, model.Edge{
-				ID:         model.NewEdgeID(r.TaskID, toID, model.EdgeDescribes),
-				Src:        r.TaskID,
-				Dst:        toID,
-				Kind:       model.EdgeDescribes,
-				Provenance: prov,
-				Confidence: conf,
-				Attrs:      map[string]any{attrExtractedFrom: r.TaskID},
-				CreatedAt:  now,
-			})
-			rep.EdgesAdded++
+	// Default to DESCRIBES from the source to every concept the declared edges leave unsourced, or SweepOrphans
+	// would demote a concept this task just extracted.
+	sourced := sourcedConcepts(r.TaskID, edges)
+	for _, c := range r.Concepts {
+		toID, ok := conceptID[strings.TrimSpace(c.Label)]
+		if !ok || sourced[toID] {
+			continue
 		}
+		sourced[toID] = true
+		prov, conf := model.ResolveProvenance(c.Confidence, s.threshold)
+		edges = append(edges, model.Edge{
+			ID:         model.NewEdgeID(r.TaskID, toID, model.EdgeDescribes),
+			Src:        r.TaskID,
+			Dst:        toID,
+			Kind:       model.EdgeDescribes,
+			Provenance: prov,
+			Confidence: conf,
+			Attrs:      map[string]any{attrExtractedFrom: r.TaskID},
+			CreatedAt:  now,
+		})
+		rep.EdgesAdded++
 	}
 
 	if len(edges) > 0 {
@@ -282,6 +284,35 @@ func (s *Service) Submit(ctx context.Context, r SubmitResult) (SubmitReport, err
 	}
 
 	return rep, nil
+}
+
+// sourcedConcepts returns the concepts a submission's edges link to taskID, directly or through links between
+// concepts in either direction: the set SweepOrphans would count as backed by the source.
+func sourcedConcepts(taskID string, edges []model.Edge) map[string]bool {
+	sourced := map[string]bool{}
+	peers := map[string][]string{}
+	var frontier []string
+	for _, e := range edges {
+		switch {
+		case e.Src != taskID:
+			peers[e.Src] = append(peers[e.Src], e.Dst)
+			peers[e.Dst] = append(peers[e.Dst], e.Src)
+		case !sourced[e.Dst]:
+			sourced[e.Dst] = true
+			frontier = append(frontier, e.Dst)
+		}
+	}
+	for len(frontier) > 0 {
+		id := frontier[0]
+		frontier = frontier[1:]
+		for _, p := range peers[id] {
+			if !sourced[p] {
+				sourced[p] = true
+				frontier = append(frontier, p)
+			}
+		}
+	}
+	return sourced
 }
 
 // writableConcepts keeps the concepts taskID may write and counts those that already exist. Concept IDs are

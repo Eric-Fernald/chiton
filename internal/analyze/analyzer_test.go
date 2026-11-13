@@ -172,7 +172,7 @@ func TestPruneDoesNotDeleteLLMFindings(t *testing.T) {
 	// task_id must match LLMTaskID(rule, sha(file)) — Submit now verifies the
 	// target_uri binding to prevent cross-file finding deletion.
 	sum := sha256.Sum256([]byte("package main\n\nfunc helper() {}\n"))
-	taskID := analyze.LLMTaskID("llm/injection-risk", hex.EncodeToString(sum[:]))
+	taskID := analyze.LLMTaskID("llm/injection-risk", uri, hex.EncodeToString(sum[:]))
 	llm := analyze.NewLLMService(gs, nil, 0.5, filepath.Join(tmp, ".chiton"))
 	if _, err := llm.Submit(ctx, analyze.LLMResult{
 		TaskID: taskID, RuleID: "llm/injection-risk", TargetURI: uri,

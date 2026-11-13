@@ -19,6 +19,7 @@ func (TodoComment) Meta() analyze.Meta {
 		Category:   analyze.CategoryQuality,
 		Severity:   analyze.SeverityInfo,
 		Scope:      analyze.FileScope,
+		Languages:  analyze.SourceLangs,
 		Summary:    "TODO/FIXME/XXX/HACK comment marker.",
 		Fix:        "Either resolve the marker or replace with a tracked issue link.",
 		Provenance: analyze.ProvenanceDeterministic,

@@ -37,7 +37,7 @@ printed; the current findings are then saved as the baseline for HEAD. Use
 LLM rules are dispatched separately via 'chiton analyze pending' / 'submit';
 this command only reports how many LLM-rule tasks are pending (unless --no-llm).`,
 		Args: cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (err error) {
 			if len(args) == 0 {
 				return fmt.Errorf("analyze requires a <path> (or use a subcommand: pending, submit)")
 			}
@@ -46,7 +46,7 @@ this command only reports how many LLM-rule tasks are pending (unless --no-llm).
 			if err != nil {
 				return err
 			}
-			defer gs.Close()
+			defer closeGraphStore(gs.Close, &err)
 
 			out := cmd.OutOrStdout()
 			ctx := cmd.Context()
@@ -76,7 +76,7 @@ this command only reports how many LLM-rule tasks are pending (unless --no-llm).
 			fmt.Fprintf(out, "analyze: %d files scanned, %d rules run, %d findings [%s]\n",
 				res.FilesScanned, res.RulesRun, len(filtered), res.Duration.Round(time.Millisecond))
 			if len(res.Skipped) > 0 {
-				fmt.Fprintf(cmd.ErrOrStderr(), "analyze: skipped %d unreadable path(s), e.g. %s\n", len(res.Skipped), res.Skipped[0])
+				fmt.Fprintf(cmd.ErrOrStderr(), "analyze: skipped %d unreadable or unparsable path(s), e.g. %s\n", len(res.Skipped), res.Skipped[0])
 			}
 			for _, f := range filtered {
 				loc := f.TargetURI
@@ -256,7 +256,7 @@ func analyzeSubmitCmd() *cobra.Command {
 		Use:   "submit <results.json>",
 		Short: "Ingest LLM-rule findings (an LLMResult object or array)",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (err error) {
 			cfg, err := config.Load()
 			if err != nil {
 				return err
@@ -273,7 +273,7 @@ func analyzeSubmitCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer gs.Close()
+			defer closeGraphStore(gs.Close, &err)
 
 			svc := analyze.NewLLMService(gs, nil, cfg.Semantic.ConfidenceThreshold, config.StateDir())
 			out := cmd.OutOrStdout()

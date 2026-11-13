@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"path/filepath"
 	"slices"
@@ -97,6 +98,24 @@ func TestFindNodesRanking(t *testing.T) {
 	}
 	if n, _, _ := store.FindNode(ctx, gs, "New", "mcp/"); n.ID != "e" {
 		t.Errorf("FindNode(New, mcp/) = %s, want e: the file hint outranks everything", n.ID)
+	}
+}
+
+// TestFindNodeExactBeyondMatchCap checks the exact name wins even when more substring matches than
+// FindNodes ranks sort ahead of it.
+func TestFindNodeExactBeyondMatchCap(t *testing.T) {
+	ctx := context.Background()
+	gs := openStore(t)
+	nodes := make([]model.Node, 0, 2101)
+	for i := range 2100 {
+		nodes = append(nodes, model.Node{ID: fmt.Sprintf("a%04d", i), Kind: model.KindSymbol, Label: fmt.Sprintf("NewThing%d", i)})
+	}
+	nodes = append(nodes, model.Node{ID: "z", Kind: model.KindSymbol, Label: "New"})
+	if err := gs.UpsertNodes(ctx, nodes); err != nil {
+		t.Fatal(err)
+	}
+	if n, found, err := store.FindNode(ctx, gs, "New", ""); err != nil || !found || n.ID != "z" {
+		t.Errorf("FindNode(New) = %s, %v, %v; want z, the exact name", n.ID, found, err)
 	}
 }
 

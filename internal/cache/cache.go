@@ -4,6 +4,7 @@ package cache
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -16,6 +17,7 @@ type Cache struct {
 	path      string
 	epoch     string
 	discarded bool
+	corrupt   error
 
 	mu      sync.RWMutex
 	entries map[string]string
@@ -27,8 +29,8 @@ type fileFormat struct {
 	Entries    map[string]string `json:"entries"`
 }
 
-// Load opens the cache at path for the store identified by storeEpoch. It starts empty when the file is
-// missing or was written for another store (or before epochs), so a replaced store is fully re-extracted.
+// Load opens the cache at path for the store identified by storeEpoch. It starts empty, so every file is
+// re-extracted, when the file is missing, unparsable, or was written for another store (or before epochs).
 func Load(path, storeEpoch string) (*Cache, error) {
 	c := &Cache{path: path, epoch: storeEpoch, entries: map[string]string{}}
 	data, err := os.ReadFile(path)
@@ -40,7 +42,9 @@ func Load(path, storeEpoch string) (*Cache, error) {
 	}
 	var f fileFormat
 	if err := json.Unmarshal(data, &f); err != nil {
-		return nil, err
+		// The cache only saves work, so a truncated or hand-edited file costs a re-extract, not the run.
+		c.corrupt = fmt.Errorf("parse %s: %w", path, err)
+		return c, nil
 	}
 	if f.StoreEpoch != storeEpoch {
 		c.discarded = true
@@ -54,6 +58,9 @@ func Load(path, storeEpoch string) (*Cache, error) {
 
 // Discarded reports whether Load dropped entries recorded for a different store.
 func (c *Cache) Discarded() bool { return c.discarded }
+
+// Corrupt returns why Load could not parse the cache file and so started empty, or nil.
+func (c *Cache) Corrupt() error { return c.corrupt }
 
 // Changed reports whether uri is new or its sha256 differs from the cached value.
 func (c *Cache) Changed(uri, sha256 string) bool {

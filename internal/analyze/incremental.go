@@ -2,6 +2,7 @@ package analyze
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -10,13 +11,17 @@ import (
 )
 
 // AnalyzeFile is the single-file version of Analyze for live sync. It runs only FileRules, because
-// GraphScope rules need the whole corpus. An unsupported or unreadable path is a no-op.
+// GraphScope rules need the whole corpus. An unsupported path is a no-op, and so is an unreadable or
+// unparsable one beyond its Skipped entry.
 func (a *Analyzer) AnalyzeFile(ctx context.Context, path string) (*Result, error) {
 	start := a.now()
 	// A read or parse failure, such as a file deleted during the read, leaves existing findings untouched.
-	ft, _, ok := loadFileTarget(ctx, path)
-	if !ok {
+	ft, _, err := loadFileTarget(ctx, path)
+	if errors.Is(err, errUnsupported) {
 		return &Result{}, nil
+	}
+	if err != nil {
+		return &Result{Skipped: []string{skipNote(path, err)}}, nil
 	}
 	return a.analyzeTarget(ctx, ft, start, nil)
 }
@@ -86,8 +91,19 @@ func newFileResult() *Result {
 
 // matchFile runs the FileRules applicable to ft and adds ft, the rules, and their findings to res.
 func (a *Analyzer) matchFile(ctx context.Context, ft FileTarget, res *Result) {
-	ext := FileExt(ft.Path)
+	res.FilesScanned++
+	if ft.URI != "" {
+		res.scanned[ft.URI] = true
+	}
 	rs := a.fileRuleSet()
+	if !fileRulesApply(ft) {
+		// No FileRule holds on a doc or image, so scope them all: Record prunes what older versions left there.
+		for _, id := range rs.ids {
+			res.ruleScope[id] = true
+		}
+		return
+	}
+	ext := FileExt(ft.Path)
 	for i, fr := range rs.rules {
 		if !ruleApplies(rs.langs[i], ext) {
 			continue
@@ -99,10 +115,6 @@ func (a *Analyzer) matchFile(ctx context.Context, ft FileTarget, res *Result) {
 		res.Findings = append(res.Findings, fr.MatchFile(ctx, ft)...)
 	}
 	res.RulesRun = len(res.rules)
-	res.FilesScanned++
-	if ft.URI != "" {
-		res.scanned[ft.URI] = true
-	}
 }
 
 // fileRuleSet is the registry's FileRules in ID order, with each rule's Meta ID and languages.

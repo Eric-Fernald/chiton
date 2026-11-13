@@ -241,6 +241,102 @@ func TestSubmitDescribesWhenAllEdgesUnresolved(t *testing.T) {
 	}
 }
 
+// A host may relate its concepts to each other and never link any to the source. The task is then done for good,
+// so nothing but Submit can keep the sweep from demoting all of them.
+func TestSubmitLinksConceptsItsEdgesLeaveUnsourced(t *testing.T) {
+	gs := newStore(t)
+	ctx := context.Background()
+	_ = gs.UpsertNodes(ctx, []model.Node{docSection("d1", "Auth", "tokens, sessions and caches")})
+	svc := New(gs, nil, 0.5)
+
+	rep, err := svc.Submit(ctx, SubmitResult{
+		TaskID:   "d1",
+		Concepts: []ConceptResult{{Label: "A", Confidence: 0.9}, {Label: "B", Confidence: 0.9}, {Label: "C", Confidence: 0.2}},
+		Edges:    []EdgeResult{{From: "A", To: "B", Kind: "ELABORATES", Confidence: 0.8}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.EdgesAdded != 4 {
+		t.Errorf("EdgesAdded = %d, want 4 (A→B and a DESCRIBES per concept)", rep.EdgesAdded)
+	}
+	if !hasEdge(t, gs, conceptNodeID("A"), conceptNodeID("B"), model.EdgeElaborates) {
+		t.Error("the declared A→B edge was not written")
+	}
+	edges, _ := gs.AllEdges(ctx)
+	for _, label := range []string{"A", "B", "C"} {
+		id := conceptNodeID(label)
+		i := slices.IndexFunc(edges, func(e model.Edge) bool { return e.Src == "d1" && e.Dst == id && e.Kind == model.EdgeDescribes })
+		if i < 0 {
+			t.Errorf("no DESCRIBES edge from the source to %s", label)
+			continue
+		}
+		// The link carries the concept's own confidence, as the no-edges default does.
+		if want := map[string]model.Provenance{"C": model.ProvAmbiguous}[label]; want != "" && edges[i].Provenance != want {
+			t.Errorf("d1→%s provenance = %s, want %s", label, edges[i].Provenance, want)
+		}
+	}
+	if sweep, err := svc.SweepOrphans(ctx); err != nil || sweep.Demoted != 0 {
+		t.Errorf("SweepOrphans = %+v, %v; want nothing demoted right after a submit", sweep, err)
+	}
+}
+
+// A concept the source reaches through another concept is already backed, so it gets no extra edge.
+func TestSubmitLinksOnlyConceptsTheSourceDoesNotReach(t *testing.T) {
+	gs := newStore(t)
+	ctx := context.Background()
+	_ = gs.UpsertNodes(ctx, []model.Node{docSection("d1", "Auth", "tokens, sessions and caches")})
+	svc := New(gs, nil, 0.5)
+
+	rep, err := svc.Submit(ctx, SubmitResult{
+		TaskID: "d1",
+		Concepts: []ConceptResult{
+			{Label: "JWT", Confidence: 0.9}, {Label: "Session", Confidence: 0.9}, {Label: "Cache", Confidence: 0.9},
+		},
+		Edges: []EdgeResult{
+			{To: "JWT", Confidence: 0.9},
+			{From: "Session", To: "JWT", Kind: "DERIVED_FROM", Confidence: 0.8},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.EdgesAdded != 3 {
+		t.Errorf("EdgesAdded = %d, want 3 (the two declared and d1→Cache)", rep.EdgesAdded)
+	}
+	if !hasEdge(t, gs, "d1", conceptNodeID("Cache"), model.EdgeDescribes) {
+		t.Error("Cache, which no edge mentions, was left without a link to the source")
+	}
+	if hasEdge(t, gs, "d1", conceptNodeID("Session"), model.EdgeDescribes) {
+		t.Error("Session is reached through JWT but still got its own DESCRIBES edge")
+	}
+	if sweep, err := svc.SweepOrphans(ctx); err != nil || sweep.Demoted != 0 {
+		t.Errorf("SweepOrphans = %+v, %v; want nothing demoted right after a submit", sweep, err)
+	}
+}
+
+func TestSubmitCountsEdgesToUnknownConcepts(t *testing.T) {
+	gs := newStore(t)
+	ctx := context.Background()
+	_ = gs.UpsertNodes(ctx, []model.Node{docSection("d1", "Auth", "jwt auth")})
+
+	rep, err := New(gs, nil, 0.5).Submit(ctx, SubmitResult{
+		TaskID:   "d1",
+		Concepts: []ConceptResult{{Label: "JWT", Confidence: 0.9}},
+		Edges: []EdgeResult{
+			{To: "JWT", Confidence: 0.9},
+			{To: "Nonexistent", Confidence: 0.9},
+			{From: "JWT", To: "jwt ", Kind: "ELABORATES", Confidence: 0.9}, // labels match exactly, bar outer space
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.EdgesAdded != 1 || rep.EdgesDropped != 2 {
+		t.Errorf("report = %+v, want 1 edge added and 2 dropped", rep)
+	}
+}
+
 // TestSubmitRejectsReadOnlyStore verifies submit fails fast with an actionable message on a read-only
 // store, instead of a raw backend write error after the embed round-trip.
 func TestSubmitRejectsReadOnlyStore(t *testing.T) {
