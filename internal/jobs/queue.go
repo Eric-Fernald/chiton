@@ -51,6 +51,7 @@ type Queue struct {
 
 	mu      sync.Mutex
 	timers  map[string]*time.Timer // keys waiting out their debounce window
+	queued  map[string]bool        // keys whose timer fired, not yet picked up by launch
 	running map[string]bool        // keys currently executing
 	requeue map[string]bool        // keys re-enqueued while running
 	stopped bool
@@ -73,6 +74,7 @@ func New(handler Handler, opts Options) *Queue {
 		workers:  make(chan struct{}, opts.Workers),
 		draining: make(chan struct{}),
 		timers:   map[string]*time.Timer{},
+		queued:   map[string]bool{},
 		running:  map[string]bool{},
 		requeue:  map[string]bool{},
 	}
@@ -109,6 +111,10 @@ func (q *Queue) Enqueue(key string) {
 		q.requeue[key] = true
 		return
 	}
+	if q.queued[key] {
+		// Its timer fired and the run has not started, so that run sees this change.
+		return
+	}
 	if t, ok := q.timers[key]; ok {
 		if t.Stop() {
 			// Cancelled before it fired: release its Add and re-arm fresh below,
@@ -116,8 +122,9 @@ func (q *Queue) Enqueue(key string) {
 			q.wg.Done()
 			delete(q.timers, key)
 		} else {
-			// The timer already fired, so its callback dispatches the key. Re-arming would double-dispatch
-			// (and double-Done the WaitGroup). The running and requeue maps coalesce any later change.
+			// The timer fired but its callback has not taken q.mu yet, so the key is not queued and the
+			// run it leads to sees this change. Re-arming would double-dispatch (and double-Done the
+			// WaitGroup).
 			return
 		}
 	}
@@ -130,15 +137,18 @@ func (q *Queue) armLocked(key string) {
 	q.wg.Add(1)
 	q.timers[key] = time.AfterFunc(q.debounce, func() {
 		defer q.wg.Done()
-		// Queue the key BEFORE deleting the timer entry, so a Drain idle-check that sees the entry gone
-		// also sees the key queued.
+		// Swap the timer entry for a queued marker under one lock, before the send. A timer entry must
+		// not outlive the dispatch: Enqueue reads a fired timer's entry as "a run is still coming", and
+		// if that run had already finished the change was dropped. The marker also keeps Drain's
+		// idle-check from seeing the key as neither waiting nor queued.
+		q.mu.Lock()
+		delete(q.timers, key)
+		q.queued[key] = true
+		q.mu.Unlock()
 		select {
 		case q.ready <- key:
 		case <-q.ctx.Done():
 		}
-		q.mu.Lock()
-		delete(q.timers, key)
-		q.mu.Unlock()
 	})
 }
 
@@ -179,7 +189,7 @@ func (q *Queue) drainLoop() {
 			requeued = append(requeued, k)
 			delete(q.requeue, k)
 		}
-		idle := len(q.timers) == 0 && len(q.running) == 0 && len(q.requeue) == 0
+		idle := len(q.timers) == 0 && len(q.queued) == 0 && len(q.running) == 0 && len(q.requeue) == 0
 		q.mu.Unlock()
 
 		for _, k := range requeued {
@@ -208,9 +218,10 @@ func (q *Queue) launch(key string) {
 		return
 	}
 	q.mu.Lock()
+	delete(q.queued, key)
 	if q.running[key] {
-		// The timer-fires-then-Enqueue race can land a key in ready twice. Requeue it (run() consumes
-		// the marker) and release the slot, keeping the key serialized.
+		// The queued marker keeps a key from reaching ready twice. If one does anyway, requeue it (run()
+		// consumes the marker) and release the slot, keeping the key serialized.
 		q.requeue[key] = true
 		q.mu.Unlock()
 		<-q.workers
