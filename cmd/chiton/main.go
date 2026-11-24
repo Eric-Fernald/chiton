@@ -384,11 +384,9 @@ func openGraphStore(graphPath string, readOnly bool) (*badgerstore.Store, error)
 	if err != nil {
 		return nil, fmt.Errorf("open store: resolve encryption key: %w", err)
 	}
-	if readOnly {
+	if readOnly && graphMissing(graphPath) {
 		// Badger's own error for a store that was never built names a missing directory, not the fix.
-		if _, err := os.Stat(graphPath); errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("open store: no graph at %s: run 'chiton build .' in the project first", graphPath)
-		}
+		return nil, fmt.Errorf("open store: no graph at %s: run 'chiton build .' in the project first", graphPath)
 	}
 	if info.key == nil {
 		if msg := plaintextNotice(graphPath); msg != "" {
@@ -416,6 +414,12 @@ func openGraphStore(graphPath string, readOnly bool) (*badgerstore.Store, error)
 		}
 	}
 	return gs, nil
+}
+
+// graphMissing reports whether no store has been built at graphPath.
+func graphMissing(graphPath string) bool {
+	_, err := os.Stat(graphPath)
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 // plaintextOKEnv silences the notice openGraphStore prints for a store with no keyfile.
@@ -996,24 +1000,35 @@ records in the MCP config so the server uses the same store as 'chiton build'.`,
 				cfg.GraphPath = graphPath
 			}
 
-			gs, err := openGraphStore(cfg.GraphPath, !writable)
-			if err != nil {
-				return err
-			}
-			defer closeGraphStore(gs.Close, &err)
+			transport := transportFor(stdio, unixPath, cmd.Flags().Changed("http"))
+			version := strings.TrimPrefix(resolveVersion(), "v")
 
-			clusterResults, err := loadClusterSidecar(cfg.GraphPath)
-			if err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "serve: warning: could not load cluster sidecar: %v\n", err)
-			}
+			var s *mcpsdk.MCPServer
+			if transport == "stdio" && !writable && graphMissing(cfg.GraphPath) {
+				// An assistant starts this server before anyone has run 'chiton build', and a failed start
+				// only shows up as chiton's tools being absent. Start anyway, with tools that name the fix.
+				fmt.Fprintf(cmd.ErrOrStderr(), "serve: no graph at %s yet; every tool will reply with how to build one (run 'chiton build .', then restart the server)\n", cfg.GraphPath)
+				s = mcpsrv.NewUnbuilt(cfg.GraphPath, version)
+			} else {
+				gs, openErr := openGraphStore(cfg.GraphPath, !writable)
+				if openErr != nil {
+					return openErr
+				}
+				defer closeGraphStore(gs.Close, &err)
 
-			deps := buildSemanticDeps(cmd, cfg, gs, clusterResults)
-			deps.IncludePII = includePII
-			deps.Version = strings.TrimPrefix(resolveVersion(), "v")
-			s := mcpsrv.New(gs, clusterResults, deps)
+				clusterResults, clusterErr := loadClusterSidecar(cfg.GraphPath)
+				if clusterErr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "serve: warning: could not load cluster sidecar: %v\n", clusterErr)
+				}
+
+				deps := buildSemanticDeps(cmd, cfg, gs, clusterResults)
+				deps.IncludePII = includePII
+				deps.Version = version
+				s = mcpsrv.New(gs, clusterResults, deps)
+			}
 
 			// All three transports expose the same tool set.
-			switch transportFor(stdio, unixPath, cmd.Flags().Changed("http")) {
+			switch transport {
 			case "unix":
 				return serveUnix(cmd, mcpsdk.NewSSEServer(s), unixPath)
 			case "http":

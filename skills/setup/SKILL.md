@@ -169,7 +169,8 @@ chiton sync once .                   # manual one-shot reconcile
 | `no passphrase available` | encrypted store, no terminal to prompt on | export `CHITON_PASSPHRASE` in the shell profile that starts the assistant, then restart it |
 | graph store is in use by another chiton process | a writer (sync watch, build, serve --writable) holds the store, or on Windows a running chiton serve blocks a writer | stop the other process (or the assistant's server) and retry |
 | needs a one-time read-write pass | a chiton writer crashed, or the store predates this chiton | close other chiton processes and retry; the next open repairs it |
-| Tools work but return nothing | graph never built, or built elsewhere | `chiton build .` at the workspace root, then restart |
+| Every tool replies "no graph for this workspace yet" | the graph has not been built | `chiton build .` at the workspace root, then `/mcp` to reconnect or `/reload-plugins` |
+| Tools work but return nothing | the graph was built somewhere else | `chiton build .` at the workspace root, then restart |
 | `submit_*` tools fail to write | server started read-only | restart with `chiton serve --writable`, or use the CLI submit path |
 | `semantic_search` errors | no embeddings | `chiton embed`, then restart the server |
 | serve warns "made with model …" | embedding model changed | `chiton embed`, then restart the server |

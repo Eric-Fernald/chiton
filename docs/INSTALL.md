@@ -426,6 +426,10 @@ ingest` read only local files and need no environment at all.
   `chiton` on `PATH`; install one by a route under
   [Prerequisites](#prerequisites-the-chiton-binary), or download the release
   asset yourself and point `CHITON_BIN` at it.
+- **No graph yet.** `chiton serve` over stdio starts in a workspace that has no
+  graph, and every tool replies with how to build one. Run `chiton build .`,
+  then reconnect the server (`/mcp` or `/reload-plugins` in Claude Code). The
+  `--http` and `--unix` daemons still exit with `no graph at …`.
 - **Run the server by hand** to see the error the assistant is swallowing:
   ```sh
   chiton serve --stdio

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 
@@ -55,11 +56,34 @@ type Deps struct {
 // New creates an MCPServer exposing chiton's tools over gs. overlay (nil before any cluster pass)
 // and each Deps service are optional. A tool missing its service replies that it is unavailable.
 func New(gs store.GraphStore, overlay *cluster.Results, deps Deps) *mcpsdk.MCPServer {
+	return newServer(gs, overlay, deps)
+}
+
+// NewUnbuilt creates the server for a workspace that has no graph yet. It lists the same tools as New, and
+// every call replies with how to build the graph expected at graphPath, or to reconnect once one is there.
+func NewUnbuilt(graphPath, version string) *mcpsdk.MCPServer {
+	explain := func(mcpsdk.ToolHandlerFunc) mcpsdk.ToolHandlerFunc {
+		return func(context.Context, mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+			if _, err := os.Stat(graphPath); err == nil {
+				return mcplib.NewToolResultError(fmt.Sprintf(
+					"a graph was built at %s after this chiton server started; reconnect the server (/mcp or /reload-plugins) to load it",
+					graphPath)), nil
+			}
+			return mcplib.NewToolResultError(fmt.Sprintf(
+				"chiton has no graph for this workspace yet (expected at %s). Run `chiton build .` in the project root, or the chiton setup skill, then reconnect the server (/mcp or /reload-plugins).",
+				graphPath)), nil
+		}
+	}
+	// The handlers never run, so they need no store or services.
+	return newServer(nil, nil, Deps{Version: version}, mcpsdk.WithToolHandlerMiddleware(explain))
+}
+
+func newServer(gs store.GraphStore, overlay *cluster.Results, deps Deps, opts ...mcpsdk.ServerOption) *mcpsdk.MCPServer {
 	version := deps.Version
 	if version == "" {
 		version = "dev"
 	}
-	s := mcpsdk.NewMCPServer("chiton", version)
+	s := mcpsdk.NewMCPServer("chiton", version, opts...)
 	r := redactor{includePII: deps.IncludePII}
 	s.AddTool(getNodeTool(), getNodeHandler(gs, r))
 	s.AddTool(neighborhoodTool(), neighborhoodHandler(gs, r))

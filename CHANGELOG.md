@@ -7,6 +7,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Changed
+
+- **`chiton serve` over stdio starts in a workspace that has no graph.** It used to exit with `no graph at …`, which an assistant shows only as chiton's tools being absent. The server now lists all 22 tools, and each call replies with the fix: run `chiton build .` (or the setup skill), then reconnect the server. Once a graph exists, the reply says to reconnect. `serve --http`, `serve --unix` and `serve --writable` are unchanged.
+
 ## [1.0.0] - 2026-11-24
 
 The first public release.

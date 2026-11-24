@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -42,6 +43,43 @@ func TestUsageErrorStillPrintsUsage(t *testing.T) {
 		if err == nil || !strings.Contains(out, "Usage:") {
 			t.Errorf("chiton %v: err = %v, output has no usage:\n%s", args, err, out)
 		}
+	}
+}
+
+// emptyStdin points os.Stdin at an empty file for the test, so a stdio server sees EOF and returns.
+func emptyStdin(t *testing.T) {
+	t.Helper()
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdin
+	os.Stdin = f
+	t.Cleanup(func() {
+		os.Stdin = old
+		f.Close()
+	})
+}
+
+// TestServeStdioStartsWithoutAGraph checks an assistant-launched server starts in a project nobody has
+// indexed yet. Failing there would only show up as chiton's tools being absent.
+func TestServeStdioStartsWithoutAGraph(t *testing.T) {
+	emptyStdin(t)
+	out, err := runCLI(t, "serve", "--stdio")
+	if err != nil {
+		t.Fatalf("serve --stdio on a project with no graph failed: %v", err)
+	}
+	if !strings.Contains(out, "chiton build .") {
+		t.Errorf("serve printed %q, want a note that names 'chiton build .'", out)
+	}
+}
+
+// TestServeDaemonStillNeedsAGraph checks the daemon transports, which a person starts by hand, keep failing
+// with the fix when there is no graph.
+func TestServeDaemonStillNeedsAGraph(t *testing.T) {
+	_, err := runCLI(t, "serve", "--http", "127.0.0.1:0")
+	if err == nil || !strings.Contains(err.Error(), "chiton build") {
+		t.Errorf("serve --http on a project with no graph: err = %v, want a hint to run 'chiton build'", err)
 	}
 }
 
