@@ -1,0 +1,170 @@
+# CI — the pre-merge gate. Mirrors `make check` (gofmt + vet + test) plus the
+# tag-gated Microsoft Graph path, a race leg, and the shipped-shim file modes.
+#
+# Manual only: workflow_dispatch is the sole trigger, so nothing runs on push or
+# on a pull request. Start a run from the Actions tab (pick the branch or tag in
+# the ref selector) or with:
+#
+#     gh workflow run ci.yml --ref <branch-or-tag>
+#
+# Deliberate omissions, each one load-bearing:
+#
+#   * GOTOOLCHAIN is never set. go.mod declares `go 1.25.5` + `toolchain
+#     go1.26.4`; setup-go reads go.mod and the default GOTOOLCHAIN=auto resolves
+#     the toolchain directive. GOTOOLCHAIN=local would fail outright, and
+#     pinning go-version would make every build download a second toolchain.
+#   * CGO_ENABLED is never set at workflow or job level here. The race detector
+#     needs cgo ("-race requires cgo"); CGO_ENABLED=0 belongs to the release
+#     workflow only.
+#   * GOOS / GOARCH / GOFLAGS are never set job-wide.
+#     internal/install/integration_test.go shells out to `go build` and calls
+#     t.Skipf when it fails, so a cross-compiling environment would turn that
+#     test green with zero coverage.
+#   * CHITON_PROJECT_DIR and CHITON_GRAPH_PATH are never exported.
+#     internal/config/config_test.go isolates on those variables being absent.
+#   * TMPDIR / RUNNER_TEMP are never repointed inside $GITHUB_WORKSPACE.
+#     internal/ingest/git/git_test.go asserts its temp dir is NOT inside a git
+#     work tree, which a workspace-local TMPDIR would break.
+
+name: CI
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # Every run is now deliberate, so never cancel one in flight; a second
+  # dispatch on the same ref queues behind the first instead.
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          # Reads both the `go` and `toolchain` lines. Do not replace with a
+          # hard-coded go-version.
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "::error::not gofmt-clean; run 'make fmt'"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        # -count=1 disables the test cache, so a green run always means the
+        # tests really executed.
+        #
+        # Timing-sensitive tests, for whoever is reading a red run:
+        # internal/ingest/browser/watch_test.go (a 250 ms "nothing happened yet"
+        # negative timing assertion) and TestCoalesce in internal/jobs (asserts
+        # exactly one run behind a 30 ms debounce). Do NOT paper over these with
+        # a retry wrapper — investigate instead.
+        #
+        # The first red run here was internal/ingest/fswatch, and it was NOT a
+        # flake: fsnotify drops a deleted directory's watch while draining the
+        # kernel buffer, so on Linux the watcher had already forgotten the path
+        # was a directory by the time it handled the Remove event, and never
+        # fired OnDirRemove. Fixed by tracking watched directories ourselves.
+        # Treat a failure in that package as a real bug until proven otherwise.
+        #
+        # macOS ships a 256 fd soft limit. BadgerDB opens many fds per store,
+        # a dozen-plus packages open one, and the kqueue backend spends an fd
+        # per watched path, so raise the soft limit to 4096 before the run. The
+        # bump is conditional because the Linux runners already start well above
+        # that and an unconditional `ulimit -n 4096` would lower them.
+        run: |
+          cur=$(ulimit -n)
+          if [ "$cur" != unlimited ] && [ "$cur" -lt 4096 ]; then
+            ulimit -n 4096 || echo "could not raise the fd limit; continuing at $(ulimit -n)"
+          fi
+          echo "fd limit: $(ulimit -n)"
+          go test ./... -count=1
+
+      # The Microsoft Graph code (chiton teams *, chiton email outlook) is behind
+      # //go:build msgraph and is excluded from the default build and from every
+      # release artifact — the Graph SDK costs ~117 MB of binary. Compile and
+      # test it here so the tag-gated path cannot rot unnoticed. Nothing about
+      # this path is OS-specific, so one matrix leg is enough.
+      - name: Vet (msgraph)
+        if: runner.os == 'Linux'
+        run: go vet -tags msgraph ./...
+
+      - name: Test (msgraph)
+        if: runner.os == 'Linux'
+        run: go test -tags msgraph -count=1 ./internal/ingest/email/... ./internal/ingest/teams/...
+
+  race:
+    name: race
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      # -race requires cgo, so this job must run with the runner's default
+      # CGO_ENABLED=1 and a working C toolchain. Never set CGO_ENABLED=0 here.
+      # -timeout guards against a genuinely hung watcher; the race detector is
+      # slow enough that the 10m per-package default is not much headroom. It is
+      # a hang guard, not a flake workaround.
+      - name: Test with the race detector
+        run: go test -race ./... -count=1 -timeout 20m
+
+  shims:
+    name: shim file modes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # bin/chiton is the plugin's PATH shim and scripts/install-chiton.sh is the
+      # POSIX installer; both are useless without the executable bit. They are
+      # normally committed from Windows, where core.filemode=false makes git
+      # record 100644 by default, so guard the mode in the index.
+      - name: Executable bit on the shipped POSIX scripts
+        run: |
+          status=0
+          for f in bin/chiton scripts/install-chiton.sh; do
+            mode=$(git ls-files -s -- "$f" | awk '{print $1}')
+            if [ -z "$mode" ]; then
+              echo "::error file=$f::not tracked by git; the plugin shim and installer must be committed"
+              status=1
+            elif [ "$mode" != "100755" ]; then
+              echo "::error file=$f::index mode $mode, want 100755 — fix with: git update-index --chmod=+x $f"
+              status=1
+            else
+              echo "ok: $f is 100755"
+            fi
+          done
+          exit $status

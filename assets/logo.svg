@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 506 100" width="506" height="100">
+  <title>chiton</title>
+  <!-- Eight diamond rings, one per chiton shell plate, blue to pink. Outer half-diagonal 50,
+       hole 20.94, centres 58 apart, 92% opacity so neighbours blend where they overlap. -->
+  <g fill-rule="evenodd" fill-opacity=".92">
+    <path fill="#47C7F8" d="M50 0L100 50L50 100L0 50ZM50 29.06L70.94 50L50 70.94L29.06 50Z"/>
+    <path fill="#09A8E8" d="M108 0L158 50L108 100L58 50ZM108 29.06L128.94 50L108 70.94L87.06 50Z"/>
+    <path fill="#1777C7" d="M166 0L216 50L166 100L116 50ZM166 29.06L186.94 50L166 70.94L145.06 50Z"/>
+    <path fill="#1A29C7" d="M224 0L274 50L224 100L174 50ZM224 29.06L244.94 50L224 70.94L203.06 50Z"/>
+    <path fill="#454EE3" d="M282 0L332 50L282 100L232 50ZM282 29.06L302.94 50L282 70.94L261.06 50Z"/>
+    <path fill="#682797" d="M340 0L390 50L340 100L290 50ZM340 29.06L360.94 50L340 70.94L319.06 50Z"/>
+    <path fill="#A8178F" d="M398 0L448 50L398 100L348 50ZM398 29.06L418.94 50L398 70.94L377.06 50Z"/>
+    <path fill="#E80F8B" d="M456 0L506 50L456 100L406 50ZM456 29.06L476.94 50L456 70.94L435.06 50Z"/>
+  </g>
+</svg>
