@@ -38,8 +38,9 @@ func TestMetricDistanceWithoutSIMD(t *testing.T) {
 	for i, m := range []Metric{Cosine, Euclidean, UnitCosine} {
 		simd[i] = m.Distance(a, b)
 	}
+	// Restore the prior setting: SetAcceleration(true) panics without AVX2 and FMA (arm64).
+	defer vek32.SetAcceleration(vek32.Info().Acceleration)
 	vek32.SetAcceleration(false)
-	defer vek32.SetAcceleration(true)
 	for i, m := range []Metric{Cosine, Euclidean, UnitCosine} {
 		if d := m.Distance(a, b); math.Abs(float64(d-simd[i])) > 1e-3*math.Max(1, math.Abs(float64(d))) {
 			t.Errorf("%v: pure Go %v, SIMD %v", m, d, simd[i])
