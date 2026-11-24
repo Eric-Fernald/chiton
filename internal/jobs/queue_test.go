@@ -2,6 +2,8 @@ package jobs
 
 import (
 	"context"
+	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -308,6 +310,43 @@ func TestNoConcurrentSelfRun(t *testing.T) {
 	if atomic.LoadInt32(&violated) != 0 {
 		t.Fatal("a key ran concurrently with itself (single-key-serialization invariant violated)")
 	}
+}
+
+// TestEnqueueAfterRunIsNotLost checks that an Enqueue arriving right after a key's run always leads to
+// another run. Each goroutine re-enqueues its key as soon as the handler has seen the previous enqueue,
+// which is when the fired timer's bookkeeping may still be unfinished.
+func TestEnqueueAfterRunIsNotLost(t *testing.T) {
+	const keys = 64
+	var want, seen [keys]atomic.Int64
+	q := New(func(_ context.Context, key string) error {
+		i, _ := strconv.Atoi(key)
+		seen[i].Store(want[i].Load())
+		return nil
+	}, Options{Workers: 8, Debounce: time.Millisecond})
+	q.Start(context.Background())
+	defer q.Stop()
+
+	deadline := time.Now().Add(300 * time.Millisecond)
+	var wg sync.WaitGroup
+	for i := 0; i < keys; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			key := strconv.Itoa(i)
+			for time.Now().Before(deadline) {
+				n := want[i].Add(1)
+				q.Enqueue(key)
+				for giveUp := time.Now().Add(2 * time.Second); seen[i].Load() < n; {
+					if time.Now().After(giveUp) {
+						t.Errorf("key %s: enqueue %d never ran", key, n)
+						return
+					}
+					runtime.Gosched()
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
 }
 
 // TestOnDone fires after each handler run.
