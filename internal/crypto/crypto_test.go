@@ -1,0 +1,384 @@
+package crypto
+
+import (
+	"bytes"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestDeriveKey_Deterministic(t *testing.T) {
+	kf, err := DefaultKeyFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := kf.DeriveKey("hunter2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := kf.DeriveKey("hunter2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(a, b) {
+		t.Errorf("same passphrase+keyfile should produce same key")
+	}
+	if len(a) != 32 {
+		t.Errorf("expected 32-byte key, got %d", len(a))
+	}
+}
+
+func TestDeriveKey_PassphraseSensitive(t *testing.T) {
+	kf, _ := DefaultKeyFile()
+	a, _ := kf.DeriveKey("hunter2")
+	b, _ := kf.DeriveKey("hunter3")
+	if bytes.Equal(a, b) {
+		t.Errorf("different passphrases produced same key")
+	}
+}
+
+func TestKeyFile_SaveLoadRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "keyfile.json")
+	kf, _ := DefaultKeyFile()
+	if err := kf.Save(path, false); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadKeyFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded == nil {
+		t.Fatal("expected loaded keyfile, got nil")
+	}
+	if loaded.SaltHex != kf.SaltHex || loaded.MemoryKiB != kf.MemoryKiB {
+		t.Errorf("round-trip mismatch")
+	}
+
+	// Re-save without force fails.
+	if err := kf.Save(path, false); err == nil {
+		t.Errorf("expected error overwriting keyfile without --force")
+	}
+	if err := kf.Save(path, true); err != nil {
+		t.Errorf("expected force=true to overwrite: %v", err)
+	}
+}
+
+// TestDeriveKey_RejectsBadParams verifies DeriveKey errors cleanly instead of panicking inside
+// argon2 (iterations or parallelism below 1) or silently deriving a weak or short key.
+func TestDeriveKey_RejectsBadParams(t *testing.T) {
+	base := func() *KeyFile { kf, _ := DefaultKeyFile(); return kf }
+	cases := map[string]func(*KeyFile){
+		"zero iterations":  func(kf *KeyFile) { kf.Iterations = 0 },
+		"zero parallelism": func(kf *KeyFile) { kf.Parallelism = 0 },
+		"low memory":       func(kf *KeyFile) { kf.MemoryKiB = 8 },
+		"non-32 keylen":    func(kf *KeyFile) { kf.KeyLength = 16 },
+		"empty salt":       func(kf *KeyFile) { kf.SaltHex = "" },
+		"short salt":       func(kf *KeyFile) { kf.SaltHex = "0011" },
+		"bad kdf":          func(kf *KeyFile) { kf.KDF = "scrypt" },
+		"bad verifier":     func(kf *KeyFile) { kf.Verifier = "zz" },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			kf := base()
+			mutate(kf)
+			// Must not panic, and must return an error.
+			if _, err := kf.DeriveKey("hunter2"); err == nil {
+				t.Errorf("DeriveKey accepted invalid keyfile (%s)", name)
+			}
+		})
+	}
+}
+
+// TestKeyFileValidate_RejectsExcessiveCost verifies a keyfile can't ask argon2 for terabytes of memory or
+// hours of work: a cloned repo may ship one, and every chiton command would then derive from it.
+func TestKeyFileValidate_RejectsExcessiveCost(t *testing.T) {
+	cases := map[string]func(*KeyFile){
+		"huge memory":     func(kf *KeyFile) { kf.MemoryKiB = 1<<32 - 1 },
+		"over the cap":    func(kf *KeyFile) { kf.MemoryKiB = maxMemoryKiB + 1 },
+		"huge iterations": func(kf *KeyFile) { kf.Iterations = 4_000_000_000 },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			kf, err := DefaultKeyFile()
+			if err != nil {
+				t.Fatal(err)
+			}
+			mutate(kf)
+			// validate, not DeriveKey: an accepted keyfile would attempt the allocation.
+			if err := kf.validate(); err == nil {
+				t.Errorf("validate accepted a keyfile with %s", name)
+			}
+		})
+	}
+	kf, _ := DefaultKeyFile()
+	kf.MemoryKiB, kf.Iterations = maxMemoryKiB, maxIterations
+	if err := kf.validate(); err != nil {
+		t.Errorf("validate rejected params at the cap: %v", err)
+	}
+}
+
+// TestLoadKeyFile_RejectsTampered verifies a hand-edited/corrupt keyfile fails
+// at load time instead of flowing into argon2 and panicking later.
+func TestLoadKeyFile_RejectsTampered(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keyfile.json")
+	tampered := `{"version":1,"kdf":"argon2id","salt_hex":"00112233445566778899aabbccddeeff","memory_kib":64,"iterations":0,"parallelism":0,"key_length":32,"cipher":"AES-256-GCM"}`
+	if err := os.WriteFile(path, []byte(tampered), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadKeyFile(path); err == nil {
+		t.Error("LoadKeyFile accepted a keyfile with iterations=0/parallelism=0")
+	}
+}
+
+func TestLoadKeyFile_Missing(t *testing.T) {
+	got, err := LoadKeyFile(filepath.Join(t.TempDir(), "absent.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Errorf("expected nil on missing keyfile, got %v", got)
+	}
+}
+
+func TestEncryptDecrypt_RoundTrip(t *testing.T) {
+	key := bytes.Repeat([]byte{0x42}, 32)
+	plain := []byte("the quick brown fox jumps over the lazy dog")
+	ct, err := EncryptBytes(key, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(ct[headerLen:], plain) {
+		t.Errorf("ciphertext leaks plaintext")
+	}
+	got, err := DecryptBytes(key, ct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, plain) {
+		t.Errorf("round-trip mismatch: %q vs %q", got, plain)
+	}
+}
+
+func TestDecrypt_TamperingDetected(t *testing.T) {
+	key := bytes.Repeat([]byte{0x42}, 32)
+	ct, err := EncryptBytes(key, []byte("payload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Flip a byte in the ciphertext body.
+	ct[len(ct)-1] ^= 0xff
+	if _, err := DecryptBytes(key, ct); err == nil {
+		t.Errorf("expected auth-tag failure on tampered ciphertext")
+	}
+}
+
+func TestDecrypt_WrongKey(t *testing.T) {
+	keyA := bytes.Repeat([]byte{0x42}, 32)
+	keyB := bytes.Repeat([]byte{0x43}, 32)
+	ct, _ := EncryptBytes(keyA, []byte("payload"))
+	if _, err := DecryptBytes(keyB, ct); err == nil {
+		t.Errorf("expected decryption failure with wrong key")
+	}
+}
+
+func TestFileKey_DerivedAndDistinct(t *testing.T) {
+	storeKey := bytes.Repeat([]byte{0x42}, 32)
+	a, err := FileKey(storeKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := FileKey(storeKey)
+	other, _ := FileKey(bytes.Repeat([]byte{0x43}, 32))
+	if len(a) != 32 || !bytes.Equal(a, b) || bytes.Equal(a, storeKey) || bytes.Equal(a, other) {
+		t.Fatalf("FileKey must be a deterministic 32-byte key distinct from the store key and per store")
+	}
+	if _, err := FileKey(nil); err == nil {
+		t.Fatal("FileKey accepted an empty store key")
+	}
+}
+
+func TestGetPassphrase_FromEnv(t *testing.T) {
+	t.Setenv(EnvVarPassphrase, "from-env")
+	got, err := GetPassphrase("ignored", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "from-env" {
+		t.Errorf("expected env passphrase, got %q", got)
+	}
+}
+
+func TestGetPassphrase_NonInteractive(t *testing.T) {
+	t.Setenv(EnvVarPassphrase, "")
+	// Stdin in the test runner is not a terminal — should error.
+	if _, err := GetPassphrase("prompt", false); err == nil {
+		t.Errorf("expected ErrNoPassphrase in non-interactive context")
+	}
+}
+
+func TestResolveKeyForGraph_NoKeyfile(t *testing.T) {
+	graph := filepath.Join(t.TempDir(), "graph.kuzu")
+	key, kf, err := ResolveKeyForGraph(graph, filepath.Join(t.TempDir(), ".chiton"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key != nil || kf != nil {
+		t.Errorf("expected nil key when no keyfile present")
+	}
+}
+
+func TestResolveKeyForGraph_FindsKeyfileNextToGraph(t *testing.T) {
+	dir := t.TempDir()
+	graph := filepath.Join(dir, "graph.kuzu")
+	if err := os.WriteFile(filepath.Join(dir, KeyfileName), mustMarshal(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvVarPassphrase, "test-passphrase")
+	key, kf, err := ResolveKeyForGraph(graph, filepath.Join(t.TempDir(), ".chiton"))
+	if err != nil {
+		t.Fatalf("ResolveKeyForGraph: %v", err)
+	}
+	if kf == nil {
+		t.Fatal("expected keyfile to be found")
+	}
+	if len(key) != 32 {
+		t.Errorf("expected 32-byte key, got %d", len(key))
+	}
+}
+
+func mustMarshal(t *testing.T) []byte {
+	t.Helper()
+	kf, err := DefaultKeyFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(saveTempKeyfile(t, kf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func saveTempKeyfile(t *testing.T, kf *KeyFile) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "kf.json")
+	if err := kf.Save(path, false); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// A keyfile in the project's state dir must be found even when the graph lives elsewhere and the process
+// runs from another directory, as an assistant-launched server does.
+func TestResolveKeyForGraph_FindsKeyfileInStateDir(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), ".chiton")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	kf, err := DefaultKeyFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := kf.Save(ResolveKeyfilePath(stateDir), false); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvVarPassphrase, "test-passphrase")
+
+	graph := filepath.Join(t.TempDir(), "store", "graph.kuzu")
+	key, got, err := ResolveKeyForGraph(graph, stateDir)
+	if err != nil {
+		t.Fatalf("ResolveKeyForGraph: %v", err)
+	}
+	if got == nil || len(key) != 32 {
+		t.Fatalf("keyfile in the state dir was not used: kf=%v keylen=%d", got, len(key))
+	}
+}
+
+// A mistyped passphrase must fail clearly instead of deriving a key that creates or opens a store.
+func TestDeriveKey_VerifierRejectsWrongPassphrase(t *testing.T) {
+	kf, err := DefaultKeyFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := kf.DeriveKey("right horse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kf.SetVerifier(key)
+	if _, err := kf.DeriveKey("rihgt horse"); !errors.Is(err, ErrWrongPassphrase) {
+		t.Errorf("DeriveKey(typo) err = %v, want ErrWrongPassphrase", err)
+	}
+	again, err := kf.DeriveKey("right horse")
+	if err != nil || !bytes.Equal(again, key) {
+		t.Errorf("DeriveKey(right) = %x, %v; want the original key", again, err)
+	}
+}
+
+// Keyfiles written before verifiers existed have none and must keep accepting any passphrase.
+func TestDeriveKey_LegacyKeyfileHasNoVerifier(t *testing.T) {
+	kf, err := DefaultKeyFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := kf.DeriveKey("anything"); err != nil {
+		t.Errorf("legacy keyfile rejected a passphrase: %v", err)
+	}
+}
+
+func TestKeyFile_RecordVerifierUpgradesInPlace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), KeyfileName)
+	kf, err := DefaultKeyFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := kf.Save(path, false); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadKeyFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := loaded.DeriveKey("pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := loaded.RecordVerifier(key); err != nil {
+		t.Fatalf("RecordVerifier: %v", err)
+	}
+	reloaded, err := LoadKeyFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Verifier == "" {
+		t.Fatal("verifier was not persisted")
+	}
+	if _, err := reloaded.DeriveKey("not pw"); !errors.Is(err, ErrWrongPassphrase) {
+		t.Errorf("after the upgrade, a wrong passphrase gave %v, want ErrWrongPassphrase", err)
+	}
+}
+
+func TestSealUnseal(t *testing.T) {
+	key := bytes.Repeat([]byte{0x42}, 32)
+	plain := []byte(`{"label":"Initech acquisition sync"}`)
+	sealed, err := Seal(key, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(sealed, []byte("Initech")) {
+		t.Error("sealed output leaks plaintext")
+	}
+	if got, err := Unseal(key, sealed); err != nil || !bytes.Equal(got, plain) {
+		t.Errorf("Unseal = %q, %v; want the plaintext", got, err)
+	}
+	if got, err := Seal(nil, plain); err != nil || !bytes.Equal(got, plain) {
+		t.Errorf("Seal(nil) = %q, %v; a plaintext store must pass data through", got, err)
+	}
+	if got, err := Unseal(key, plain); err != nil || !bytes.Equal(got, plain) {
+		t.Errorf("Unseal of a file written before encryption = %q, %v; want it unchanged", got, err)
+	}
+	if _, err := Unseal(nil, sealed); !errors.Is(err, ErrSealedNoKey) {
+		t.Errorf("Unseal(nil, sealed) err = %v, want ErrSealedNoKey", err)
+	}
+}

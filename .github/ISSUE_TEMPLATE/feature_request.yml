@@ -1,0 +1,64 @@
+name: Feature request
+description: Suggest a capability or an improvement
+title: "[feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Concrete problems make the best feature requests. What were you trying
+        to do when the current behaviour got in the way?
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >-
+        What you are trying to accomplish, and where chiton falls short today.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like to happen
+      description: >-
+        Sketch the command, MCP tool, rule, or behaviour you have in mind. Rough
+        is fine.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which area does this touch?
+      options:
+        - Graph build / extraction
+        - Live sync / watchers
+        - Rule engine / findings
+        - Semantic layer (embeddings, concepts, search)
+        - MCP server or an MCP tool
+        - Meetings, URLs, browser history, email, Slack, Teams
+        - Installers, plugin packaging, skills
+        - Docs
+        - Other / unsure
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: >-
+        Including any workaround you are using now — that often tells us how
+        urgent this is.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before filing
+      options:
+        - label: I searched the existing issues and this is not a duplicate.
+          required: true

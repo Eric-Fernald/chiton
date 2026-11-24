@@ -1,0 +1,286 @@
+package store
+
+import (
+	"context"
+	"slices"
+	"strings"
+
+	"github.com/Eric-Fernald/chiton/internal/graph/model"
+)
+
+// IsReadOnly reports whether gs declares itself read-only (see ReadOnlyAware).
+func IsReadOnly(gs GraphStore) bool {
+	ro, ok := gs.(ReadOnlyAware)
+	return ok && ro.ReadOnly()
+}
+
+// FindNode resolves a label, plus an optional source-file hint, to the best-ranked matching node (see
+// FindNodes). found is false when nothing matches, and err is the raw search error.
+func FindNode(ctx context.Context, gs GraphStore, label, file string) (node model.Node, found bool, err error) {
+	nodes, err := FindNodes(ctx, gs, label, file)
+	if err != nil || len(nodes) == 0 {
+		return model.Node{}, false, err
+	}
+	return nodes[0], true, nil
+}
+
+// maxLabelMatches bounds how many substring matches FindNodes ranks, so a one-letter label doesn't decode
+// the whole store.
+const maxLabelMatches = 2000
+
+// FindNodes returns every node whose label contains label (case-insensitive), best match first: nodes in a
+// file matching the file hint, then exact label matches (case-sensitive before case-insensitive), then
+// labels ending in "."+label (a method, or a pkg.Func reference), then other substring matches. Within a
+// rank, definitions come before files and files before external references. A plain substring lookup used
+// to return whichever match came first in key order, so "New" could resolve to "NewEngine".
+func FindNodes(ctx context.Context, gs GraphStore, label, file string) ([]model.Node, error) {
+	nodes, err := gs.SearchNodes(ctx, label, maxLabelMatches)
+	if err != nil || len(nodes) == 0 {
+		return nil, err
+	}
+	hint := strings.ToLower(file)
+	rank := func(n model.Node) (int, int, int) {
+		fileRank := 0
+		if hint != "" && !strings.Contains(strings.ToLower(n.SourceURI), hint) {
+			fileRank = 1
+		}
+		var labelRank int
+		switch {
+		case n.Label == label:
+			labelRank = 0
+		case strings.EqualFold(n.Label, label):
+			labelRank = 1
+		case strings.HasSuffix(strings.ToLower(n.Label), "."+strings.ToLower(label)):
+			labelRank = 2
+		default:
+			labelRank = 3
+		}
+		kindRank := 1
+		switch {
+		case model.IsExternal(n):
+			kindRank = 2
+		case n.Kind == model.KindSymbol:
+			kindRank = 0
+		}
+		return fileRank, labelRank, kindRank
+	}
+	slices.SortStableFunc(nodes, func(a, b model.Node) int {
+		af, al, ak := rank(a)
+		bf, bl, bk := rank(b)
+		if af != bf {
+			return af - bf
+		}
+		if al != bl {
+			return al - bl
+		}
+		return ak - bk
+	})
+	return nodes, nil
+}
+
+// PickByFile picks a node whose source_uri contains the file hint, preferring symbols over file
+// nodes (a file hint almost always targets a symbol in that file), and falls back to nodes[0].
+func PickByFile(nodes []model.Node, file string) model.Node {
+	if file == "" {
+		return nodes[0]
+	}
+	lower := strings.ToLower(file)
+	var firstMatch *model.Node
+	for i := range nodes {
+		n := &nodes[i]
+		if strings.Contains(strings.ToLower(n.SourceURI), lower) {
+			if firstMatch == nil {
+				firstMatch = n
+			}
+			if n.Kind == model.KindSymbol {
+				return *n
+			}
+		}
+	}
+	if firstMatch != nil {
+		return *firstMatch
+	}
+	return nodes[0]
+}
+
+// NodeFilter selects nodes for NodesMatching. Zero-valued fields don't constrain.
+type NodeFilter struct {
+	Kinds     []model.NodeKind  // node kind is one of these
+	SourceURI string            // node source_uri equals this
+	Attrs     map[string]string // model.AttrString(attrs, k) == v for every pair (so "" also matches an absent attr)
+}
+
+// Match reports whether n satisfies every constraint in f.
+func (f NodeFilter) Match(n model.Node) bool {
+	if len(f.Kinds) > 0 && !slices.Contains(f.Kinds, n.Kind) {
+		return false
+	}
+	if f.SourceURI != "" && n.SourceURI != f.SourceURI {
+		return false
+	}
+	for k, v := range f.Attrs {
+		if model.AttrString(n.Attrs, k) != v {
+			return false
+		}
+	}
+	return true
+}
+
+// NodesMatching returns the nodes of gs that f matches, in AllNodes order, via NodeScanner when gs has it.
+func NodesMatching(ctx context.Context, gs GraphStore, f NodeFilter) ([]model.Node, error) {
+	if sc, ok := gs.(NodeScanner); ok {
+		return sc.NodesMatching(ctx, f)
+	}
+	all, err := gs.AllNodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []model.Node
+	for _, n := range all {
+		if f.Match(n) {
+			out = append(out, n)
+		}
+	}
+	return out, nil
+}
+
+// GetNodes returns the nodes with the given IDs that exist, in ids order, reading them in one pass via
+// NodeGetter when gs has it (else one GetNode per ID).
+func GetNodes(ctx context.Context, gs GraphStore, ids []string) ([]model.Node, error) {
+	if g, ok := gs.(NodeGetter); ok {
+		return g.GetNodes(ctx, ids)
+	}
+	var out []model.Node
+	for _, id := range ids {
+		n, err := gs.GetNode(ctx, id)
+		if err != nil {
+			return out, err
+		}
+		if n != nil {
+			out = append(out, *n)
+		}
+	}
+	return out, nil
+}
+
+// EmbeddingIDs returns the node IDs es holds embeddings for, via EmbeddingIDLister when es has it.
+func EmbeddingIDs(ctx context.Context, es EmbeddingStore) ([]string, error) {
+	if l, ok := es.(EmbeddingIDLister); ok {
+		return l.EmbeddingIDs(ctx)
+	}
+	embs, err := es.AllEmbeddings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(embs))
+	for i, e := range embs {
+		ids[i] = e.NodeID
+	}
+	return ids, nil
+}
+
+// EmbeddingMetas lists es's stored embeddings without their vectors, via EmbeddingMetaLister when es has it.
+func EmbeddingMetas(ctx context.Context, es EmbeddingStore) ([]EmbeddingMeta, error) {
+	if l, ok := es.(EmbeddingMetaLister); ok {
+		return l.EmbeddingMetas(ctx)
+	}
+	embs, err := es.AllEmbeddings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	metas := make([]EmbeddingMeta, len(embs))
+	for i, e := range embs {
+		metas[i] = EmbeddingMeta{NodeID: e.NodeID, Model: e.Model, Dim: len(e.Vec), TextSHA: e.TextSHA}
+	}
+	return metas, nil
+}
+
+// ReplaceSources makes each update its source's stored content via SourceReplacer, else DeleteBySourceURI plus
+// upserts (which also drops edges other sources attached). Update URIs must be distinct; returns stale-node counts.
+func ReplaceSources(ctx context.Context, gs GraphStore, updates ...SourceUpdate) ([]int, error) {
+	if r, ok := gs.(SourceReplacer); ok {
+		return r.ReplaceSources(ctx, updates)
+	}
+	deleted := make([]int, len(updates))
+	for i, u := range updates {
+		if !u.Fresh {
+			n, err := gs.DeleteBySourceURI(ctx, u.URI)
+			if err != nil {
+				return deleted, err
+			}
+			deleted[i] = n
+		}
+		if err := gs.UpsertNodes(ctx, u.Nodes); err != nil {
+			return deleted, err
+		}
+		if err := gs.UpsertEdges(ctx, u.Edges); err != nil {
+			return deleted, err
+		}
+	}
+	return deleted, nil
+}
+
+// CountByKind tallies gs's nodes and edges by kind, via KindCounter when gs has it.
+func CountByKind(ctx context.Context, gs GraphStore) (map[model.NodeKind]int, map[model.EdgeKind]int, error) {
+	if c, ok := gs.(KindCounter); ok {
+		return c.CountByKind(ctx)
+	}
+	all, err := gs.AllNodes(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	nodes := map[model.NodeKind]int{}
+	for _, n := range all {
+		nodes[n.Kind]++
+	}
+	allEdges, err := gs.AllEdges(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	edges := map[model.EdgeKind]int{}
+	for _, e := range allEdges {
+		edges[e.Kind]++
+	}
+	return nodes, edges, nil
+}
+
+// DeleteNodes removes nodes and their edges by ID via NodeDeleter when gs has it, else by each node's source_uri
+// (which also removes any other node sharing that URI). It returns how many nodes were deleted.
+func DeleteNodes(ctx context.Context, gs GraphStore, nodes []model.Node) (int, error) {
+	if len(nodes) == 0 {
+		return 0, nil
+	}
+	if d, ok := gs.(NodeDeleter); ok {
+		ids := make([]string, len(nodes))
+		for i, n := range nodes {
+			ids[i] = n.ID
+		}
+		return d.DeleteByIDs(ctx, ids)
+	}
+	total := 0
+	for _, n := range nodes {
+		k, err := gs.DeleteBySourceURI(ctx, n.SourceURI)
+		total += k
+		if err != nil {
+			return total, err
+		}
+	}
+	return total, nil
+}
+
+// DeleteEdges removes edges by ID via EdgeDeleter and returns how many it deleted. A store without the
+// capability keeps them, so it returns 0.
+func DeleteEdges(ctx context.Context, gs GraphStore, ids []string) (int, error) {
+	if d, ok := gs.(EdgeDeleter); ok && len(ids) > 0 {
+		return d.DeleteEdges(ctx, ids)
+	}
+	return 0, nil
+}
+
+// Sync flushes gs's writes to stable storage when gs is a Syncer; otherwise it does nothing.
+func Sync(gs GraphStore) error {
+	if s, ok := gs.(Syncer); ok {
+		return s.Sync()
+	}
+	return nil
+}

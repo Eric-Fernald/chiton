@@ -1,0 +1,177 @@
+# Release — cross-compile the published binaries and attach them to the tag.
+#
+# The asset names are a contract with scripts/install-chiton.sh and
+# scripts/install-chiton.ps1: both resolve
+#
+#     chiton-<tag>-<os>-<arch>[.exe]
+#
+# under the release's download URL, then fetch checksums.txt and REFUSE to
+# install a binary that has no entry there. `make release` produces exactly
+# those names from $(VERSION) and writes dist/checksums.txt, so VERSION must be
+# the tag verbatim — hence fetch-depth: 0 plus an explicit VERSION= below,
+# rather than letting the Makefile's `git describe --tags` guess. A shallow
+# checkout has no tags and would fall back to a bare SHA, producing assets the
+# installers can never find.
+#
+# Release binaries are built WITHOUT -tags msgraph, on purpose: the Microsoft
+# Graph SDK adds ~117 MB per platform for two API calls. `chiton teams *` and
+# `chiton email outlook` therefore print "rebuild with -tags msgraph" in release
+# builds; users who need them run `make build-msgraph`. `chiton email ingest`
+# and `chiton email gmail` are unaffected.
+
+name: Release
+
+# Manual only: pushing a tag no longer publishes anything. Create and push the
+# tag first, then dispatch this workflow with that tag:
+#
+#     gh workflow run release.yml -f tag=v1.2.3
+#
+# The tag is an explicit input rather than the dispatched ref because on a
+# workflow_dispatch GITHUB_REF_NAME is whatever ref you launched from, and the
+# asset names (a contract with the installers) must be the tag verbatim.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to release (e.g. v1.2.3)'
+        required: true
+        type: string
+
+# Creating the release and uploading its assets is the only write this workflow
+# needs.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: build and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Scoped to this job only. The release artifacts are static, pure-Go
+      # cross-compiles; the CI workflow must keep cgo enabled for its race leg.
+      CGO_ENABLED: '0'
+      # The tag drives both the checkout and every asset name; read it from the
+      # dispatch input, never from GITHUB_REF_NAME.
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: Validate the tag
+        # The old trigger filtered on tags: ['v*']; keep that shape enforced now
+        # that a human types it, so a typo cannot publish assets the installers
+        # will never resolve.
+        run: |
+          case "$TAG" in
+            v*) echo "releasing $TAG" ;;
+            *) echo "::error::tag must start with 'v' (got '$TAG')"; exit 1 ;;
+          esac
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Build the tag that was asked for, not the ref the dispatch came
+          # from. Checkout fails outright if the tag does not exist.
+          ref: ${{ inputs.tag }}
+          # actions/checkout defaults to a depth-1 fetch with no tags, which
+          # would make the Makefile's `git describe --tags` fall back to a bare
+          # SHA and name every asset something the installers cannot resolve.
+          # VERSION is passed explicitly below as well; this keeps the tag
+          # present for `git describe` and for anything else added later.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          # go.mod carries `go 1.25.5` + `toolchain go1.26.4`; let GOTOOLCHAIN
+          # stay at its default (auto) and do not pin a go-version here.
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Build release artifacts
+        run: |
+          echo "building ${TAG}"
+          make release VERSION="${TAG}"
+
+      - name: Verify the artifact set the installers expect
+        # Mirrors what scripts/install-chiton.{sh,ps1} do at install time: the
+        # exact asset name must exist and must appear in checksums.txt. Failing
+        # here is far cheaper than shipping a release nobody can install.
+        run: |
+          status=0
+          for asset in \
+            "chiton-${TAG}-linux-amd64" \
+            "chiton-${TAG}-linux-arm64" \
+            "chiton-${TAG}-darwin-amd64" \
+            "chiton-${TAG}-darwin-arm64" \
+            "chiton-${TAG}-windows-amd64.exe"; do
+            if [ ! -f "dist/$asset" ]; then
+              echo "::error::missing release artifact dist/$asset"
+              status=1
+            # Fixed-string match on the last field. A grep pattern would treat
+            # the dots in the tag and in ".exe" as wildcards, which can only
+            # ever produce a false pass on the contract this step guards.
+            elif ! awk -v a="$asset" '$NF == a { found = 1 } END { exit !found }' dist/checksums.txt; then
+              echo "::error::$asset has no entry in dist/checksums.txt"
+              status=1
+            fi
+          done
+          # Nothing unexpected should ship either: exactly the five binaries.
+          extra=$(find dist -maxdepth 1 -type f -name 'chiton-*' | wc -l)
+          if [ "$extra" -ne 5 ]; then
+            echo "::error::dist/ holds $extra chiton-* artifacts, expected 5"
+            status=1
+          fi
+          echo "--- dist/checksums.txt ---"
+          cat dist/checksums.txt
+          exit $status
+
+      # Third-party action, pinned to a major version tag. Hardening this to a
+      # full commit SHA is a good follow-up; do it by copying the SHA off the
+      # release you actually intend to run, never from memory.
+      - name: Publish the GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          name: ${{ inputs.tag }}
+          tag_name: ${{ inputs.tag }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/chiton-*
+            dist/checksums.txt
+
+      - name: Assemble the Claude Code plugin
+        # The published plugin pins this release: it carries the tag and
+        # checksums.txt, and its launcher downloads the one binary a machine
+        # needs from the release just published. That is why this runs after
+        # the release exists. See scripts/build-plugin-dist.sh.
+        run: sh scripts/build-plugin-dist.sh "$TAG"
+
+      - name: Publish the plugin-dist branch
+        # .claude-plugin/marketplace.json on main installs the plugin from this
+        # branch. Each release adds one commit whose tree is exactly dist/plugin/,
+        # parented on the previous release's commit so an installed plugin always
+        # fast-forwards on update.
+        #
+        # The commit is built with plumbing against a scratch index, so the
+        # checked-out tag's index and .gitignore play no part, and the push
+        # reuses the credentials actions/checkout persisted.
+        env:
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          export GIT_DIR="$PWD/.git"
+          export GIT_INDEX_FILE="$RUNNER_TEMP/plugin-dist.index"
+          rm -f "$GIT_INDEX_FILE"
+          cd dist/plugin
+          git --work-tree=. add -A -- .
+          tree=$(git write-tree)
+          if parent=$(git rev-parse --verify -q refs/remotes/origin/plugin-dist); then
+            commit=$(git commit-tree "$tree" -p "$parent" -m "chiton plugin $TAG")
+          else
+            commit=$(git commit-tree "$tree" -m "chiton plugin $TAG")
+          fi
+          echo "--- plugin-dist tree for $TAG ---"
+          git ls-tree -r --long "$commit"
+          git push origin "$commit:refs/heads/plugin-dist"

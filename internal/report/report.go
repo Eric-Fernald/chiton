@@ -1,0 +1,126 @@
+package report
+
+import (
+	"cmp"
+	"fmt"
+	"io"
+	"slices"
+	"sort"
+	"strings"
+
+	"github.com/Eric-Fernald/chiton/internal/graph/cluster"
+	"github.com/Eric-Fernald/chiton/internal/graph/model"
+)
+
+// Options controls how the report is generated.
+type Options struct {
+	MaxGodNodes     int
+	MaxPerCommunity int
+}
+
+// Default is the standard report configuration.
+var Default = Options{
+	MaxGodNodes:     20,
+	MaxPerCommunity: 10,
+}
+
+// Generate writes a Markdown graph report to w.
+func Generate(w io.Writer, results *cluster.Results, edges []model.Edge, opts Options) error {
+	fmt.Fprintf(w, "# Graph Report\n\n")
+	fmt.Fprintf(w, "Generated: %s\n\n", results.GeneratedAt.Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(w, "**Nodes:** %d  **Communities:** %d\n\n", results.NodeCount, results.CommunityCount)
+
+	type entry struct {
+		id string
+		r  cluster.NodeResult
+	}
+	all := make([]entry, 0, len(results.Nodes))
+	for id, r := range results.Nodes {
+		all = append(all, entry{id, r})
+	}
+	slices.SortFunc(all, func(a, b entry) int {
+		// Rank like the CLI and MCP god-node lists, breaking ties by ID so the output is reproducible.
+		return cmp.Or(cluster.CompareByBetweenness(a.r, b.r), cmp.Compare(a.id, b.id))
+	})
+
+	limit := min(opts.MaxGodNodes, len(all))
+
+	fmt.Fprintf(w, "## God Nodes (top %d by betweenness)\n\n", limit)
+	fmt.Fprintf(w, "| Rank | Label | Community | Betweenness | Degree |\n")
+	fmt.Fprintf(w, "|------|-------|-----------|-------------|--------|\n")
+	for i := 0; i < limit; i++ {
+		e := all[i]
+		fmt.Fprintf(w, "| %d | `%s` | %d | %.4f | %d |\n",
+			i+1, e.r.Label, e.r.CommunityID, e.r.Betweenness, e.r.Degree)
+	}
+	fmt.Fprintln(w)
+
+	byComm := map[int][]cluster.NodeResult{}
+	// all is already in god-node order, so each community's members come out ranked the same way.
+	for _, e := range all {
+		byComm[e.r.CommunityID] = append(byComm[e.r.CommunityID], e.r)
+	}
+	commIDs := make([]int, 0, len(byComm))
+	for id := range byComm {
+		commIDs = append(commIDs, id)
+	}
+	sort.Ints(commIDs)
+
+	fmt.Fprintf(w, "## Communities\n\n")
+	for _, cid := range commIDs {
+		members := byComm[cid]
+		fmt.Fprintf(w, "### Community %d (%d nodes)\n\n", cid, len(members))
+		shown := min(opts.MaxPerCommunity, len(members))
+		for _, m := range members[:shown] {
+			fmt.Fprintf(w, "- `%s` (%s)\n", m.Label, m.SourceURI)
+		}
+		if len(members) > shown {
+			fmt.Fprintf(w, "- … and %d more\n", len(members)-shown)
+		}
+		fmt.Fprintln(w)
+	}
+
+	type surprisingEdge struct {
+		srcLabel string
+		dstLabel string
+		srcComm  int
+		dstComm  int
+		kind     model.EdgeKind
+	}
+	type edgeKey struct {
+		src, dst string
+		kind     model.EdgeKind
+	}
+	const maxSurprising = 20
+	var surprising []surprisingEdge
+	seen := map[edgeKey]bool{}
+	for _, e := range edges {
+		src, ok1 := results.Nodes[e.Src]
+		dst, ok2 := results.Nodes[e.Dst]
+		if !ok1 || !ok2 || src.CommunityID == dst.CommunityID {
+			continue
+		}
+		key := edgeKey{e.Src, e.Dst, e.Kind}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		surprising = append(surprising, surprisingEdge{src.Label, dst.Label, src.CommunityID, dst.CommunityID, e.Kind})
+		if len(surprising) == maxSurprising {
+			break
+		}
+	}
+
+	if len(surprising) > 0 {
+		fmt.Fprintf(w, "## Surprising Cross-Community Connections\n\n")
+		fmt.Fprintf(w, "| From | To | Edge | Communities |\n")
+		fmt.Fprintf(w, "|------|----|------|-------------|\n")
+		for _, s := range surprising {
+			fmt.Fprintf(w, "| `%s` | `%s` | %s | %d → %d |\n",
+				s.srcLabel, s.dstLabel, strings.ToLower(string(s.kind)), s.srcComm, s.dstComm)
+		}
+		fmt.Fprintln(w)
+	}
+
+	return nil
+}

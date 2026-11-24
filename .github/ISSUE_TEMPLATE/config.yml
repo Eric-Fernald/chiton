@@ -1,0 +1,12 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability (private)
+    url: https://github.com/Eric-Fernald/chiton/security/advisories/new
+    about: >-
+      Security issues go through a private GitHub Security Advisory, never a
+      public issue. docs/SECURITY.md, section 7, describes what to include.
+  - name: Security and privacy posture
+    url: https://github.com/Eric-Fernald/chiton/blob/main/docs/SECURITY.md
+    about: >-
+      What chiton stores, what is encrypted, what leaves the device, and the
+      threat model — read this before filing a data-handling question.

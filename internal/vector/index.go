@@ -1,0 +1,59 @@
+package vector
+
+import (
+	"fmt"
+	"strings"
+)
+
+// DefaultHNSWThreshold is the vector count at which the auto backend switches from Flat to HNSW. Below
+// it an exact scan is still only a few milliseconds per query and needs no build time.
+const DefaultHNSWThreshold = 100_000
+
+// Options picks and tunes the backend NewIndex returns.
+type Options struct {
+	Backend   string // auto | flat | hnsw; empty means auto
+	Threshold int    // auto uses HNSW at or above this many vectors; 0 means DefaultHNSWThreshold
+	HNSW      HNSWConfig
+}
+
+// Resolve returns the backend, "flat" or "hnsw", that opts selects for n vectors.
+func Resolve(opts Options, n int) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(opts.Backend)) {
+	case "", "auto":
+		if n < cmpOr(opts.Threshold, DefaultHNSWThreshold) {
+			return "flat", nil
+		}
+		return "hnsw", nil
+	case "flat":
+		return "flat", nil
+	case "hnsw":
+		return "hnsw", nil
+	}
+	return "", fmt.Errorf("vector: unknown index backend %q (want auto, flat, or hnsw)", opts.Backend)
+}
+
+// NewIndex returns an empty index of the backend opts selects for n vectors.
+func NewIndex(opts Options, n int) (Index, error) {
+	backend, err := Resolve(opts, n)
+	if err != nil {
+		return nil, err
+	}
+	if backend == "hnsw" {
+		return NewHNSW(opts.HNSW), nil
+	}
+	return NewFlatSized(n), nil
+}
+
+// BackendName names idx's implementation for logs: "flat", "hnsw", or its Go type. A Swappable reports
+// the backend it currently serves from.
+func BackendName(idx Index) string {
+	switch idx := idx.(type) {
+	case *Flat:
+		return "flat"
+	case *HNSW:
+		return "hnsw"
+	case *Swappable:
+		return BackendName(idx.Current())
+	}
+	return fmt.Sprintf("%T", idx)
+}
