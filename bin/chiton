@@ -1,0 +1,140 @@
+#!/bin/sh
+# chiton — shim that locates the real chiton binary and hands off to it.
+#
+# This directory is added to the Bash tool's PATH while the chiton plugin is
+# enabled, so `chiton ...` works from the assistant even when the binary lives
+# somewhere that is not on the user's own PATH. The published plugin's
+# .mcp.json also launches the MCP server through this script on Linux and macOS
+# (on Windows the same command resolves to chiton.cmd beside it).
+#
+# A published plugin ships no binaries. It carries release/tag, the release it
+# was built from, and release/checksums.txt, that release's hashes. On first use
+# this script downloads the one binary this machine needs into
+# ~/.chiton/versions/<tag>/ and verifies it against those hashes.
+#
+# Resolution order:
+#   1. $CHITON_BIN
+#   2. published plugin: ~/.chiton/versions/<tag>/chiton, downloading it first
+#      if it is missing
+#   3. `chiton` / `chiton.exe` on PATH (this shim's own directory is skipped)
+#   4. $CLAUDE_PLUGIN_DATA/bin/chiton
+#   5. $HOME/.chiton/bin/chiton
+#
+# Every message goes to stderr: on the MCP path, stdout is the protocol stream.
+
+set -eu
+
+# Re-entry guard. Comparing PATH strings is not enough to know we are about to
+# exec ourselves: a relative entry, a trailing or doubled slash, or a symlinked
+# plugin directory all spell the same directory differently, and exec'ing into
+# this script again would fork-bomb the Bash tool rather than fail cleanly. The
+# marker below bounds that absolutely — a second entry always errors out.
+if [ -n "${CHITON_SHIM_ACTIVE:-}" ]; then
+	echo "chiton: shim re-entered itself — no real chiton binary is reachable." >&2
+	echo "        Set CHITON_BIN to the binary, or see the install options below." >&2
+	CHITON_SHIM_NO_BIN=1
+else
+	CHITON_SHIM_ACTIVE=1
+	export CHITON_SHIM_ACTIVE
+	CHITON_SHIM_NO_BIN=""
+fi
+
+self_dir=""
+if self_dir_try=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd); then
+	self_dir=$self_dir_try
+fi
+
+# usable <path> — an existing, executable, non-directory file that is not this
+# script. -ef compares device+inode, so it catches every alternative spelling of
+# our own path; the string fallback covers shells without -ef.
+usable() {
+	[ -n "${1:-}" ] || return 1
+	[ -f "$1" ] && [ -x "$1" ] || return 1
+	if [ "$1" -ef "$0" ] 2>/dev/null; then
+		return 1
+	fi
+	[ "$1" != "$0" ]
+}
+
+if [ -n "$CHITON_SHIM_NO_BIN" ]; then
+	: # fall through to the install message
+else
+
+# 1. explicit override
+if usable "${CHITON_BIN:-}"; then
+	exec "$CHITON_BIN" "$@"
+fi
+
+# 2. the release this plugin was built from. A source checkout has no
+# release/tag and skips straight to PATH.
+pinned=""
+if [ -n "$self_dir" ] && [ -f "$self_dir/../release/tag" ]; then
+	pinned=$(tr -d ' \r\n' <"$self_dir/../release/tag")
+fi
+if [ -n "$pinned" ] && [ -n "${HOME:-}" ]; then
+	ext=""
+	case "$(uname -s 2>/dev/null)" in
+	MINGW* | MSYS* | CYGWIN*) ext=".exe" ;;
+	esac
+	vdir="$HOME/.chiton/versions/$pinned"
+	if ! usable "$vdir/chiton$ext"; then
+		echo "chiton: fetching the $pinned binary for this machine (first run only)" >&2
+		sh "$self_dir/../scripts/install-chiton.sh" --version "$pinned" --dir "$vdir" \
+			--checksums "$self_dir/../release/checksums.txt" --quiet </dev/null >&2 ||
+			echo "chiton: download failed; looking for another chiton instead" >&2
+	fi
+	if usable "$vdir/chiton$ext"; then
+		exec "$vdir/chiton$ext" "$@"
+	fi
+fi
+
+# 3. PATH, skipping this shim's own directory so we never re-enter ourselves
+old_ifs=$IFS
+IFS=:
+for dir in $PATH; do
+	IFS=$old_ifs
+	if [ -n "$dir" ] && [ "$dir" != "$self_dir" ]; then
+		if usable "$dir/chiton.exe"; then
+			exec "$dir/chiton.exe" "$@"
+		fi
+		if usable "$dir/chiton"; then
+			exec "$dir/chiton" "$@"
+		fi
+	fi
+	IFS=:
+done
+IFS=$old_ifs
+
+# 4. plugin data directory
+if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
+	if usable "$CLAUDE_PLUGIN_DATA/bin/chiton.exe"; then
+		exec "$CLAUDE_PLUGIN_DATA/bin/chiton.exe" "$@"
+	fi
+	if usable "$CLAUDE_PLUGIN_DATA/bin/chiton"; then
+		exec "$CLAUDE_PLUGIN_DATA/bin/chiton" "$@"
+	fi
+fi
+
+# 5. per-user fallback
+if [ -n "${HOME:-}" ]; then
+	if usable "$HOME/.chiton/bin/chiton.exe"; then
+		exec "$HOME/.chiton/bin/chiton.exe" "$@"
+	fi
+	if usable "$HOME/.chiton/bin/chiton"; then
+		exec "$HOME/.chiton/bin/chiton" "$@"
+	fi
+fi
+
+fi # end of the resolution block skipped on re-entry
+
+cat >&2 <<'EOF'
+chiton: binary not found.
+
+Install it with any of:
+  sh "$CLAUDE_PLUGIN_ROOT/scripts/install-chiton.sh"           # prebuilt release
+  go install github.com/Eric-Fernald/chiton/cmd/chiton@latest
+  make build                                                    # from a local clone
+
+Or point $CHITON_BIN at an existing binary.
+EOF
+exit 127
